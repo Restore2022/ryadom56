@@ -31,13 +31,13 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
 
-      - name: Build debug APK
-        run: flutter build apk --debug --dart-define=API_BASE=http://192.168.0.110:8000/api
+      - name: Build release APK
+        run: flutter build apk --release --dart-define=API_BASE=http://192.168.0.110:8000/api
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: ryadom56-debug-apk
-          path: mobile/build/app/outputs/flutter-apk/app-debug.apk
+          name: ryadom56-apk
+          path: mobile/build/app/outputs/flutter-apk/app-release.apk
           if-no-files-found: error
           retention-days: 14
