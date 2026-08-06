@@ -83,7 +83,10 @@ class User(Base):
     settlement: Mapped["Settlement"] = relationship(back_populates="users")
     listings: Mapped[list["Listing"]] = relationship(back_populates="author")
     favorites: Mapped[list["Favorite"]] = relationship(back_populates="user", cascade="all, delete-orphan")
-    reports: Mapped[list["ListingReport"]] = relationship(back_populates="reporter")
+    reports: Mapped[list["ListingReport"]] = relationship(
+        back_populates="reporter",
+        foreign_keys="ListingReport.reporter_id",
+    )
 
 
 class Listing(Base):
