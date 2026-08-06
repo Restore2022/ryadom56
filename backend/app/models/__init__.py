@@ -72,6 +72,13 @@ class User(Base):
     accepted_terms: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    device_brand: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    device_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    device_os: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    app_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    device_info: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     settlement: Mapped["Settlement"] = relationship(back_populates="users")
     listings: Mapped[list["Listing"]] = relationship(back_populates="author")

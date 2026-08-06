@@ -382,23 +382,54 @@ function ModerationPage() {
   );
 }
 
-function DirectoryPage() {
-  const empty = {
-    title: '',
-    category: 'shop',
-    settlement_id: '' as number | '',
-    description: '',
-    address: '',
-    phone: '',
-    website: '',
-    lat: '',
-    lon: '',
-    is_published: true,
+type DirectoryForm = {
+  title: string;
+  category: string;
+  settlement_id: number | '';
+  description: string;
+  address: string;
+  phone: string;
+  website: string;
+  lat: string;
+  lon: string;
+  is_published: boolean;
+};
+
+const EMPTY_DIR: DirectoryForm = {
+  title: '',
+  category: 'shop',
+  settlement_id: '',
+  description: '',
+  address: '',
+  phone: '',
+  website: '',
+  lat: '',
+  lon: '',
+  is_published: true,
+};
+
+function directoryPayload(form: DirectoryForm) {
+  return {
+    title: form.title,
+    category: form.category,
+    settlement_id: form.settlement_id === '' ? null : Number(form.settlement_id),
+    description: form.description || null,
+    address: form.address || null,
+    phone: form.phone || null,
+    website: form.website || null,
+    lat: form.lat === '' ? null : Number(form.lat),
+    lon: form.lon === '' ? null : Number(form.lon),
+    is_published: form.is_published,
   };
+}
+
+function DirectoryPage() {
   const [items, setItems] = useState<DirectoryItem[]>([]);
   const [settlements, setSettlements] = useState<Settlement[]>([]);
-  const [form, setForm] = useState(empty);
+  const [form, setForm] = useState<DirectoryForm>(EMPTY_DIR);
+  const [editingId, setEditingId] = useState<number | null>(null);
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
 
@@ -411,35 +442,59 @@ function DirectoryPage() {
     load().catch((err) => setError(err.message));
   }, []);
 
-  async function createItem(e: React.FormEvent) {
+  function startEdit(item: DirectoryItem) {
+    setEditingId(item.id);
+    setForm({
+      title: item.title,
+      category: item.category,
+      settlement_id: item.settlement_id ?? '',
+      description: item.description || '',
+      address: item.address || '',
+      phone: item.phone || '',
+      website: item.website || '',
+      lat: item.lat != null ? String(item.lat) : '',
+      lon: item.lon != null ? String(item.lon) : '',
+      is_published: item.is_published,
+    });
+    setError('');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+    setForm(EMPTY_DIR);
+    setError('');
+  }
+
+  async function saveItem(e: React.FormEvent) {
     e.preventDefault();
     setError('');
+    setBusy(true);
     try {
-      await api('/directory', {
-        method: 'POST',
-        body: JSON.stringify({
-          title: form.title,
-          category: form.category,
-          settlement_id: form.settlement_id === '' ? null : Number(form.settlement_id),
-          description: form.description || null,
-          address: form.address || null,
-          phone: form.phone || null,
-          website: form.website || null,
-          lat: form.lat === '' ? null : Number(form.lat),
-          lon: form.lon === '' ? null : Number(form.lon),
-          is_published: form.is_published,
-        }),
-      });
-      setForm(empty);
+      if (editingId) {
+        await api(`/directory/${editingId}`, {
+          method: 'PATCH',
+          body: JSON.stringify(directoryPayload(form)),
+        });
+      } else {
+        await api('/directory', {
+          method: 'POST',
+          body: JSON.stringify(directoryPayload(form)),
+        });
+      }
+      cancelEdit();
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
     }
   }
 
   async function remove(id: number) {
     if (!confirm('Удалить запись из справочника?')) return;
     await api(`/directory/${id}`, { method: 'DELETE' });
+    if (editingId === id) cancelEdit();
     await load();
   }
 
@@ -452,8 +507,8 @@ function DirectoryPage() {
         </div>
       </div>
 
-      <form className="panel" onSubmit={createItem}>
-        <h2>Добавить запись</h2>
+      <form className="panel" onSubmit={saveItem}>
+        <h2>{editingId ? 'Редактировать запись' : 'Добавить запись'}</h2>
         <div className="grid2">
           <label className="field">
             Название
@@ -493,15 +548,44 @@ function DirectoryPage() {
             Адрес
             <input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
           </label>
+          <label className="field">
+            Сайт
+            <input value={form.website} onChange={(e) => setForm({ ...form, website: e.target.value })} />
+          </label>
+          <label className="field">
+            Опубликовано
+            <select
+              value={form.is_published ? '1' : '0'}
+              onChange={(e) => setForm({ ...form, is_published: e.target.value === '1' })}
+            >
+              <option value="1">Да</option>
+              <option value="0">Нет (скрыто)</option>
+            </select>
+          </label>
+          <label className="field">
+            Широта
+            <input value={form.lat} onChange={(e) => setForm({ ...form, lat: e.target.value })} placeholder="51.98" />
+          </label>
+          <label className="field">
+            Долгота
+            <input value={form.lon} onChange={(e) => setForm({ ...form, lon: e.target.value })} placeholder="55.33" />
+          </label>
           <label className="field full">
             Описание
             <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
           </label>
         </div>
         {error && <p className="error">{error}</p>}
-        <button className="btn" type="submit">
-          Сохранить
-        </button>
+        <div className="actions" style={{ marginTop: 12 }}>
+          <button className="btn" type="submit" disabled={busy}>
+            {busy ? 'Сохранение…' : editingId ? 'Сохранить изменения' : 'Добавить'}
+          </button>
+          {editingId && (
+            <button className="btn secondary" type="button" onClick={cancelEdit}>
+              Отмена
+            </button>
+          )}
+        </div>
       </form>
 
       <div className="toolbar">
@@ -532,85 +616,280 @@ function DirectoryPage() {
             );
           })
           .map((item) => (
-          <article key={item.id} className="row-card">
-            <div>
-              <h3 className="row-title">{item.title}</h3>
-              <div className="meta">
-                <span className="chip">{CATEGORY_LABELS[item.category] || item.category}</span>
-                <span className="chip neutral">{item.settlement_name || 'без привязки'}</span>
-                {item.is_published ? <span className="chip ok">Опубликовано</span> : <span className="chip warn">Скрыто</span>}
+            <article key={item.id} className="row-card">
+              <div>
+                <h3 className="row-title">{item.title}</h3>
+                <div className="meta">
+                  <span className="chip">{CATEGORY_LABELS[item.category] || item.category}</span>
+                  <span className="chip neutral">{item.settlement_name || 'без привязки'}</span>
+                  {item.is_published ? <span className="chip ok">Опубликовано</span> : <span className="chip warn">Скрыто</span>}
+                </div>
+                {item.address && <p className="row-body">{item.address}</p>}
+                {item.phone && (
+                  <p className="row-body">
+                    <a href={`tel:${item.phone}`}>{item.phone}</a>
+                  </p>
+                )}
               </div>
-              {item.address && <p className="row-body">{item.address}</p>}
-              {item.phone && (
-                <p className="row-body">
-                  <a href={`tel:${item.phone}`}>{item.phone}</a>
-                </p>
-              )}
-            </div>
-            <div className="actions">
-              {item.phone && (
-                <a className="btn" href={`tel:${item.phone}`}>
-                  Позвонить
-                </a>
-              )}
-              <button className="btn danger" type="button" onClick={() => remove(item.id)}>
-                Удалить
-              </button>
-            </div>
-          </article>
-        ))}
+              <div className="actions">
+                <button className="btn" type="button" onClick={() => startEdit(item)}>
+                  Изменить
+                </button>
+                {item.phone && (
+                  <a className="btn secondary" href={`tel:${item.phone}`}>
+                    Позвонить
+                  </a>
+                )}
+                <button className="btn danger" type="button" onClick={() => remove(item.id)}>
+                  Удалить
+                </button>
+              </div>
+            </article>
+          ))}
         {!items.length && <div className="empty">Справочник пуст — добавьте первую запись выше</div>}
       </div>
     </div>
   );
 }
 
+function formatDate(value?: string | null) {
+  if (!value) return '—';
+  try {
+    return new Date(value).toLocaleString('ru-RU');
+  } catch {
+    return value;
+  }
+}
+
 function UsersPage() {
   const [users, setUsers] = useState<User[]>([]);
+  const [settlements, setSettlements] = useState<Settlement[]>([]);
+  const [selected, setSelected] = useState<User | null>(null);
+  const [form, setForm] = useState({
+    full_name: '',
+    email: '',
+    phone: '',
+    settlement_id: 0,
+    role: 'user' as User['role'],
+    is_active: true,
+  });
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [query, setQuery] = useState('');
+
+  async function load() {
+    const [u, s] = await Promise.all([api<User[]>('/admin/users'), api<Settlement[]>('/settlements')]);
+    setUsers(u);
+    setSettlements(s);
+  }
+
   useEffect(() => {
-    api<User[]>('/admin/users').then(setUsers).catch(console.error);
+    load().catch(console.error);
   }, []);
 
-  async function changeRole(id: number, role: User['role']) {
-    const updated = await api<User>(`/admin/users/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ role }),
+  function openEdit(u: User) {
+    setSelected(u);
+    setForm({
+      full_name: u.full_name,
+      email: u.email,
+      phone: u.phone || '',
+      settlement_id: u.settlement_id,
+      role: u.role,
+      is_active: u.is_active,
     });
-    setUsers((prev) => prev.map((u) => (u.id === id ? updated : u)));
+    setError('');
   }
+
+  async function saveUser(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selected) return;
+    setBusy(true);
+    setError('');
+    try {
+      const updated = await api<User>(`/admin/users/${selected.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          full_name: form.full_name.trim(),
+          email: form.email.trim(),
+          phone: form.phone.trim() || null,
+          settlement_id: form.settlement_id,
+          role: form.role,
+          is_active: form.is_active,
+        }),
+      });
+      setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)));
+      setSelected(updated);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const visible = users.filter((u) => {
+    if (!query.trim()) return true;
+    const q = query.trim().toLowerCase();
+    return (
+      u.full_name.toLowerCase().includes(q) ||
+      u.email.toLowerCase().includes(q) ||
+      (u.phone || '').toLowerCase().includes(q) ||
+      (u.last_ip || '').toLowerCase().includes(q) ||
+      (u.device_brand || '').toLowerCase().includes(q) ||
+      (u.device_model || '').toLowerCase().includes(q)
+    );
+  });
 
   return (
     <div>
       <div className="page-head">
         <div>
           <h1>Пользователи</h1>
-          <p>Роли доступа к админке и приложению</p>
+          <p>Редактирование профиля, роли, устройство и IP</p>
         </div>
       </div>
+
+      <div className="toolbar">
+        <input
+          placeholder="Поиск: имя, email, телефон, IP, устройство…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+      </div>
+
       <div className="list">
-        {users.map((u) => (
-          <article key={u.id} className="row-card user-row">
+        {visible.map((u) => (
+          <article key={u.id} className="row-card user-row" onClick={() => openEdit(u)}>
             <div>
               <h3 className="row-title">{u.full_name}</h3>
               <div className="meta">
                 <span className="chip neutral">{u.email}</span>
                 <span className="chip">{ROLE_LABELS[u.role]}</span>
                 {!u.is_active && <span className="chip danger">Заблокирован</span>}
+                {u.last_ip && <span className="chip neutral">IP {u.last_ip}</span>}
               </div>
+              <p className="row-body muted">
+                {[u.device_brand, u.device_model].filter(Boolean).join(' ') || 'Устройство не передано'}
+                {u.device_os ? ` · ${u.device_os}` : ''}
+                {u.last_seen_at ? ` · был(а) ${formatDate(u.last_seen_at)}` : ''}
+              </p>
             </div>
-            <select
-              className="role-select"
-              value={u.role}
-              onChange={(e) => changeRole(u.id, e.target.value as User['role'])}
-            >
-              <option value="user">Пользователь</option>
-              <option value="moderator">Модератор</option>
-              <option value="editor">Редактор</option>
-              <option value="admin">Админ</option>
-            </select>
+            <div className="actions" onClick={(e) => e.stopPropagation()}>
+              <button className="btn" type="button" onClick={() => openEdit(u)}>
+                Изменить
+              </button>
+            </div>
           </article>
         ))}
+        {!visible.length && <div className="empty">Пользователи не найдены</div>}
       </div>
+
+      {selected && (
+        <div className="modal-backdrop" onClick={() => setSelected(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <h2>Редактировать пользователя</h2>
+            <form onSubmit={saveUser}>
+              <div className="grid2">
+                <label className="field">
+                  Имя
+                  <input
+                    required
+                    value={form.full_name}
+                    onChange={(e) => setForm({ ...form, full_name: e.target.value })}
+                  />
+                </label>
+                <label className="field">
+                  Email
+                  <input
+                    required
+                    type="email"
+                    value={form.email}
+                    onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  />
+                </label>
+                <label className="field">
+                  Телефон
+                  <input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+                </label>
+                <label className="field">
+                  Населённый пункт
+                  <select
+                    value={form.settlement_id}
+                    onChange={(e) => setForm({ ...form, settlement_id: Number(e.target.value) })}
+                  >
+                    {settlements.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.display_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  Роль
+                  <select
+                    value={form.role}
+                    onChange={(e) => setForm({ ...form, role: e.target.value as User['role'] })}
+                  >
+                    <option value="user">Пользователь</option>
+                    <option value="moderator">Модератор</option>
+                    <option value="editor">Редактор</option>
+                    <option value="admin">Админ</option>
+                  </select>
+                </label>
+                <label className="field">
+                  Статус
+                  <select
+                    value={form.is_active ? '1' : '0'}
+                    onChange={(e) => setForm({ ...form, is_active: e.target.value === '1' })}
+                  >
+                    <option value="1">Активен</option>
+                    <option value="0">Заблокирован</option>
+                  </select>
+                </label>
+              </div>
+
+              <div className="panel" style={{ marginTop: 16, marginBottom: 0, padding: 14 }}>
+                <h3 style={{ margin: '0 0 10px', fontSize: 15 }}>Устройство и сеть</h3>
+                <p className="muted" style={{ margin: '0 0 6px' }}>
+                  IP: <strong>{selected.last_ip || '—'}</strong>
+                </p>
+                <p className="muted" style={{ margin: '0 0 6px' }}>
+                  Устройство:{' '}
+                  <strong>
+                    {[selected.device_brand, selected.device_model].filter(Boolean).join(' ') || '—'}
+                  </strong>
+                </p>
+                <p className="muted" style={{ margin: '0 0 6px' }}>
+                  ОС: <strong>{selected.device_os || '—'}</strong>
+                </p>
+                <p className="muted" style={{ margin: '0 0 6px' }}>
+                  Версия приложения: <strong>{selected.app_version || '—'}</strong>
+                </p>
+                <p className="muted" style={{ margin: '0 0 6px' }}>
+                  Последний визит: <strong>{formatDate(selected.last_seen_at)}</strong>
+                </p>
+                <p className="muted" style={{ margin: 0 }}>
+                  Регистрация: <strong>{formatDate(selected.created_at)}</strong>
+                </p>
+                {selected.device_info && (
+                  <p className="muted" style={{ marginTop: 10, whiteSpace: 'pre-wrap', fontSize: 13 }}>
+                    {selected.device_info}
+                  </p>
+                )}
+              </div>
+
+              {error && <p className="error">{error}</p>}
+              <div className="modal-actions">
+                <button className="btn" type="submit" disabled={busy}>
+                  {busy ? 'Сохранение…' : 'Сохранить'}
+                </button>
+                <button className="btn secondary" type="button" onClick={() => setSelected(null)}>
+                  Закрыть
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

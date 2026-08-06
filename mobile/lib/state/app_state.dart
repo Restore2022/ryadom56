@@ -1,4 +1,8 @@
+import 'dart:io';
+
+import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
+import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api.dart';
@@ -34,6 +38,7 @@ class AppState extends ChangeNotifier {
       final token = await api.token;
       if (token != null) {
         user = await api.request('/auth/me', auth: true) as Map<String, dynamic>;
+        await reportDeviceInfo();
       }
       await Future.wait([loadListings(), loadDirectory()]);
     } catch (e) {
@@ -41,6 +46,67 @@ class AppState extends ChangeNotifier {
     } finally {
       booting = false;
       notifyListeners();
+    }
+  }
+
+  Future<Map<String, dynamic>> _collectDevicePayload() async {
+    final device = DeviceInfoPlugin();
+    final package = await PackageInfo.fromPlatform();
+    String? brand;
+    String? model;
+    String? os;
+    final details = <String, String>{
+      'platform': defaultTargetPlatform.name,
+      'app_name': package.appName,
+      'package': package.packageName,
+      'build': package.buildNumber,
+    };
+
+    if (!kIsWeb && Platform.isAndroid) {
+      final info = await device.androidInfo;
+      brand = info.brand;
+      model = info.model;
+      os = 'Android ${info.version.release} (SDK ${info.version.sdkInt})';
+      details.addAll({
+        'manufacturer': info.manufacturer,
+        'device': info.device,
+        'product': info.product,
+        'hardware': info.hardware,
+        'is_physical': '${info.isPhysicalDevice}',
+      });
+    } else if (!kIsWeb && Platform.isIOS) {
+      final info = await device.iosInfo;
+      brand = 'Apple';
+      model = info.utsname.machine;
+      os = '${info.systemName} ${info.systemVersion}';
+      details.addAll({
+        'name': info.name,
+        'model': info.model,
+        'localized_model': info.localizedModel,
+        'is_physical': '${info.isPhysicalDevice}',
+      });
+    } else {
+      brand = defaultTargetPlatform.name;
+      model = 'unknown';
+      os = 'unknown';
+    }
+
+    return {
+      'device_brand': brand,
+      'device_model': model,
+      'device_os': os,
+      'app_version': '${package.version}+${package.buildNumber}',
+      'device_info': details.entries.map((e) => '${e.key}: ${e.value}').join('\n'),
+    };
+  }
+
+  Future<void> reportDeviceInfo() async {
+    if (user == null) return;
+    try {
+      final payload = await _collectDevicePayload();
+      user = await api.request('/auth/device', method: 'POST', auth: true, body: payload) as Map<String, dynamic>;
+    } catch (_) {
+      // Не блокируем вход, если устройство не отправилось.
     }
   }
 
@@ -150,6 +216,7 @@ class AppState extends ChangeNotifier {
     }) as Map<String, dynamic>;
     await api.setToken(data['access_token'] as String);
     user = await api.request('/auth/me', auth: true) as Map<String, dynamic>;
+    await reportDeviceInfo();
     await refreshPublic();
     notifyListeners();
   }
@@ -158,6 +225,7 @@ class AppState extends ChangeNotifier {
     final data = await api.request('/auth/register', method: 'POST', body: body) as Map<String, dynamic>;
     await api.setToken(data['access_token'] as String);
     user = await api.request('/auth/me', auth: true) as Map<String, dynamic>;
+    await reportDeviceInfo();
     await refreshPublic();
     notifyListeners();
   }

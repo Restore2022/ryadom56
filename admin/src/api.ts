@@ -36,8 +36,17 @@ export type User = {
   full_name: string;
   phone?: string | null;
   settlement_id: number;
+  settlement?: Settlement | null;
   role: 'user' | 'moderator' | 'editor' | 'admin';
   is_active: boolean;
+  created_at?: string;
+  last_ip?: string | null;
+  device_brand?: string | null;
+  device_model?: string | null;
+  device_os?: string | null;
+  app_version?: string | null;
+  device_info?: string | null;
+  last_seen_at?: string | null;
 };
 
 export type Listing = {

@@ -39,7 +39,7 @@ def list_users(
 
 
 @router.patch("/users/{user_id}", response_model=UserOut)
-def update_user_role(
+def update_user(
     user_id: int,
     payload: UserRoleUpdate,
     db: Session = Depends(get_db),
@@ -50,11 +50,26 @@ def update_user_role(
     ).scalar_one_or_none()
     if not target:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
-    if target.id == admin.id and payload.role != UserRole.admin:
+
+    data = payload.model_dump(exclude_unset=True)
+    if "role" in data and target.id == admin.id and data["role"] != UserRole.admin:
         raise HTTPException(status_code=400, detail="Нельзя снять с себя роль админа")
-    target.role = payload.role
-    if payload.is_active is not None:
-        target.is_active = payload.is_active
+    if "email" in data and data["email"]:
+        email = str(data["email"]).lower()
+        exists = db.execute(select(User).where(User.email == email, User.id != target.id)).scalar_one_or_none()
+        if exists:
+            raise HTTPException(status_code=400, detail="Email уже занят")
+        target.email = email
+        data.pop("email")
+    if "settlement_id" in data and data["settlement_id"] is not None:
+        settlement = db.execute(select(Settlement).where(Settlement.id == data["settlement_id"])).scalar_one_or_none()
+        if not settlement:
+            raise HTTPException(status_code=400, detail="Населённый пункт не найден")
+    for key, value in data.items():
+        setattr(target, key, value)
+
     db.commit()
-    db.refresh(target)
+    target = db.execute(
+        select(User).options(selectinload(User.settlement)).where(User.id == user_id)
+    ).scalar_one()
     return target

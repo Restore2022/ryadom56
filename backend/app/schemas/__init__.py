@@ -68,6 +68,13 @@ class UserOut(BaseModel):
     role: UserRole
     is_active: bool
     created_at: datetime
+    last_ip: str | None = None
+    device_brand: str | None = None
+    device_model: str | None = None
+    device_os: str | None = None
+    app_version: str | None = None
+    device_info: str | None = None
+    last_seen_at: datetime | None = None
 
     class Config:
         from_attributes = True
@@ -190,8 +197,20 @@ class LegalOut(BaseModel):
 
 
 class UserRoleUpdate(BaseModel):
-    role: UserRole
+    role: UserRole | None = None
     is_active: bool | None = None
+    full_name: str | None = Field(default=None, min_length=2, max_length=120)
+    phone: str | None = Field(default=None, max_length=32)
+    settlement_id: int | None = None
+    email: EmailStr | None = None
+
+
+class DeviceInfoIn(BaseModel):
+    device_brand: str | None = Field(default=None, max_length=80)
+    device_model: str | None = Field(default=None, max_length=120)
+    device_os: str | None = Field(default=None, max_length=80)
+    app_version: str | None = Field(default=None, max_length=40)
+    device_info: str | None = Field(default=None, max_length=2000)
 
 
 class StatsOut(BaseModel):
