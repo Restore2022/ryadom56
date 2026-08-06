@@ -23,6 +23,21 @@ class ApiClient {
     }
   }
 
+  String _formatDetail(dynamic detail) {
+    if (detail is String) return detail;
+    if (detail is List) {
+      return detail.map((e) {
+        if (e is Map) {
+          final loc = (e['loc'] is List) ? (e['loc'] as List).join('.') : '';
+          final msg = e['msg']?.toString() ?? e.toString();
+          return loc.isEmpty ? msg : '$loc: $msg';
+        }
+        return e.toString();
+      }).join('\n');
+    }
+    return detail?.toString() ?? 'Ошибка запроса';
+  }
+
   Future<dynamic> request(
     String path, {
     String method = 'GET',
@@ -35,13 +50,19 @@ class ApiClient {
       final t = await token;
       if (t != null) headers['Authorization'] = 'Bearer $t';
     }
+
+    Map<String, dynamic>? cleanBody;
+    if (body != null) {
+      cleanBody = Map.fromEntries(body.entries.where((e) => e.value != null));
+    }
+
     late http.Response res;
     switch (method) {
       case 'POST':
-        res = await http.post(uri, headers: headers, body: jsonEncode(body));
+        res = await http.post(uri, headers: headers, body: jsonEncode(cleanBody));
         break;
       case 'PATCH':
-        res = await http.patch(uri, headers: headers, body: jsonEncode(body));
+        res = await http.patch(uri, headers: headers, body: jsonEncode(cleanBody));
         break;
       default:
         res = await http.get(uri, headers: headers);
@@ -50,7 +71,7 @@ class ApiClient {
       String detail = res.body;
       try {
         final data = jsonDecode(res.body);
-        detail = data['detail']?.toString() ?? res.body;
+        detail = _formatDetail(data['detail']);
       } catch (_) {}
       throw Exception(detail);
     }

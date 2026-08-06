@@ -90,8 +90,8 @@ class LoginIn(BaseModel):
 
 
 class ListingCreate(BaseModel):
-    title: str = Field(min_length=3, max_length=200)
-    description: str = Field(min_length=10, max_length=5000)
+    title: str = Field(min_length=2, max_length=200)
+    description: str = Field(min_length=3, max_length=5000)
     category: ListingCategory
     settlement_id: int
     price: float | None = None
@@ -99,8 +99,8 @@ class ListingCreate(BaseModel):
 
 
 class ListingUpdate(BaseModel):
-    title: str | None = Field(default=None, min_length=3, max_length=200)
-    description: str | None = Field(default=None, min_length=10, max_length=5000)
+    title: str | None = Field(default=None, min_length=2, max_length=200)
+    description: str | None = Field(default=None, min_length=3, max_length=5000)
     category: ListingCategory | None = None
     settlement_id: int | None = None
     price: float | None = None

@@ -76,6 +76,16 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
             onPressed: busy
                 ? null
                 : () async {
+                    final titleText = title.text.trim();
+                    final descText = description.text.trim();
+                    if (titleText.length < 2) {
+                      setState(() => error = 'Заголовок слишком короткий');
+                      return;
+                    }
+                    if (descText.length < 3) {
+                      setState(() => error = 'Описание слишком короткое');
+                      return;
+                    }
                     if (settlementId == null) {
                       setState(() => error = 'Выберите населённый пункт');
                       return;
@@ -85,14 +95,29 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
                       error = null;
                     });
                     try {
-                      await context.read<AppState>().createListing({
-                        'title': title.text.trim(),
-                        'description': description.text.trim(),
+                      final payload = <String, dynamic>{
+                        'title': titleText,
+                        'description': descText,
                         'category': category,
                         'settlement_id': settlementId,
-                        'price': price.text.trim().isEmpty ? null : double.tryParse(price.text.trim().replaceAll(',', '.')),
-                        'contact_phone': phone.text.trim().isEmpty ? null : phone.text.trim(),
-                      });
+                      };
+                      final priceText = price.text.trim().replaceAll(',', '.');
+                      if (priceText.isNotEmpty) {
+                        final parsed = double.tryParse(priceText);
+                        if (parsed == null) {
+                          setState(() {
+                            busy = false;
+                            error = 'Некорректная цена';
+                          });
+                          return;
+                        }
+                        payload['price'] = parsed;
+                      }
+                      final phoneText = phone.text.trim();
+                      if (phoneText.isNotEmpty) {
+                        payload['contact_phone'] = phoneText;
+                      }
+                      await context.read<AppState>().createListing(payload);
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(content: Text('Отправлено на модерацию')),
