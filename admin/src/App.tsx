@@ -399,6 +399,8 @@ function DirectoryPage() {
   const [settlements, setSettlements] = useState<Settlement[]>([]);
   const [form, setForm] = useState(empty);
   const [error, setError] = useState('');
+  const [query, setQuery] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('');
 
   async function load() {
     setItems(await api<DirectoryItem[]>('/directory'));
@@ -502,8 +504,34 @@ function DirectoryPage() {
         </button>
       </form>
 
+      <div className="toolbar">
+        <input placeholder="Поиск по справочнику…" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+          <option value="">Все категории</option>
+          {['school', 'hospital', 'shop', 'pharmacy', 'admin', 'bank', 'post', 'transport', 'culture', 'sport', 'other'].map(
+            (c) => (
+              <option key={c} value={c}>
+                {CATEGORY_LABELS[c]}
+              </option>
+            ),
+          )}
+        </select>
+      </div>
+
       <div className="list">
-        {items.map((item) => (
+        {items
+          .filter((item) => {
+            if (categoryFilter && item.category !== categoryFilter) return false;
+            if (!query.trim()) return true;
+            const q = query.trim().toLowerCase();
+            return (
+              item.title.toLowerCase().includes(q) ||
+              (item.address || '').toLowerCase().includes(q) ||
+              (item.phone || '').toLowerCase().includes(q) ||
+              (item.settlement_name || '').toLowerCase().includes(q)
+            );
+          })
+          .map((item) => (
           <article key={item.id} className="row-card">
             <div>
               <h3 className="row-title">{item.title}</h3>
@@ -513,9 +541,18 @@ function DirectoryPage() {
                 {item.is_published ? <span className="chip ok">Опубликовано</span> : <span className="chip warn">Скрыто</span>}
               </div>
               {item.address && <p className="row-body">{item.address}</p>}
-              {item.phone && <p className="row-body">{item.phone}</p>}
+              {item.phone && (
+                <p className="row-body">
+                  <a href={`tel:${item.phone}`}>{item.phone}</a>
+                </p>
+              )}
             </div>
             <div className="actions">
+              {item.phone && (
+                <a className="btn" href={`tel:${item.phone}`}>
+                  Позвонить
+                </a>
+              )}
               <button className="btn danger" type="button" onClick={() => remove(item.id)}>
                 Удалить
               </button>
