@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -7,6 +8,7 @@ import 'screens/home_shell.dart';
 import 'screens/login_screen.dart';
 import 'screens/register_screen.dart';
 import 'state/app_state.dart';
+import 'theme.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -28,22 +30,21 @@ class RyadomApp extends StatelessWidget {
   Widget build(BuildContext context) {
     return ChangeNotifierProvider(
       create: (_) => AppState(ApiClient(baseUrl: apiBase))..bootstrap(),
-      child: MaterialApp(
-        title: 'Рядом56',
-        debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF2F6B3A),
-            brightness: Brightness.light,
-          ),
-          useMaterial3: true,
-          fontFamily: 'Roboto',
-        ),
-        routes: {
-          '/': (_) => const RootGate(),
-          '/login': (_) => const LoginScreen(),
-          '/register': (_) => const RegisterScreen(),
-          '/home': (_) => const HomeShell(),
+      child: Consumer<AppState>(
+        builder: (context, state, _) {
+          return MaterialApp(
+            title: 'Рядом56',
+            debugShowCheckedModeBanner: false,
+            theme: buildRyadomTheme(Brightness.light),
+            darkTheme: buildRyadomTheme(Brightness.dark),
+            themeMode: state.darkMode ? ThemeMode.dark : ThemeMode.light,
+            routes: {
+              '/': (_) => const RootGate(),
+              '/login': (_) => const LoginScreen(),
+              '/register': (_) => const RegisterScreen(),
+              '/home': (_) => const HomeShell(),
+            },
+          );
         },
       ),
     );
@@ -57,11 +58,20 @@ class RootGate extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     if (state.booting) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text('Рядом56', style: GoogleFonts.unbounded(fontSize: 28, fontWeight: FontWeight.w600)),
+              const SizedBox(height: 20),
+              const CircularProgressIndicator(),
+            ],
+          ),
+        ),
+      );
     }
-    if (state.user == null) {
-      return const LoginScreen();
-    }
+    if (state.user == null) return const LoginScreen();
     return const HomeShell();
   }
 }

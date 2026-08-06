@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
@@ -18,26 +19,30 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
     return Scaffold(
       body: SafeArea(
         child: ListView(
           padding: const EdgeInsets.all(24),
           children: [
-            const SizedBox(height: 40),
-            Text('Рядом56', style: Theme.of(context).textTheme.headlineMedium?.copyWith(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 36),
+            Text('Рядом56', style: GoogleFonts.unbounded(fontSize: 34, fontWeight: FontWeight.w700, color: scheme.primary)),
             const SizedBox(height: 8),
-            const Text('Сакмарский район и Оренбург — объявления и справочник'),
-            const SizedBox(height: 32),
-            TextField(controller: email, decoration: const InputDecoration(labelText: 'Email', border: OutlineInputBorder())),
+            Text(
+              'Объявления и справочник\nСакмарского района',
+              style: GoogleFonts.manrope(fontSize: 18, height: 1.35, color: scheme.onSurfaceVariant),
+            ),
+            const SizedBox(height: 36),
+            TextField(controller: email, decoration: const InputDecoration(labelText: 'Email')),
             const SizedBox(height: 12),
             TextField(
               controller: password,
               obscureText: true,
-              decoration: const InputDecoration(labelText: 'Пароль', border: OutlineInputBorder()),
+              decoration: const InputDecoration(labelText: 'Пароль'),
             ),
             if (error != null) ...[
               const SizedBox(height: 12),
-              Text(error!, style: const TextStyle(color: Colors.red)),
+              Text(error!, style: TextStyle(color: scheme.error)),
             ],
             const SizedBox(height: 20),
             FilledButton(
@@ -62,6 +67,18 @@ class _LoginScreenState extends State<LoginScreen> {
             TextButton(
               onPressed: () => Navigator.pushNamed(context, '/register'),
               child: const Text('Создать аккаунт'),
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: IconButton(
+                tooltip: 'Тема',
+                onPressed: () {
+                  final s = context.read<AppState>();
+                  s.setDarkMode(!s.darkMode);
+                },
+                icon: Icon(context.watch<AppState>().darkMode ? Icons.light_mode : Icons.dark_mode),
+              ),
             ),
           ],
         ),

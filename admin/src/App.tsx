@@ -45,6 +45,24 @@ const STATUS_LABEL: Record<string, string> = {
   archived: 'В архиве',
 };
 
+function useTheme() {
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    const saved = localStorage.getItem('ryadom56_admin_theme');
+    if (saved === 'dark' || saved === 'light') return saved;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  });
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('ryadom56_admin_theme', theme);
+  }, [theme]);
+
+  return {
+    theme,
+    toggle: () => setTheme((t) => (t === 'dark' ? 'light' : 'dark')),
+  };
+}
+
 function useAuth() {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -109,7 +127,19 @@ function LoginPage({ onLogin }: { onLogin: (u: User) => void }) {
   );
 }
 
-function Shell({ user, onLogout, children }: { user: User; onLogout: () => void; children: React.ReactNode }) {
+function Shell({
+  user,
+  onLogout,
+  theme,
+  onToggleTheme,
+  children,
+}: {
+  user: User;
+  onLogout: () => void;
+  theme: 'light' | 'dark';
+  onToggleTheme: () => void;
+  children: React.ReactNode;
+}) {
   return (
     <div className="layout">
       <aside className="sidebar">
@@ -136,6 +166,9 @@ function Shell({ user, onLogout, children }: { user: User; onLogout: () => void;
         <div className="aside-user">
           <div className="name">{user.full_name}</div>
           <div className="role">{ROLE_LABELS[user.role]}</div>
+          <button type="button" className="theme-toggle" onClick={onToggleTheme}>
+            {theme === 'dark' ? '☀ Светлая тема' : '☾ Тёмная тема'}
+          </button>
           <button type="button" onClick={onLogout}>
             Выйти
           </button>
@@ -200,8 +233,11 @@ function Dashboard() {
 function ModerationPage() {
   const [items, setItems] = useState<Listing[]>([]);
   const [filter, setFilter] = useState('pending');
+  const [category, setCategory] = useState('');
+  const [query, setQuery] = useState('');
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState<number | null>(null);
+  const [selected, setSelected] = useState<Listing | null>(null);
 
   async function load() {
     try {
@@ -216,6 +252,22 @@ function ModerationPage() {
     load();
   }, [filter]);
 
+  const visible = useMemo(() => {
+    return items.filter((item) => {
+      if (category && item.category !== category) return false;
+      if (query.trim()) {
+        const q = query.trim().toLowerCase();
+        return (
+          item.title.toLowerCase().includes(q) ||
+          item.description.toLowerCase().includes(q) ||
+          (item.author_name || '').toLowerCase().includes(q) ||
+          (item.settlement_name || '').toLowerCase().includes(q)
+        );
+      }
+      return true;
+    });
+  }, [items, category, query]);
+
   async function moderate(id: number, status: 'approved' | 'rejected') {
     setBusyId(id);
     try {
@@ -223,6 +275,7 @@ function ModerationPage() {
         method: 'POST',
         body: JSON.stringify({ status }),
       });
+      setSelected(null);
       await load();
     } finally {
       setBusyId(null);
@@ -234,24 +287,38 @@ function ModerationPage() {
       <div className="page-head">
         <div>
           <h1>Модерация</h1>
-          <p>Проверка объявлений перед публикацией</p>
+          <p>Проверка и просмотр объявлений</p>
         </div>
       </div>
 
       <div className="toolbar">
-        <select value={filter} onChange={(e) => setFilter(e.target.value)} style={{ maxWidth: 240 }}>
+        <select value={filter} onChange={(e) => setFilter(e.target.value)}>
           <option value="pending">На проверке</option>
           <option value="approved">Одобренные</option>
           <option value="rejected">Отклонённые</option>
           <option value="">Все</option>
         </select>
+        <select value={category} onChange={(e) => setCategory(e.target.value)}>
+          <option value="">Все категории</option>
+          {['goods', 'services', 'jobs', 'rent', 'free', 'lost_found'].map((c) => (
+            <option key={c} value={c}>
+              {CATEGORY_LABELS[c]}
+            </option>
+          ))}
+        </select>
+        <input
+          placeholder="Поиск…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          style={{ maxWidth: 280 }}
+        />
       </div>
 
       {error && <p className="error">{error}</p>}
 
       <div className="list">
-        {items.map((item) => (
-          <article key={item.id} className="row-card">
+        {visible.map((item) => (
+          <article key={item.id} className="row-card" onClick={() => setSelected(item)}>
             <div>
               <h3 className="row-title">{item.title}</h3>
               <div className="meta">
@@ -260,21 +327,57 @@ function ModerationPage() {
                 <span className="chip neutral">{item.settlement_name}</span>
                 <span className="chip neutral">{item.author_name}</span>
               </div>
-              <p className="row-body">{item.description}</p>
+              <p className="row-body">
+                {item.description.length > 160 ? `${item.description.slice(0, 160)}…` : item.description}
+              </p>
               {item.price != null && <div className="price">{item.price.toLocaleString('ru-RU')} ₽</div>}
             </div>
-            <div className="actions">
+            <div className="actions" onClick={(e) => e.stopPropagation()}>
               <button className="btn" disabled={busyId === item.id} onClick={() => moderate(item.id, 'approved')}>
                 Одобрить
               </button>
               <button className="btn danger" disabled={busyId === item.id} onClick={() => moderate(item.id, 'rejected')}>
                 Отклонить
               </button>
+              <button className="btn ghost" onClick={() => setSelected(item)}>
+                Открыть
+              </button>
             </div>
           </article>
         ))}
-        {!items.length && <div className="empty">Пока нет объявлений в этом фильтре</div>}
+        {!visible.length && <div className="empty">Пока нет объявлений в этом фильтре</div>}
       </div>
+
+      {selected && (
+        <div className="modal-backdrop" onClick={() => setSelected(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()}>
+            <div className="meta">
+              <span className={STATUS_CHIP[selected.status] || 'chip'}>{STATUS_LABEL[selected.status]}</span>
+              <span className="chip">{CATEGORY_LABELS[selected.category]}</span>
+              <span className="chip neutral">{selected.settlement_name}</span>
+            </div>
+            <h2>{selected.title}</h2>
+            {selected.price != null && <div className="price">{selected.price.toLocaleString('ru-RU')} ₽</div>}
+            <p className="row-body" style={{ marginTop: 14, whiteSpace: 'pre-wrap' }}>
+              {selected.description}
+            </p>
+            <p className="muted" style={{ marginTop: 14 }}>
+              Автор: {selected.author_name || '—'}
+            </p>
+            <div className="modal-actions">
+              <button className="btn" disabled={busyId === selected.id} onClick={() => moderate(selected.id, 'approved')}>
+                Одобрить
+              </button>
+              <button className="btn danger" disabled={busyId === selected.id} onClick={() => moderate(selected.id, 'rejected')}>
+                Отклонить
+              </button>
+              <button className="btn secondary" onClick={() => setSelected(null)}>
+                Закрыть
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -478,6 +581,7 @@ function UsersPage() {
 export default function App() {
   const { user, setUser, loading } = useAuth();
   const navigate = useNavigate();
+  const { theme, toggle } = useTheme();
 
   const authed = useMemo(() => !!user && ['admin', 'moderator', 'editor'].includes(user.role), [user]);
 
@@ -506,6 +610,8 @@ export default function App() {
   return (
     <Shell
       user={user!}
+      theme={theme}
+      onToggleTheme={toggle}
       onLogout={() => {
         setToken(null);
         setUser(null);

@@ -47,6 +47,7 @@ def list_listings(
     category: ListingCategory | None = None,
     settlement_id: int | None = None,
     q: str | None = None,
+    sort: str = Query(default="newest", pattern="^(newest|oldest|price_asc|price_desc)$"),
     mine: bool = False,
     db: Session = Depends(get_db),
     user: User | None = Depends(get_optional_user),
@@ -65,7 +66,14 @@ def list_listings(
     if q:
         like = f"%{q.strip()}%"
         stmt = stmt.where(Listing.title.ilike(like) | Listing.description.ilike(like))
-    stmt = stmt.order_by(Listing.created_at.desc())
+    if sort == "oldest":
+        stmt = stmt.order_by(Listing.created_at.asc())
+    elif sort == "price_asc":
+        stmt = stmt.order_by(Listing.price.asc(), Listing.created_at.desc())
+    elif sort == "price_desc":
+        stmt = stmt.order_by(Listing.price.desc(), Listing.created_at.desc())
+    else:
+        stmt = stmt.order_by(Listing.created_at.desc())
     return [to_out(r) for r in db.execute(stmt).scalars().all()]
 
 
