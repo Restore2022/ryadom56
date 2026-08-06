@@ -11,6 +11,9 @@ jobs:
     defaults:
       run:
         working-directory: mobile
+    env:
+      GRADLE_OPTS: -Xmx3072m -XX:MaxMetaspaceSize=1024m -Dfile.encoding=UTF-8
+      JAVA_TOOL_OPTIONS: -Xmx3072m -XX:MaxMetaspaceSize=1024m
 
     steps:
       - name: Checkout
@@ -32,7 +35,7 @@ jobs:
         run: flutter pub get
 
       - name: Build release APK
-        run: flutter build apk --release --dart-define=API_BASE=http://192.168.0.110:8000/api
+        run: flutter build apk --release --no-tree-shake-icons --dart-define=API_BASE=http://192.168.0.110:8000/api
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
