@@ -21,6 +21,11 @@ class AppState extends ChangeNotifier {
   String sort = 'newest';
   bool listingsLoading = false;
 
+  String? directoryCategory;
+  int? directorySettlementId;
+  String directoryQuery = '';
+  bool directoryLoading = false;
+
   Future<void> bootstrap() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -63,8 +68,35 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> loadDirectory() async {
-    directory = await api.request('/directory') as List<dynamic>;
+    directoryLoading = true;
     notifyListeners();
+    try {
+      final params = <String, String>{};
+      if (directoryCategory != null) params['category'] = directoryCategory!;
+      if (directorySettlementId != null) params['settlement_id'] = '$directorySettlementId';
+      if (directoryQuery.trim().isNotEmpty) params['q'] = directoryQuery.trim();
+      final qs = params.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&');
+      final path = qs.isEmpty ? '/directory' : '/directory?$qs';
+      directory = await api.request(path) as List<dynamic>;
+    } finally {
+      directoryLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> setDirectoryFilters({
+    String? category,
+    int? settlementId,
+    String? query,
+  }) async {
+    directoryCategory = category;
+    directorySettlementId = settlementId;
+    if (query != null) directoryQuery = query;
+    await loadDirectory();
+  }
+
+  Future<Map<String, dynamic>> getDirectoryItem(int id) async {
+    return await api.request('/directory/$id') as Map<String, dynamic>;
   }
 
   Future<void> refreshPublic() async {

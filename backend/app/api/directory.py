@@ -47,7 +47,12 @@ def list_directory(
         stmt = stmt.where(DirectoryItem.settlement_id == settlement_id)
     if q:
         like = f"%{q.strip()}%"
-        stmt = stmt.where(DirectoryItem.title.ilike(like))
+        stmt = stmt.where(
+            DirectoryItem.title.ilike(like)
+            | DirectoryItem.description.ilike(like)
+            | DirectoryItem.address.ilike(like)
+            | DirectoryItem.phone.ilike(like)
+        )
     stmt = stmt.order_by(DirectoryItem.title)
     return [to_out(r) for r in db.execute(stmt).scalars().all()]
 

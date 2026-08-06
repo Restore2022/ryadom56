@@ -1,9 +1,11 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../state/app_state.dart';
 import 'create_listing_screen.dart';
+import 'directory_detail_screen.dart';
 import 'listing_detail_screen.dart';
 
 const categoryLabels = {
@@ -48,7 +50,7 @@ class _HomeShellState extends State<HomeShell> {
     final state = context.watch<AppState>();
     final pages = [
       const _ListingsTab(),
-      _DirectoryTab(items: state.directory),
+      const _DirectoryTab(),
       _ProfileTab(user: state.user),
     ];
     return Scaffold(
@@ -367,38 +369,274 @@ class _ListingCard extends StatelessWidget {
   }
 }
 
-class _DirectoryTab extends StatelessWidget {
-  const _DirectoryTab({required this.items});
-  final List<dynamic> items;
+class _DirectoryTab extends StatefulWidget {
+  const _DirectoryTab();
+
+  @override
+  State<_DirectoryTab> createState() => _DirectoryTabState();
+}
+
+class _DirectoryTabState extends State<_DirectoryTab> {
+  final search = TextEditingController();
+
+  static const dirCategories = [
+    'school',
+    'hospital',
+    'shop',
+    'pharmacy',
+    'admin',
+    'bank',
+    'post',
+    'transport',
+    'culture',
+    'sport',
+    'other',
+  ];
+
+  @override
+  void dispose() {
+    search.dispose();
+    super.dispose();
+  }
+
+  Future<void> _call(String phone) async {
+    final uri = Uri(scheme: 'tel', path: phone.replaceAll(RegExp(r'[\s\-()]'), ''));
+    await launchUrl(uri);
+  }
 
   @override
   Widget build(BuildContext context) {
-    if (items.isEmpty) {
-      return const Center(child: Text('Справочник пока пуст'));
-    }
-    return RefreshIndicator(
-      onRefresh: () => context.read<AppState>().loadDirectory(),
-      child: ListView.separated(
-        padding: const EdgeInsets.all(16),
-        itemCount: items.length,
-        separatorBuilder: (_, __) => const SizedBox(height: 10),
-        itemBuilder: (_, i) {
-          final item = items[i] as Map<String, dynamic>;
-          return Card(
-            child: ListTile(
-              contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              title: Text(item['title'] as String, style: const TextStyle(fontWeight: FontWeight.w700)),
-              subtitle: Text(
-                '${categoryLabels[item['category']] ?? item['category']}'
-                '${item['settlement_name'] != null ? ' · ${item['settlement_name']}' : ''}'
-                '${item['address'] != null ? '\n${item['address']}' : ''}'
-                '${item['phone'] != null ? '\n${item['phone']}' : ''}',
-              ),
-              isThreeLine: true,
+    final state = context.watch<AppState>();
+    final items = state.directory;
+    final scheme = Theme.of(context).colorScheme;
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+          child: TextField(
+            controller: search,
+            textInputAction: TextInputAction.search,
+            onSubmitted: (v) => state.setDirectoryFilters(
+              category: state.directoryCategory,
+              settlementId: state.directorySettlementId,
+              query: v,
             ),
-          );
-        },
-      ),
+            decoration: InputDecoration(
+              hintText: 'Школа, больница, магазин…',
+              prefixIcon: const Icon(Icons.search),
+              suffixIcon: IconButton(
+                icon: const Icon(Icons.tune),
+                onPressed: () => _openFilters(context, state),
+              ),
+            ),
+          ),
+        ),
+        SizedBox(
+          height: 44,
+          child: ListView(
+            scrollDirection: Axis.horizontal,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            children: [
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: FilterChip(
+                  label: const Text('Все'),
+                  selected: state.directoryCategory == null,
+                  onSelected: (_) => state.setDirectoryFilters(
+                    category: null,
+                    settlementId: state.directorySettlementId,
+                    query: search.text,
+                  ),
+                ),
+              ),
+              ...dirCategories.map(
+                (c) => Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: FilterChip(
+                    label: Text(categoryLabels[c] ?? c),
+                    selected: state.directoryCategory == c,
+                    onSelected: (_) => state.setDirectoryFilters(
+                      category: state.directoryCategory == c ? null : c,
+                      settlementId: state.directorySettlementId,
+                      query: search.text,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: Text(
+              '${items.length} записей',
+              style: TextStyle(color: scheme.onSurfaceVariant),
+            ),
+          ),
+        ),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: () => state.loadDirectory(),
+            child: state.directoryLoading && items.isEmpty
+                ? const Center(child: CircularProgressIndicator())
+                : items.isEmpty
+                    ? ListView(
+                        children: const [
+                          SizedBox(height: 120),
+                          Center(child: Text('Ничего не найдено')),
+                        ],
+                      )
+                    : ListView.separated(
+                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                        itemCount: items.length,
+                        separatorBuilder: (_, __) => const SizedBox(height: 12),
+                        itemBuilder: (_, i) {
+                          final item = items[i] as Map<String, dynamic>;
+                          final phone = item['phone']?.toString();
+                          return Material(
+                            color: Theme.of(context).cardTheme.color,
+                            borderRadius: BorderRadius.circular(18),
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(18),
+                              onTap: () {
+                                Navigator.push(
+                                  context,
+                                  MaterialPageRoute(builder: (_) => DirectoryDetailScreen(item: item)),
+                                );
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.all(16),
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(18),
+                                  border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.45)),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      categoryLabels[item['category']] ?? '${item['category']}',
+                                      style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700, fontSize: 12),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      item['title'] as String,
+                                      style: GoogleFonts.manrope(fontSize: 18, fontWeight: FontWeight.w800),
+                                    ),
+                                    if (item['address'] != null) ...[
+                                      const SizedBox(height: 8),
+                                      Row(
+                                        children: [
+                                          Icon(Icons.place_outlined, size: 16, color: scheme.onSurfaceVariant),
+                                          const SizedBox(width: 4),
+                                          Expanded(
+                                            child: Text(
+                                              '${item['address']}',
+                                              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                    if (item['settlement_name'] != null) ...[
+                                      const SizedBox(height: 4),
+                                      Text('${item['settlement_name']}', style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13)),
+                                    ],
+                                    const SizedBox(height: 12),
+                                    Row(
+                                      children: [
+                                        if (phone != null && phone.isNotEmpty)
+                                          FilledButton.tonalIcon(
+                                            onPressed: () => _call(phone),
+                                            icon: const Icon(Icons.phone, size: 18),
+                                            label: const Text('Позвонить'),
+                                          ),
+                                        const Spacer(),
+                                        Text('Подробнее', style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700)),
+                                        Icon(Icons.chevron_right, color: scheme.primary),
+                                      ],
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _openFilters(BuildContext context, AppState state) async {
+    String? category = state.directoryCategory;
+    int? settlementId = state.directorySettlementId;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setModal) {
+            return Padding(
+              padding: EdgeInsets.fromLTRB(20, 8, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Text('Фильтры справочника', style: GoogleFonts.unbounded(fontSize: 20, fontWeight: FontWeight.w600)),
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<String?>(
+                    value: category,
+                    decoration: const InputDecoration(labelText: 'Категория'),
+                    items: [
+                      const DropdownMenuItem(value: null, child: Text('Все категории')),
+                      ...dirCategories.map((c) => DropdownMenuItem(value: c, child: Text(categoryLabels[c] ?? c))),
+                    ],
+                    onChanged: (v) => setModal(() => category = v),
+                  ),
+                  const SizedBox(height: 12),
+                  DropdownButtonFormField<int?>(
+                    value: settlementId,
+                    decoration: const InputDecoration(labelText: 'Населённый пункт'),
+                    items: [
+                      const DropdownMenuItem(value: null, child: Text('Весь район')),
+                      ...state.settlements.map(
+                        (s) => DropdownMenuItem(value: s['id'] as int, child: Text(s['display_name'] as String)),
+                      ),
+                    ],
+                    onChanged: (v) => setModal(() => settlementId = v),
+                  ),
+                  const SizedBox(height: 18),
+                  FilledButton(
+                    onPressed: () async {
+                      Navigator.pop(ctx);
+                      await state.setDirectoryFilters(
+                        category: category,
+                        settlementId: settlementId,
+                        query: search.text.trim(),
+                      );
+                    },
+                    child: const Text('Применить'),
+                  ),
+                  TextButton(
+                    onPressed: () async {
+                      Navigator.pop(ctx);
+                      search.clear();
+                      await state.setDirectoryFilters(category: null, settlementId: null, query: '');
+                    },
+                    child: const Text('Сбросить'),
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
     );
   }
 }
