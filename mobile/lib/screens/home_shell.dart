@@ -35,6 +35,46 @@ const sortLabels = {
   'price_desc': 'Цена ↓',
 };
 
+class RyadomFilterChip extends StatelessWidget {
+  const RyadomFilterChip({
+    super.key,
+    required this.label,
+    required this.selected,
+    required this.onSelected,
+  });
+
+  final String label;
+  final bool selected;
+  final ValueChanged<bool> onSelected;
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bg = selected
+        ? (isDark ? const Color(0xFF2F6B45) : const Color(0xFF1B6B3A))
+        : (isDark ? const Color(0xFF243328) : Colors.white);
+    final fg = selected
+        ? (isDark ? const Color(0xFFE8FFF0) : Colors.white)
+        : (isDark ? const Color(0xFFD7E6D9) : const Color(0xFF1C2B1F));
+    final border = selected
+        ? Colors.transparent
+        : (isDark ? const Color(0xFF3A4F3E) : const Color(0xFFB7C9B8));
+
+    return FilterChip(
+      label: Text(label),
+      selected: selected,
+      showCheckmark: false,
+      onSelected: onSelected,
+      selectedColor: bg,
+      backgroundColor: bg,
+      checkmarkColor: fg,
+      side: BorderSide(color: border),
+      labelStyle: GoogleFonts.manrope(fontWeight: FontWeight.w700, fontSize: 13, color: fg),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+    );
+  }
+}
+
 class HomeShell extends StatefulWidget {
   const HomeShell({super.key});
 
@@ -137,8 +177,8 @@ class _ListingsTabState extends State<_ListingsTab> {
             children: [
               Padding(
                 padding: const EdgeInsets.only(right: 8),
-                child: FilterChip(
-                  label: const Text('Все'),
+                child: RyadomFilterChip(
+                  label: 'Все',
                   selected: state.filterCategory == null,
                   onSelected: (_) => state.applyListingFilters(clearCategory: true),
                 ),
@@ -146,8 +186,8 @@ class _ListingsTabState extends State<_ListingsTab> {
               ...['goods', 'services', 'jobs', 'rent', 'free', 'lost_found'].map(
                 (c) => Padding(
                   padding: const EdgeInsets.only(right: 8),
-                  child: FilterChip(
-                    label: Text(categoryLabels[c]!),
+                  child: RyadomFilterChip(
+                    label: categoryLabels[c]!,
                     selected: state.filterCategory == c,
                     onSelected: (_) => state.applyListingFilters(category: state.filterCategory == c ? '' : c),
                   ),
@@ -440,8 +480,8 @@ class _DirectoryTabState extends State<_DirectoryTab> {
             children: [
               Padding(
                 padding: const EdgeInsets.only(right: 8),
-                child: FilterChip(
-                  label: const Text('Все'),
+                child: RyadomFilterChip(
+                  label: 'Все',
                   selected: state.directoryCategory == null,
                   onSelected: (_) => state.setDirectoryFilters(
                     category: null,
@@ -453,8 +493,8 @@ class _DirectoryTabState extends State<_DirectoryTab> {
               ...dirCategories.map(
                 (c) => Padding(
                   padding: const EdgeInsets.only(right: 8),
-                  child: FilterChip(
-                    label: Text(categoryLabels[c] ?? c),
+                  child: RyadomFilterChip(
+                    label: categoryLabels[c] ?? c,
                     selected: state.directoryCategory == c,
                     onSelected: (_) => state.setDirectoryFilters(
                       category: state.directoryCategory == c ? null : c,

@@ -11,6 +11,12 @@ ThemeData buildRyadomTheme(Brightness brightness) {
     surface: isDark ? const Color(0xFF121A14) : const Color(0xFFF4F7F2),
   );
 
+  final chipBg = isDark ? const Color(0xFF243328) : Colors.white;
+  final chipSelectedBg = isDark ? const Color(0xFF2F6B45) : const Color(0xFF1B6B3A);
+  final chipBorder = isDark ? const Color(0xFF3A4F3E) : const Color(0xFFB7C9B8);
+  final chipLabel = isDark ? const Color(0xFFD7E6D9) : const Color(0xFF1C2B1F);
+  final chipSelectedLabel = isDark ? const Color(0xFFE8FFF0) : Colors.white;
+
   final textTheme = GoogleFonts.manropeTextTheme(
     isDark ? ThemeData.dark().textTheme : ThemeData.light().textTheme,
   );
@@ -67,11 +73,20 @@ ThemeData buildRyadomTheme(Brightness brightness) {
       labelTextStyle: WidgetStatePropertyAll(GoogleFonts.manrope(fontSize: 12, fontWeight: FontWeight.w600)),
     ),
     chipTheme: ChipThemeData(
+      showCheckmark: false,
+      padding: const EdgeInsets.symmetric(horizontal: 4),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
-      side: BorderSide.none,
-      selectedColor: scheme.primary.withValues(alpha: 0.2),
-      backgroundColor: isDark ? const Color(0xFF223028) : const Color(0xFFE5F0E7),
-      labelStyle: GoogleFonts.manrope(fontWeight: FontWeight.w600, fontSize: 13),
+      side: BorderSide(color: chipBorder),
+      backgroundColor: chipBg,
+      selectedColor: chipSelectedBg,
+      disabledColor: chipBg,
+      secondarySelectedColor: chipSelectedBg,
+      labelStyle: GoogleFonts.manrope(fontWeight: FontWeight.w700, fontSize: 13, color: chipLabel),
+      secondaryLabelStyle: GoogleFonts.manrope(fontWeight: FontWeight.w700, fontSize: 13, color: chipSelectedLabel),
+      color: WidgetStateProperty.resolveWith((states) {
+        if (states.contains(WidgetState.selected)) return chipSelectedBg;
+        return chipBg;
+      }),
     ),
   );
 }
