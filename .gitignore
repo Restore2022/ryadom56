@@ -1,7 +1,8 @@
 .venv/
 __pycache__/
 *.pyc
-data/*.db
+*.db
+backend/data/
 .env
 .DS_Store
 node_modules/
