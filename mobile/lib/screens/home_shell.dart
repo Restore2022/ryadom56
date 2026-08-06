@@ -7,6 +7,21 @@ import '../state/app_state.dart';
 import 'create_listing_screen.dart';
 import 'directory_detail_screen.dart';
 import 'listing_detail_screen.dart';
+import 'my_listings_screen.dart';
+
+Route<T> fastRoute<T>(Widget page) {
+  return PageRouteBuilder<T>(
+    pageBuilder: (_, __, ___) => page,
+    transitionsBuilder: (_, animation, __, child) {
+      return FadeTransition(
+        opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
+        child: child,
+      );
+    },
+    transitionDuration: const Duration(milliseconds: 180),
+    reverseTransitionDuration: const Duration(milliseconds: 140),
+  );
+}
 
 const categoryLabels = {
   'goods': 'Товары',
@@ -105,7 +120,7 @@ class _HomeShellState extends State<HomeShell> {
           if (index == 0)
             IconButton(
               icon: const Icon(Icons.add_circle_outline),
-              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CreateListingScreen())),
+              onPressed: () => Navigator.push(context, fastRoute(const CreateListingScreen())),
             ),
         ],
       ),
@@ -121,7 +136,7 @@ class _HomeShellState extends State<HomeShell> {
       ),
       floatingActionButton: index == 0
           ? FloatingActionButton.extended(
-              onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const CreateListingScreen())),
+              onPressed: () => Navigator.push(context, fastRoute(const CreateListingScreen())),
               icon: const Icon(Icons.add),
               label: const Text('Подать'),
             )
@@ -345,9 +360,7 @@ class _ListingCard extends StatelessWidget {
         onTap: () {
           Navigator.push(
             context,
-            MaterialPageRoute(
-              builder: (_) => ListingDetailScreen(listingId: item['id'] as int, preview: item),
-            ),
+            fastRoute(ListingDetailScreen(listingId: item['id'] as int, preview: item)),
           );
         },
         child: Container(
@@ -356,50 +369,72 @@ class _ListingCard extends StatelessWidget {
             borderRadius: BorderRadius.circular(18),
             border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.45)),
           ),
-          child: Column(
+          child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      categoryLabels[item['category']] ?? '${item['category']}',
-                      style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700, fontSize: 12),
+              Builder(
+                builder: (context) {
+                  final images = (item['images'] as List?) ?? [];
+                  final thumb = images.isNotEmpty ? (images.first as Map)['url'] as String? : null;
+                  final state = context.read<AppState>();
+                  return ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: thumb == null
+                        ? Container(
+                            width: 76,
+                            height: 76,
+                            color: scheme.surfaceContainerHighest,
+                            child: Icon(Icons.image_outlined, color: scheme.onSurfaceVariant),
+                          )
+                        : Image.network(
+                            state.mediaUrl(thumb),
+                            width: 76,
+                            height: 76,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) => Container(
+                              width: 76,
+                              height: 76,
+                              color: scheme.surfaceContainerHighest,
+                              child: const Icon(Icons.broken_image_outlined),
+                            ),
+                          ),
+                  );
+                },
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            categoryLabels[item['category']] ?? '${item['category']}',
+                            style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700, fontSize: 12),
+                          ),
+                        ),
+                        if (item['price'] != null)
+                          Text(
+                            '${item['price']} ₽',
+                            style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 16),
+                          ),
+                      ],
                     ),
-                  ),
-                  if (item['price'] != null)
+                    const SizedBox(height: 8),
                     Text(
-                      '${item['price']} ₽',
-                      style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 16),
+                      item['title'] as String,
+                      style: GoogleFonts.manrope(fontWeight: FontWeight.w700, fontSize: 16),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
                     ),
-                ],
-              ),
-              const SizedBox(height: 8),
-              Text(
-                item['title'] as String,
-                style: GoogleFonts.manrope(fontSize: 18, fontWeight: FontWeight.w800, height: 1.25),
-              ),
-              const SizedBox(height: 8),
-              Text(
-                item['description'] as String,
-                maxLines: 2,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(color: scheme.onSurfaceVariant, height: 1.4),
-              ),
-              const SizedBox(height: 12),
-              Row(
-                children: [
-                  Icon(Icons.place_outlined, size: 16, color: scheme.onSurfaceVariant),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
+                    const SizedBox(height: 6),
+                    Text(
                       '${item['settlement_name'] ?? ''}',
-                      style: TextStyle(fontSize: 13, color: scheme.onSurfaceVariant),
+                      style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
                     ),
-                  ),
-                  Text('Открыть', style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700)),
-                  Icon(Icons.chevron_right, color: scheme.primary),
-                ],
+                  ],
+                ),
               ),
             ],
           ),
@@ -716,6 +751,15 @@ class _ProfileTab extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 16),
+        ListTile(
+          leading: const Icon(Icons.inventory_2_outlined),
+          title: const Text('Мои объявления'),
+          subtitle: const Text('Статус, снять с публикации'),
+          trailing: const Icon(Icons.chevron_right),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          onTap: () => Navigator.push(context, fastRoute(const MyListingsScreen())),
+        ),
+        const SizedBox(height: 8),
         SwitchListTile(
           value: state.darkMode,
           onChanged: state.setDarkMode,

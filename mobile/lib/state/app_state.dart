@@ -209,6 +209,41 @@ class AppState extends ChangeNotifier {
     return await api.request('/listings/$id', auth: true) as Map<String, dynamic>;
   }
 
+  Future<List<dynamic>> loadMyListings() async {
+    return await api.request('/listings?mine=true&sort=newest', auth: true) as List<dynamic>;
+  }
+
+  Future<Map<String, dynamic>> createListing(
+    Map<String, dynamic> body, {
+    List<String> imagePaths = const [],
+  }) async {
+    final created = await api.request('/listings', method: 'POST', auth: true, body: body) as Map<String, dynamic>;
+    if (imagePaths.isNotEmpty) {
+      final id = created['id'] as int;
+      final withImages = await api.uploadListingImages(id, imagePaths);
+      await loadListings();
+      notifyListeners();
+      return withImages;
+    }
+    await loadListings();
+    notifyListeners();
+    return created;
+  }
+
+  Future<Map<String, dynamic>> closeListing(int id, {required String reason, String? note}) async {
+    final updated = await api.request(
+      '/listings/$id/close',
+      method: 'POST',
+      auth: true,
+      body: {'reason': reason, 'note': note},
+    ) as Map<String, dynamic>;
+    await loadListings();
+    notifyListeners();
+    return updated;
+  }
+
+  String mediaUrl(String? path) => api.resolveMedia(path);
+
   Future<void> login(String email, String password) async {
     final data = await api.request('/auth/login', method: 'POST', body: {
       'email': email,
@@ -234,10 +269,5 @@ class AppState extends ChangeNotifier {
     await api.setToken(null);
     user = null;
     notifyListeners();
-  }
-
-  Future<void> createListing(Map<String, dynamic> body) async {
-    await api.request('/listings', method: 'POST', auth: true, body: body);
-    await loadListings();
   }
 }

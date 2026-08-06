@@ -119,6 +119,17 @@ class ListingModerationIn(BaseModel):
     moderation_note: str | None = None
 
 
+class ListingCloseIn(BaseModel):
+    reason: str = Field(pattern="^(sold|not_relevant|busy|other)$")
+    note: str | None = Field(default=None, max_length=500)
+
+
+class ListingImageOut(BaseModel):
+    id: int
+    url: str
+    sort_order: int
+
+
 class ListingOut(BaseModel):
     id: int
     author_id: int
@@ -132,6 +143,9 @@ class ListingOut(BaseModel):
     contact_phone: str | None
     status: ListingStatus
     moderation_note: str | None
+    close_reason: str | None = None
+    close_note: str | None = None
+    images: list[ListingImageOut] = []
     created_at: datetime
     updated_at: datetime
 

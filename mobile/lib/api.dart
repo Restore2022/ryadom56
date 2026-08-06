@@ -1,6 +1,7 @@
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiClient {
@@ -8,6 +9,19 @@ class ApiClient {
 
   /// На телефоне: IP ПК в Wi‑Fi. В эмуляторе: http://10.0.2.2:8000/api
   final String baseUrl;
+
+  String get mediaBase {
+    final uri = Uri.parse(baseUrl);
+    final path = uri.path.endsWith('/api') ? uri.path.substring(0, uri.path.length - 4) : uri.path;
+    return uri.replace(path: path.isEmpty ? '/' : path).toString().replaceAll(RegExp(r'/$'), '');
+  }
+
+  String resolveMedia(String? url) {
+    if (url == null || url.isEmpty) return '';
+    if (url.startsWith('http://') || url.startsWith('https://')) return url;
+    if (url.startsWith('/')) return '$mediaBase$url';
+    return '$mediaBase/$url';
+  }
 
   Future<String?> get token async {
     final prefs = await SharedPreferences.getInstance();
@@ -64,6 +78,9 @@ class ApiClient {
       case 'PATCH':
         res = await http.patch(uri, headers: headers, body: jsonEncode(cleanBody));
         break;
+      case 'DELETE':
+        res = await http.delete(uri, headers: headers);
+        break;
       default:
         res = await http.get(uri, headers: headers);
     }
@@ -77,5 +94,37 @@ class ApiClient {
     }
     if (res.body.isEmpty) return null;
     return jsonDecode(res.body);
+  }
+
+  Future<Map<String, dynamic>> uploadListingImages(int listingId, List<String> filePaths) async {
+    final uri = Uri.parse('$baseUrl/listings/$listingId/images');
+    final req = http.MultipartRequest('POST', uri);
+    final t = await token;
+    if (t != null) req.headers['Authorization'] = 'Bearer $t';
+
+    for (final path in filePaths) {
+      final lower = path.toLowerCase();
+      MediaType type;
+      if (lower.endsWith('.png')) {
+        type = MediaType('image', 'png');
+      } else if (lower.endsWith('.webp')) {
+        type = MediaType('image', 'webp');
+      } else {
+        type = MediaType('image', 'jpeg');
+      }
+      req.files.add(await http.MultipartFile.fromPath('files', path, contentType: type));
+    }
+
+    final streamed = await req.send();
+    final res = await http.Response.fromStream(streamed);
+    if (res.statusCode >= 400) {
+      String detail = res.body;
+      try {
+        final data = jsonDecode(res.body);
+        detail = _formatDetail(data['detail']);
+      } catch (_) {}
+      throw Exception(detail);
+    }
+    return jsonDecode(res.body) as Map<String, dynamic>;
   }
 }

@@ -97,6 +97,8 @@ class Listing(Base):
     contact_phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     status: Mapped[ListingStatus] = mapped_column(Enum(ListingStatus), default=ListingStatus.pending)
     moderation_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    close_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    close_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -104,6 +106,23 @@ class Listing(Base):
 
     author: Mapped["User"] = relationship(back_populates="listings")
     settlement: Mapped["Settlement"] = relationship()
+    images: Mapped[list["ListingImage"]] = relationship(
+        back_populates="listing",
+        cascade="all, delete-orphan",
+        order_by="ListingImage.sort_order",
+    )
+
+
+class ListingImage(Base):
+    __tablename__ = "listing_images"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    listing_id: Mapped[int] = mapped_column(ForeignKey("listings.id"), nullable=False, index=True)
+    path: Mapped[str] = mapped_column(String(255), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    listing: Mapped["Listing"] = relationship(back_populates="images")
 
 
 class DirectoryItem(Base):

@@ -1,4 +1,7 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
@@ -19,12 +22,25 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
   int? settlementId;
   String? error;
   bool busy = false;
+  final List<XFile> photos = [];
+  final picker = ImagePicker();
 
   @override
   void initState() {
     super.initState();
     final user = context.read<AppState>().user;
     settlementId = user?['settlement_id'] as int?;
+    phone.text = (user?['phone'] as String?) ?? '';
+  }
+
+  Future<void> _pickPhotos() async {
+    final remaining = 5 - photos.length;
+    if (remaining <= 0) return;
+    final picked = await picker.pickMultiImage(imageQuality: 75, maxWidth: 1600);
+    if (picked.isEmpty) return;
+    setState(() {
+      photos.addAll(picked.take(remaining));
+    });
   }
 
   @override
@@ -35,6 +51,63 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          Text('Фото (до 5)', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 8),
+          SizedBox(
+            height: 96,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              children: [
+                ...photos.asMap().entries.map((e) {
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Stack(
+                      children: [
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(12),
+                          child: Image.file(File(e.value.path), width: 96, height: 96, fit: BoxFit.cover),
+                        ),
+                        Positioned(
+                          top: 4,
+                          right: 4,
+                          child: InkWell(
+                            onTap: () => setState(() => photos.removeAt(e.key)),
+                            child: const CircleAvatar(
+                              radius: 12,
+                              backgroundColor: Colors.black54,
+                              child: Icon(Icons.close, size: 14, color: Colors.white),
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }),
+                if (photos.length < 5)
+                  InkWell(
+                    onTap: _pickPhotos,
+                    borderRadius: BorderRadius.circular(12),
+                    child: Container(
+                      width: 96,
+                      height: 96,
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(color: Theme.of(context).dividerColor),
+                      ),
+                      child: const Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.add_a_photo_outlined),
+                          SizedBox(height: 4),
+                          Text('Добавить', style: TextStyle(fontSize: 12)),
+                        ],
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
           TextField(controller: title, decoration: const InputDecoration(labelText: 'Заголовок', border: OutlineInputBorder())),
           const SizedBox(height: 12),
           TextField(
@@ -67,10 +140,20 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
             onChanged: (v) => setState(() => settlementId = v),
           ),
           const SizedBox(height: 12),
-          TextField(controller: price, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'Цена (необязательно)', border: OutlineInputBorder())),
+          TextField(
+            controller: price,
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(labelText: 'Цена (необязательно)', border: OutlineInputBorder()),
+          ),
           const SizedBox(height: 12),
-          TextField(controller: phone, decoration: const InputDecoration(labelText: 'Телефон для связи', border: OutlineInputBorder())),
-          if (error != null) Text(error!, style: const TextStyle(color: Colors.red)),
+          TextField(
+            controller: phone,
+            decoration: const InputDecoration(labelText: 'Телефон для связи', border: OutlineInputBorder()),
+          ),
+          if (error != null) ...[
+            const SizedBox(height: 8),
+            Text(error!, style: const TextStyle(color: Colors.red)),
+          ],
           const SizedBox(height: 16),
           FilledButton(
             onPressed: busy
@@ -79,7 +162,7 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
                     final titleText = title.text.trim();
                     final descText = description.text.trim();
                     if (titleText.length < 2) {
-                      setState(() => error = 'Заголовок слишком короткий');
+                      setState(() => error = 'Укажите заголовок');
                       return;
                     }
                     if (descText.length < 3) {
@@ -95,29 +178,17 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
                       error = null;
                     });
                     try {
-                      final payload = <String, dynamic>{
-                        'title': titleText,
-                        'description': descText,
-                        'category': category,
-                        'settlement_id': settlementId,
-                      };
-                      final priceText = price.text.trim().replaceAll(',', '.');
-                      if (priceText.isNotEmpty) {
-                        final parsed = double.tryParse(priceText);
-                        if (parsed == null) {
-                          setState(() {
-                            busy = false;
-                            error = 'Некорректная цена';
-                          });
-                          return;
-                        }
-                        payload['price'] = parsed;
-                      }
-                      final phoneText = phone.text.trim();
-                      if (phoneText.isNotEmpty) {
-                        payload['contact_phone'] = phoneText;
-                      }
-                      await context.read<AppState>().createListing(payload);
+                      await context.read<AppState>().createListing(
+                        {
+                          'title': titleText,
+                          'description': descText,
+                          'category': category,
+                          'settlement_id': settlementId,
+                          'price': price.text.trim().isEmpty ? null : double.tryParse(price.text.trim().replaceAll(',', '.')),
+                          'contact_phone': phone.text.trim().isEmpty ? null : phone.text.trim(),
+                        },
+                        imagePaths: photos.map((e) => e.path).toList(),
+                      );
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
                           const SnackBar(content: Text('Отправлено на модерацию')),
@@ -130,7 +201,7 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
                       if (mounted) setState(() => busy = false);
                     }
                   },
-            child: Text(busy ? 'Отправка…' : 'Отправить на модерацию'),
+            child: Text(busy ? 'Публикация…' : 'Отправить на модерацию'),
           ),
         ],
       ),

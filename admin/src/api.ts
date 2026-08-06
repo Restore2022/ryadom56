@@ -1,4 +1,11 @@
 const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api';
+const MEDIA_BASE = API_URL.replace(/\/api\/?$/, '');
+
+export function mediaUrl(path?: string | null) {
+  if (!path) return '';
+  if (path.startsWith('http://') || path.startsWith('https://')) return path;
+  return `${MEDIA_BASE}${path.startsWith('/') ? path : `/${path}`}`;
+}
 
 function getToken() {
   return localStorage.getItem('ryadom56_token');
@@ -59,6 +66,9 @@ export type Listing = {
   settlement_name?: string | null;
   author_name?: string | null;
   moderation_note?: string | null;
+  close_reason?: string | null;
+  close_note?: string | null;
+  images?: { id: number; url: string; sort_order: number }[];
   created_at: string;
 };
 

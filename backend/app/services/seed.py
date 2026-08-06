@@ -19,11 +19,18 @@ USER_COLUMNS = {
     "last_seen_at": "DATETIME",
 }
 
+LISTING_COLUMNS = {
+    "close_reason": "VARCHAR(40)",
+    "close_note": "TEXT",
+}
+
 
 def init_db() -> None:
     Path("data").mkdir(exist_ok=True)
+    Path("data/uploads").mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)
     _migrate_user_columns()
+    _migrate_listing_columns()
 
 
 def _migrate_user_columns() -> None:
@@ -35,6 +42,17 @@ def _migrate_user_columns() -> None:
         for name, sql_type in USER_COLUMNS.items():
             if name not in existing:
                 conn.execute(text(f"ALTER TABLE users ADD COLUMN {name} {sql_type}"))
+
+
+def _migrate_listing_columns() -> None:
+    inspector = inspect(engine)
+    if "listings" not in inspector.get_table_names():
+        return
+    existing = {col["name"] for col in inspector.get_columns("listings")}
+    with engine.begin() as conn:
+        for name, sql_type in LISTING_COLUMNS.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE listings ADD COLUMN {name} {sql_type}"))
 
 
 def seed_db(session: Session) -> None:

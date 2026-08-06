@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Navigate, NavLink, Route, Routes, useNavigate } from 'react-router-dom';
-import { api, setToken } from './api';
+import { api, mediaUrl, setToken } from './api';
 import type { DirectoryItem, Listing, Settlement, Stats, User } from './api';
 import './App.css';
 
@@ -42,7 +42,14 @@ const STATUS_LABEL: Record<string, string> = {
   pending: 'На проверке',
   approved: 'Опубликовано',
   rejected: 'Отклонено',
-  archived: 'В архиве',
+  archived: 'Снято',
+};
+
+const CLOSE_REASON_LABEL: Record<string, string> = {
+  sold: 'Продали / отдали',
+  not_relevant: 'Неактуально',
+  busy: 'Пока занят',
+  other: 'Другое',
 };
 
 function useTheme() {
@@ -358,12 +365,28 @@ function ModerationPage() {
             </div>
             <h2>{selected.title}</h2>
             {selected.price != null && <div className="price">{selected.price.toLocaleString('ru-RU')} ₽</div>}
+            {!!selected.images?.length && (
+              <div className="photo-row">
+                {selected.images.map((img) => (
+                  <a key={img.id} href={mediaUrl(img.url)} target="_blank" rel="noreferrer">
+                    <img src={mediaUrl(img.url)} alt="" />
+                  </a>
+                ))}
+              </div>
+            )}
             <p className="row-body" style={{ marginTop: 14, whiteSpace: 'pre-wrap' }}>
               {selected.description}
             </p>
             <p className="muted" style={{ marginTop: 14 }}>
               Автор: {selected.author_name || '—'}
             </p>
+            {selected.close_reason && (
+              <p className="muted">
+                Снято: {CLOSE_REASON_LABEL[selected.close_reason] || selected.close_reason}
+                {selected.close_note ? ` — ${selected.close_note}` : ''}
+              </p>
+            )}
+            {selected.moderation_note && <p className="muted">Заметка: {selected.moderation_note}</p>}
             <div className="modal-actions">
               <button className="btn" disabled={busyId === selected.id} onClick={() => moderate(selected.id, 'approved')}>
                 Одобрить
@@ -746,6 +769,9 @@ function UsersPage() {
           <h1>Пользователи</h1>
           <p>Редактирование профиля, роли, устройство и IP</p>
         </div>
+        <button className="btn secondary" type="button" onClick={() => load().catch(console.error)}>
+          Обновить список
+        </button>
       </div>
 
       <div className="toolbar">
@@ -765,13 +791,29 @@ function UsersPage() {
                 <span className="chip neutral">{u.email}</span>
                 <span className="chip">{ROLE_LABELS[u.role]}</span>
                 {!u.is_active && <span className="chip danger">Заблокирован</span>}
-                {u.last_ip && <span className="chip neutral">IP {u.last_ip}</span>}
               </div>
-              <p className="row-body muted">
-                {[u.device_brand, u.device_model].filter(Boolean).join(' ') || 'Устройство не передано'}
-                {u.device_os ? ` · ${u.device_os}` : ''}
-                {u.last_seen_at ? ` · был(а) ${formatDate(u.last_seen_at)}` : ''}
-              </p>
+              <div className="device-grid">
+                <div>
+                  <span className="device-label">IP</span>
+                  <strong>{u.last_ip || '—'}</strong>
+                </div>
+                <div>
+                  <span className="device-label">Устройство</span>
+                  <strong>{[u.device_brand, u.device_model].filter(Boolean).join(' ') || '—'}</strong>
+                </div>
+                <div>
+                  <span className="device-label">ОС</span>
+                  <strong>{u.device_os || '—'}</strong>
+                </div>
+                <div>
+                  <span className="device-label">Приложение</span>
+                  <strong>{u.app_version || '—'}</strong>
+                </div>
+                <div>
+                  <span className="device-label">Был(а)</span>
+                  <strong>{formatDate(u.last_seen_at)}</strong>
+                </div>
+              </div>
             </div>
             <div className="actions" onClick={(e) => e.stopPropagation()}>
               <button className="btn" type="button" onClick={() => openEdit(u)}>

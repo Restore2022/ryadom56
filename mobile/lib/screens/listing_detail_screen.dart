@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../state/app_state.dart';
 import 'home_shell.dart';
+import 'my_listings_screen.dart';
 
 class ListingDetailScreen extends StatefulWidget {
   const ListingDetailScreen({super.key, required this.listingId, this.preview});
@@ -20,6 +21,7 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
   Map<String, dynamic>? item;
   String? error;
   bool loading = true;
+  int photoIndex = 0;
 
   @override
   void initState() {
@@ -53,13 +55,82 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
     await launchUrl(uri);
   }
 
+  Future<void> _close() async {
+    String reason = 'sold';
+    final note = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            return AlertDialog(
+              title: const Text('Снять объявление'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButtonFormField<String>(
+                    value: reason,
+                    decoration: const InputDecoration(labelText: 'Причина', border: OutlineInputBorder()),
+                    items: closeReasons.entries
+                        .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value)))
+                        .toList(),
+                    onChanged: (v) => setLocal(() => reason = v ?? 'sold'),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: note,
+                    decoration: const InputDecoration(
+                      labelText: 'Комментарий (необязательно)',
+                      border: OutlineInputBorder(),
+                    ),
+                    maxLines: 2,
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+                FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Снять')),
+              ],
+            );
+          },
+        );
+      },
+    );
+    if (ok != true || !mounted) return;
+    try {
+      final updated = await context.read<AppState>().closeListing(
+            widget.listingId,
+            reason: reason,
+            note: note.text.trim().isEmpty ? null : note.text.trim(),
+          );
+      if (mounted) {
+        setState(() => item = updated);
+        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Объявление снято')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final state = context.watch<AppState>();
     final data = item;
+    final images = ((data?['images'] as List?) ?? []).cast<dynamic>();
+    final isOwner = data != null && state.user != null && data['author_id'] == state.user!['id'];
+    final canClose = isOwner && (data['status'] == 'approved' || data['status'] == 'pending');
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Объявление')),
+      appBar: AppBar(
+        title: const Text('Объявление'),
+        actions: [
+          if (canClose)
+            TextButton(onPressed: _close, child: const Text('Снять')),
+        ],
+      ),
       body: data == null && loading
           ? const Center(child: CircularProgressIndicator())
           : data == null
@@ -67,6 +138,39 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
               : ListView(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
                   children: [
+                    if (images.isNotEmpty) ...[
+                      ClipRRect(
+                        borderRadius: BorderRadius.circular(18),
+                        child: AspectRatio(
+                          aspectRatio: 4 / 3,
+                          child: PageView.builder(
+                            itemCount: images.length,
+                            onPageChanged: (i) => setState(() => photoIndex = i),
+                            itemBuilder: (_, i) {
+                              final url = state.mediaUrl((images[i] as Map)['url'] as String?);
+                              return Image.network(
+                                url,
+                                fit: BoxFit.cover,
+                                errorBuilder: (_, __, ___) => Container(
+                                  color: scheme.surfaceContainerHighest,
+                                  child: const Icon(Icons.broken_image_outlined, size: 48),
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                      if (images.length > 1) ...[
+                        const SizedBox(height: 8),
+                        Center(
+                          child: Text(
+                            '${photoIndex + 1} / ${images.length}',
+                            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                    ],
                     Container(
                       padding: const EdgeInsets.all(20),
                       decoration: BoxDecoration(
@@ -83,6 +187,7 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                             children: [
                               _Tag(categoryLabels[data['category']] ?? '${data['category']}'),
                               if (data['settlement_name'] != null) _Tag('${data['settlement_name']}', muted: true),
+                              if (isOwner) _Tag(statusLabels['${data['status']}'] ?? '${data['status']}', muted: true),
                             ],
                           ),
                           const SizedBox(height: 14),
@@ -117,6 +222,12 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                             label: 'Опубликовано',
                             value: _fmtDate(data['created_at']?.toString()),
                           ),
+                          if (data['close_reason'] != null)
+                            _InfoRow(
+                              icon: Icons.archive_outlined,
+                              label: 'Причина снятия',
+                              value: closeReasons['${data['close_reason']}'] ?? '${data['close_note'] ?? data['close_reason']}',
+                            ),
                         ],
                       ),
                     ),

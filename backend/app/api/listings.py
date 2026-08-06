@@ -1,16 +1,44 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from pathlib import Path
+import uuid
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, get_optional_user, require_roles
 from app.core.database import get_db
-from app.models import Listing, ListingCategory, ListingStatus, User, UserRole
-from app.schemas import ListingCreate, ListingModerationIn, ListingOut, ListingUpdate
+from app.models import Listing, ListingCategory, ListingImage, ListingStatus, User, UserRole
+from app.schemas import ListingCloseIn, ListingCreate, ListingImageOut, ListingModerationIn, ListingOut, ListingUpdate
 
 router = APIRouter(prefix="/listings", tags=["listings"])
 
+UPLOAD_ROOT = Path("data/uploads")
+MAX_IMAGES = 5
+MAX_IMAGE_BYTES = 6 * 1024 * 1024
+ALLOWED_TYPES = {
+    "image/jpeg": ".jpg",
+    "image/jpg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
+
+CLOSE_REASON_LABELS = {
+    "sold": "Продали / отдали",
+    "not_relevant": "Неактуально",
+    "busy": "Пока занят / нет времени",
+    "other": "Другое",
+}
+
+
+def image_url(path: str) -> str:
+    return f"/uploads/{path.replace(chr(92), '/')}"
+
 
 def to_out(item: Listing) -> ListingOut:
+    images = [
+        ListingImageOut(id=img.id, url=image_url(img.path), sort_order=img.sort_order)
+        for img in (item.images or [])
+    ]
     return ListingOut(
         id=item.id,
         author_id=item.author_id,
@@ -24,9 +52,24 @@ def to_out(item: Listing) -> ListingOut:
         contact_phone=item.contact_phone or (item.author.phone if item.author else None),
         status=item.status,
         moderation_note=item.moderation_note,
+        close_reason=item.close_reason,
+        close_note=item.close_note,
+        images=images,
         created_at=item.created_at,
         updated_at=item.updated_at,
     )
+
+
+def load_listing(db: Session, listing_id: int) -> Listing | None:
+    return db.execute(
+        select(Listing)
+        .options(
+            selectinload(Listing.author),
+            selectinload(Listing.settlement),
+            selectinload(Listing.images),
+        )
+        .where(Listing.id == listing_id)
+    ).scalar_one_or_none()
 
 
 @router.get("/admin/all", response_model=list[ListingOut])
@@ -35,7 +78,11 @@ def admin_list_listings(
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(UserRole.moderator, UserRole.admin)),
 ):
-    stmt = select(Listing).options(selectinload(Listing.author), selectinload(Listing.settlement))
+    stmt = select(Listing).options(
+        selectinload(Listing.author),
+        selectinload(Listing.settlement),
+        selectinload(Listing.images),
+    )
     if status_filter:
         stmt = stmt.where(Listing.status == status_filter)
     stmt = stmt.order_by(Listing.created_at.desc())
@@ -52,7 +99,11 @@ def list_listings(
     db: Session = Depends(get_db),
     user: User | None = Depends(get_optional_user),
 ):
-    stmt = select(Listing).options(selectinload(Listing.author), selectinload(Listing.settlement))
+    stmt = select(Listing).options(
+        selectinload(Listing.author),
+        selectinload(Listing.settlement),
+        selectinload(Listing.images),
+    )
     if mine:
         if not user:
             raise HTTPException(status_code=401, detail="Требуется авторизация")
@@ -83,11 +134,7 @@ def get_listing(
     db: Session = Depends(get_db),
     user: User | None = Depends(get_optional_user),
 ):
-    item = db.execute(
-        select(Listing)
-        .options(selectinload(Listing.author), selectinload(Listing.settlement))
-        .where(Listing.id == listing_id)
-    ).scalar_one_or_none()
+    item = load_listing(db, listing_id)
     if not item:
         raise HTTPException(status_code=404, detail="Объявление не найдено")
     if item.status != ListingStatus.approved:
@@ -114,11 +161,7 @@ def create_listing(
     )
     db.add(item)
     db.commit()
-    item = db.execute(
-        select(Listing)
-        .options(selectinload(Listing.author), selectinload(Listing.settlement))
-        .where(Listing.id == item.id)
-    ).scalar_one()
+    item = load_listing(db, item.id)
     return to_out(item)
 
 
@@ -129,11 +172,7 @@ def update_listing(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    item = db.execute(
-        select(Listing)
-        .options(selectinload(Listing.author), selectinload(Listing.settlement))
-        .where(Listing.id == listing_id)
-    ).scalar_one_or_none()
+    item = load_listing(db, listing_id)
     if not item:
         raise HTTPException(status_code=404, detail="Объявление не найдено")
     if item.author_id != user.id and user.role not in (UserRole.admin, UserRole.moderator):
@@ -142,8 +181,104 @@ def update_listing(
         setattr(item, key, value)
     if item.author_id == user.id and user.role == UserRole.user:
         item.status = ListingStatus.pending
+        item.close_reason = None
+        item.close_note = None
     db.commit()
-    db.refresh(item)
+    item = load_listing(db, listing_id)
+    return to_out(item)
+
+
+@router.post("/{listing_id}/close", response_model=ListingOut)
+def close_listing(
+    listing_id: int,
+    payload: ListingCloseIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    item = load_listing(db, listing_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Объявление не найдено")
+    if item.author_id != user.id and user.role not in (UserRole.admin, UserRole.moderator):
+        raise HTTPException(status_code=403, detail="Нет доступа")
+    item.status = ListingStatus.archived
+    item.close_reason = payload.reason
+    item.close_note = (payload.note or "").strip() or CLOSE_REASON_LABELS.get(payload.reason)
+    db.commit()
+    item = load_listing(db, listing_id)
+    return to_out(item)
+
+
+@router.post("/{listing_id}/images", response_model=ListingOut)
+async def upload_listing_images(
+    listing_id: int,
+    files: list[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    item = load_listing(db, listing_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Объявление не найдено")
+    if item.author_id != user.id and user.role not in (UserRole.admin, UserRole.moderator):
+        raise HTTPException(status_code=403, detail="Нет доступа")
+
+    current = len(item.images or [])
+    if current >= MAX_IMAGES:
+        raise HTTPException(status_code=400, detail=f"Максимум {MAX_IMAGES} фото")
+    if not files:
+        raise HTTPException(status_code=400, detail="Нет файлов")
+
+    folder = UPLOAD_ROOT / "listings" / str(listing_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    next_order = current
+
+    for upload in files:
+        if current + 1 > MAX_IMAGES:
+            break
+        content_type = (upload.content_type or "").lower()
+        ext = ALLOWED_TYPES.get(content_type)
+        if not ext:
+            raise HTTPException(status_code=400, detail="Допустимы JPG, PNG, WEBP")
+        data = await upload.read()
+        if not data:
+            continue
+        if len(data) > MAX_IMAGE_BYTES:
+            raise HTTPException(status_code=400, detail="Фото больше 6 МБ")
+        filename = f"{uuid.uuid4().hex}{ext}"
+        rel = f"listings/{listing_id}/{filename}"
+        (UPLOAD_ROOT / rel).write_bytes(data)
+        db.add(ListingImage(listing_id=listing_id, path=rel, sort_order=next_order))
+        next_order += 1
+        current += 1
+
+    if item.author_id == user.id and user.role == UserRole.user and item.status == ListingStatus.approved:
+        item.status = ListingStatus.pending
+
+    db.commit()
+    item = load_listing(db, listing_id)
+    return to_out(item)
+
+
+@router.delete("/{listing_id}/images/{image_id}", response_model=ListingOut)
+def delete_listing_image(
+    listing_id: int,
+    image_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    item = load_listing(db, listing_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Объявление не найдено")
+    if item.author_id != user.id and user.role not in (UserRole.admin, UserRole.moderator):
+        raise HTTPException(status_code=403, detail="Нет доступа")
+    image = next((img for img in item.images if img.id == image_id), None)
+    if not image:
+        raise HTTPException(status_code=404, detail="Фото не найдено")
+    file_path = UPLOAD_ROOT / image.path
+    if file_path.exists():
+        file_path.unlink()
+    db.delete(image)
+    db.commit()
+    item = load_listing(db, listing_id)
     return to_out(item)
 
 
@@ -156,15 +291,11 @@ def moderate_listing(
 ):
     if payload.status not in (ListingStatus.approved, ListingStatus.rejected, ListingStatus.archived):
         raise HTTPException(status_code=400, detail="Недопустимый статус модерации")
-    item = db.execute(
-        select(Listing)
-        .options(selectinload(Listing.author), selectinload(Listing.settlement))
-        .where(Listing.id == listing_id)
-    ).scalar_one_or_none()
+    item = load_listing(db, listing_id)
     if not item:
         raise HTTPException(status_code=404, detail="Объявление не найдено")
     item.status = payload.status
     item.moderation_note = payload.moderation_note
     db.commit()
-    db.refresh(item)
+    item = load_listing(db, listing_id)
     return to_out(item)

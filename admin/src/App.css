@@ -396,6 +396,47 @@ main.content {
   font-size: 13px;
 }
 
+.device-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px 16px;
+  margin-top: 12px;
+  padding: 12px;
+  background: var(--surface-2);
+  border-radius: 10px;
+  border: 1px solid var(--line);
+}
+
+.device-grid .device-label {
+  display: block;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--ink-soft);
+  margin-bottom: 2px;
+}
+
+.device-grid strong {
+  font-size: 13px;
+  font-weight: 600;
+  word-break: break-word;
+}
+
+.photo-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.photo-row img {
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+}
+
 .empty {
   background: var(--surface);
   border: 1px dashed var(--line-strong);
