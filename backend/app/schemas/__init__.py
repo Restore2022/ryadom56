@@ -146,11 +146,61 @@ class ListingOut(BaseModel):
     close_reason: str | None = None
     close_note: str | None = None
     images: list[ListingImageOut] = []
+    is_favorited: bool = False
     created_at: datetime
     updated_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class ProfileUpdateIn(BaseModel):
+    full_name: str | None = Field(default=None, min_length=2, max_length=120)
+    phone: str | None = Field(default=None, max_length=32)
+    settlement_id: int | None = None
+    password: str | None = Field(default=None, min_length=6, max_length=128)
+    current_password: str | None = None
+
+
+class ListingReportIn(BaseModel):
+    reason: str = Field(pattern="^(spam|fraud|prohibited|other)$")
+    note: str | None = Field(default=None, max_length=500)
+
+
+class ListingReportOut(BaseModel):
+    id: int
+    listing_id: int
+    listing_title: str | None = None
+    reporter_id: int
+    reporter_name: str | None = None
+    reason: str
+    note: str | None
+    status: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ReportStatusUpdate(BaseModel):
+    status: str = Field(pattern="^(open|reviewed|dismissed)$")
+
+
+class BulkModerateIn(BaseModel):
+    ids: list[int] = Field(min_length=1, max_length=100)
+    status: ListingStatus
+    moderation_note: str | None = None
+
+
+class AuditLogOut(BaseModel):
+    id: int
+    actor_id: int
+    actor_name: str | None = None
+    action: str
+    entity_type: str
+    entity_id: int | None
+    details: str | None
+    created_at: datetime
 
 
 class DirectoryCreate(BaseModel):

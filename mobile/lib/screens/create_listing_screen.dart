@@ -7,7 +7,12 @@ import 'package:provider/provider.dart';
 import '../state/app_state.dart';
 
 class CreateListingScreen extends StatefulWidget {
-  const CreateListingScreen({super.key});
+  const CreateListingScreen({super.key, this.listingId, this.initial});
+
+  final int? listingId;
+  final Map<String, dynamic>? initial;
+
+  bool get isEdit => listingId != null;
 
   @override
   State<CreateListingScreen> createState() => _CreateListingScreenState();
@@ -29,14 +34,34 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
   void initState() {
     super.initState();
     final user = context.read<AppState>().user;
-    settlementId = user?['settlement_id'] as int?;
-    phone.text = (user?['phone'] as String?) ?? '';
+    final initial = widget.initial;
+    if (initial != null) {
+      title.text = (initial['title'] as String?) ?? '';
+      description.text = (initial['description'] as String?) ?? '';
+      category = (initial['category'] as String?) ?? 'goods';
+      settlementId = initial['settlement_id'] as int? ?? user?['settlement_id'] as int?;
+      final p = initial['price'];
+      if (p != null) price.text = '$p';
+      phone.text = (initial['contact_phone'] as String?) ?? (user?['phone'] as String?) ?? '';
+    } else {
+      settlementId = user?['settlement_id'] as int?;
+      phone.text = (user?['phone'] as String?) ?? '';
+    }
+  }
+
+  @override
+  void dispose() {
+    title.dispose();
+    description.dispose();
+    price.dispose();
+    phone.dispose();
+    super.dispose();
   }
 
   Future<void> _pickPhotos() async {
     final remaining = 5 - photos.length;
     if (remaining <= 0) return;
-    final picked = await picker.pickMultiImage(imageQuality: 75, maxWidth: 1600);
+    final picked = await picker.pickMultiImage(imageQuality: 40, maxWidth: 1280);
     if (picked.isEmpty) return;
     setState(() {
       photos.addAll(picked.take(remaining));
@@ -47,11 +72,14 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
   Widget build(BuildContext context) {
     final settlements = context.watch<AppState>().settlements;
     return Scaffold(
-      appBar: AppBar(title: const Text('Новое объявление')),
+      appBar: AppBar(title: Text(widget.isEdit ? 'Редактировать' : 'Новое объявление')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
-          Text('Фото (до 5)', style: Theme.of(context).textTheme.titleSmall),
+          Text(
+            widget.isEdit ? 'Добавить фото (до 5 новых)' : 'Фото (до 5)',
+            style: Theme.of(context).textTheme.titleSmall,
+          ),
           const SizedBox(height: 8),
           SizedBox(
             height: 96,
@@ -150,6 +178,13 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
             controller: phone,
             decoration: const InputDecoration(labelText: 'Телефон для связи', border: OutlineInputBorder()),
           ),
+          if (widget.isEdit) ...[
+            const SizedBox(height: 8),
+            Text(
+              'После сохранения объявление снова уйдёт на модерацию.',
+              style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 13),
+            ),
+          ],
           if (error != null) ...[
             const SizedBox(height: 8),
             Text(error!, style: const TextStyle(color: Colors.red)),
@@ -177,31 +212,49 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
                       busy = true;
                       error = null;
                     });
+                    final body = {
+                      'title': titleText,
+                      'description': descText,
+                      'category': category,
+                      'settlement_id': settlementId,
+                      'price': price.text.trim().isEmpty ? null : double.tryParse(price.text.trim().replaceAll(',', '.')),
+                      'contact_phone': phone.text.trim().isEmpty ? null : phone.text.trim(),
+                    };
                     try {
-                      await context.read<AppState>().createListing(
-                        {
-                          'title': titleText,
-                          'description': descText,
-                          'category': category,
-                          'settlement_id': settlementId,
-                          'price': price.text.trim().isEmpty ? null : double.tryParse(price.text.trim().replaceAll(',', '.')),
-                          'contact_phone': phone.text.trim().isEmpty ? null : phone.text.trim(),
-                        },
-                        imagePaths: photos.map((e) => e.path).toList(),
-                      );
+                      final state = context.read<AppState>();
+                      if (widget.isEdit) {
+                        await state.updateListing(
+                          widget.listingId!,
+                          body,
+                          imagePaths: photos.map((e) => e.path).toList(),
+                        );
+                      } else {
+                        await state.createListing(
+                          body,
+                          imagePaths: photos.map((e) => e.path).toList(),
+                        );
+                      }
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(
-                          const SnackBar(content: Text('Отправлено на модерацию')),
+                          SnackBar(
+                            content: Text(
+                              widget.isEdit ? 'Изменения отправлены на модерацию' : 'Отправлено на модерацию',
+                            ),
+                          ),
                         );
-                        Navigator.pop(context);
+                        Navigator.pop(context, true);
                       }
                     } catch (e) {
-                      setState(() => error = e.toString());
+                      setState(() => error = AppState.userFriendlyError(e));
                     } finally {
                       if (mounted) setState(() => busy = false);
                     }
                   },
-            child: Text(busy ? 'Публикация…' : 'Отправить на модерацию'),
+            child: Text(
+              busy
+                  ? (widget.isEdit ? 'Сохранение…' : 'Публикация…')
+                  : (widget.isEdit ? 'Сохранить' : 'Отправить на модерацию'),
+            ),
           ),
         ],
       ),

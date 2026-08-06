@@ -4,8 +4,11 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../state/app_state.dart';
+import 'about_screen.dart';
 import 'create_listing_screen.dart';
 import 'directory_detail_screen.dart';
+import 'edit_profile_screen.dart';
+import 'favorites_screen.dart';
 import 'listing_detail_screen.dart';
 import 'my_listings_screen.dart';
 
@@ -168,6 +171,33 @@ class _ListingsTabState extends State<_ListingsTab> {
 
     return Column(
       children: [
+        if (state.hasConnectionIssue)
+          Material(
+            color: Theme.of(context).colorScheme.errorContainer,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
+              child: Row(
+                children: [
+                  Icon(Icons.wifi_off, color: Theme.of(context).colorScheme.onErrorContainer),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      AppState.offlineMessage,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onErrorContainer,
+                        fontWeight: FontWeight.w600,
+                        fontSize: 13,
+                      ),
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => state.loadListings(),
+                    child: const Text('Ещё раз'),
+                  ),
+                ],
+              ),
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
           child: TextField(
@@ -352,6 +382,13 @@ class _ListingCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final state = context.watch<AppState>();
+    final id = item['id'] as int;
+    final isOwner = state.user != null && item['author_id'] == state.user!['id'];
+    final favorited = state.isFavorited(id, item: item);
+    final images = (item['images'] as List?) ?? [];
+    final thumb = images.isNotEmpty ? (images.first as Map)['url'] as String? : null;
+
     return Material(
       color: Theme.of(context).cardTheme.color,
       borderRadius: BorderRadius.circular(18),
@@ -360,7 +397,7 @@ class _ListingCard extends StatelessWidget {
         onTap: () {
           Navigator.push(
             context,
-            fastRoute(ListingDetailScreen(listingId: item['id'] as int, preview: item)),
+            fastRoute(ListingDetailScreen(listingId: id, preview: item)),
           );
         },
         child: Container(
@@ -372,34 +409,27 @@ class _ListingCard extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Builder(
-                builder: (context) {
-                  final images = (item['images'] as List?) ?? [];
-                  final thumb = images.isNotEmpty ? (images.first as Map)['url'] as String? : null;
-                  final state = context.read<AppState>();
-                  return ClipRRect(
-                    borderRadius: BorderRadius.circular(12),
-                    child: thumb == null
-                        ? Container(
-                            width: 76,
-                            height: 76,
-                            color: scheme.surfaceContainerHighest,
-                            child: Icon(Icons.image_outlined, color: scheme.onSurfaceVariant),
-                          )
-                        : Image.network(
-                            state.mediaUrl(thumb),
-                            width: 76,
-                            height: 76,
-                            fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => Container(
-                              width: 76,
-                              height: 76,
-                              color: scheme.surfaceContainerHighest,
-                              child: const Icon(Icons.broken_image_outlined),
-                            ),
-                          ),
-                  );
-                },
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: thumb == null
+                    ? Container(
+                        width: 76,
+                        height: 76,
+                        color: scheme.surfaceContainerHighest,
+                        child: Icon(Icons.image_outlined, color: scheme.onSurfaceVariant),
+                      )
+                    : Image.network(
+                        state.mediaUrl(thumb),
+                        width: 76,
+                        height: 76,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) => Container(
+                          width: 76,
+                          height: 76,
+                          color: scheme.surfaceContainerHighest,
+                          child: const Icon(Icons.broken_image_outlined),
+                        ),
+                      ),
               ),
               const SizedBox(width: 12),
               Expanded(
@@ -436,6 +466,26 @@ class _ListingCard extends StatelessWidget {
                   ],
                 ),
               ),
+              if (!isOwner)
+                IconButton(
+                  tooltip: favorited ? 'Убрать из избранного' : 'В избранное',
+                  visualDensity: VisualDensity.compact,
+                  onPressed: () async {
+                    try {
+                      await state.toggleFavorite(id, currentlyFavorited: favorited);
+                    } catch (e) {
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text(AppState.userFriendlyError(e))),
+                        );
+                      }
+                    }
+                  },
+                  icon: Icon(
+                    favorited ? Icons.favorite : Icons.favorite_border,
+                    color: favorited ? scheme.error : scheme.onSurfaceVariant,
+                  ),
+                ),
             ],
           ),
         ),
@@ -754,10 +804,34 @@ class _ProfileTab extends StatelessWidget {
         ListTile(
           leading: const Icon(Icons.inventory_2_outlined),
           title: const Text('Мои объявления'),
-          subtitle: const Text('Статус, снять с публикации'),
+          subtitle: const Text('Статус, изменить, снять'),
           trailing: const Icon(Icons.chevron_right),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           onTap: () => Navigator.push(context, fastRoute(const MyListingsScreen())),
+        ),
+        ListTile(
+          leading: const Icon(Icons.favorite_outline),
+          title: const Text('Избранное'),
+          subtitle: const Text('Сохранённые объявления'),
+          trailing: const Icon(Icons.chevron_right),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          onTap: () => Navigator.push(context, fastRoute(const FavoritesScreen())),
+        ),
+        ListTile(
+          leading: const Icon(Icons.manage_accounts_outlined),
+          title: const Text('Редактировать профиль'),
+          subtitle: const Text('Имя, телефон, пароль'),
+          trailing: const Icon(Icons.chevron_right),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          onTap: () => Navigator.push(context, fastRoute(const EditProfileScreen())),
+        ),
+        ListTile(
+          leading: const Icon(Icons.info_outline),
+          title: const Text('О проекте'),
+          subtitle: const Text('Рядом56 и поддержка'),
+          trailing: const Icon(Icons.chevron_right),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          onTap: () => Navigator.push(context, fastRoute(const AboutScreen())),
         ),
         const SizedBox(height: 8),
         SwitchListTile(

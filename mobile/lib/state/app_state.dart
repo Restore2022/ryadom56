@@ -17,7 +17,10 @@ class AppState extends ChangeNotifier {
   List<dynamic> settlements = [];
   List<dynamic> listings = [];
   List<dynamic> directory = [];
+  List<dynamic> favorites = [];
+  final Set<int> favoriteIds = {};
   String? error;
+  bool listingsOffline = false;
 
   String? filterCategory;
   int? filterSettlementId;
@@ -30,6 +33,65 @@ class AppState extends ChangeNotifier {
   String directoryQuery = '';
   bool directoryLoading = false;
 
+  static const offlineMessage =
+      'Нет связи с сервером. Проверьте Wi‑Fi и что API запущен.';
+
+  static String userFriendlyError(Object e) {
+    final raw = e.toString();
+    final lower = raw.toLowerCase();
+    if (lower.contains('socketexception') ||
+        lower.contains('failed host lookup') ||
+        lower.contains('connection refused') ||
+        lower.contains('connection reset') ||
+        lower.contains('network is unreachable') ||
+        lower.contains('timed out') ||
+        lower.contains('timeout') ||
+        lower.contains('clientexception') ||
+        lower.contains('handshakeexception') ||
+        lower.contains('connection errored') ||
+        lower.contains('xmlhttprequest error')) {
+      return offlineMessage;
+    }
+    if (raw.startsWith('Exception: ')) {
+      return raw.substring('Exception: '.length);
+    }
+    return raw;
+  }
+
+  bool get hasConnectionIssue =>
+      listingsOffline || (error != null && error == offlineMessage);
+
+  void _syncFavoriteIdsFromListings() {
+    for (final item in listings) {
+      if (item is Map && item['is_favorited'] == true && item['id'] is int) {
+        favoriteIds.add(item['id'] as int);
+      }
+    }
+  }
+
+  void _applyFavoriteFlag(int id, bool favorited) {
+    if (favorited) {
+      favoriteIds.add(id);
+    } else {
+      favoriteIds.remove(id);
+    }
+    void patch(List<dynamic> list) {
+      for (var i = 0; i < list.length; i++) {
+        final item = list[i];
+        if (item is Map && item['id'] == id) {
+          list[i] = {...Map<String, dynamic>.from(item), 'is_favorited': favorited};
+        }
+      }
+    }
+
+    patch(listings);
+    if (!favorited) {
+      favorites.removeWhere((e) => e is Map && e['id'] == id);
+    } else {
+      patch(favorites);
+    }
+  }
+
   Future<void> bootstrap() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -41,8 +103,9 @@ class AppState extends ChangeNotifier {
         await reportDeviceInfo();
       }
       await Future.wait([loadListings(), loadDirectory()]);
+      if (!listingsOffline) error = null;
     } catch (e) {
-      error = e.toString();
+      error = userFriendlyError(e);
     } finally {
       booting = false;
       notifyListeners();
@@ -126,7 +189,13 @@ class AppState extends ChangeNotifier {
       if (filterSettlementId != null) params['settlement_id'] = '$filterSettlementId';
       if (filterQuery.trim().isNotEmpty) params['q'] = filterQuery.trim();
       final qs = params.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&');
-      listings = await api.request('/listings?$qs') as List<dynamic>;
+      listings = await api.request('/listings?$qs', auth: true) as List<dynamic>;
+      _syncFavoriteIdsFromListings();
+      listingsOffline = false;
+      if (error == offlineMessage) error = null;
+    } catch (e) {
+      listingsOffline = true;
+      error = userFriendlyError(e);
     } finally {
       listingsLoading = false;
       notifyListeners();
@@ -213,6 +282,98 @@ class AppState extends ChangeNotifier {
     return await api.request('/listings?mine=true&sort=newest', auth: true) as List<dynamic>;
   }
 
+  Future<List<dynamic>> loadFavorites() async {
+    favorites = await api.request('/listings/favorites', auth: true) as List<dynamic>;
+    favoriteIds
+      ..clear()
+      ..addAll(
+        favorites.whereType<Map>().where((e) => e['id'] is int).map((e) => e['id'] as int),
+      );
+    _syncFavoriteIdsFromListings();
+    notifyListeners();
+    return favorites;
+  }
+
+  Future<Map<String, dynamic>> toggleFavorite(int id, {bool? currentlyFavorited}) async {
+    final was = currentlyFavorited ?? favoriteIds.contains(id) || _isFavoritedInLists(id);
+    final updated = was
+        ? await api.request('/listings/$id/favorite', method: 'DELETE', auth: true) as Map<String, dynamic>
+        : await api.request('/listings/$id/favorite', method: 'POST', auth: true) as Map<String, dynamic>;
+    final favorited = updated['is_favorited'] == true;
+    _applyFavoriteFlag(id, favorited);
+    if (favorited && !favorites.any((e) => e is Map && e['id'] == id)) {
+      favorites.insert(0, updated);
+    }
+    notifyListeners();
+    return updated;
+  }
+
+  bool _isFavoritedInLists(int id) {
+    for (final item in listings) {
+      if (item is Map && item['id'] == id) return item['is_favorited'] == true;
+    }
+    return false;
+  }
+
+  bool isFavorited(int id, {Map<String, dynamic>? item}) {
+    if (favoriteIds.contains(id)) return true;
+    if (item != null && item['is_favorited'] == true) return true;
+    return _isFavoritedInLists(id);
+  }
+
+  Future<void> reportListing(int id, {required String reason, String? note}) async {
+    await api.request(
+      '/listings/$id/report',
+      method: 'POST',
+      auth: true,
+      body: {'reason': reason, 'note': note},
+    );
+  }
+
+  Future<Map<String, dynamic>> republishListing(int id) async {
+    final updated = await api.request('/listings/$id/republish', method: 'POST', auth: true) as Map<String, dynamic>;
+    await loadListings();
+    notifyListeners();
+    return updated;
+  }
+
+  Future<Map<String, dynamic>> updateListing(
+    int id,
+    Map<String, dynamic> body, {
+    List<String> imagePaths = const [],
+  }) async {
+    var updated = await api.request('/listings/$id', method: 'PATCH', auth: true, body: body) as Map<String, dynamic>;
+    if (imagePaths.isNotEmpty) {
+      updated = await api.uploadListingImages(id, imagePaths);
+    }
+    await loadListings();
+    notifyListeners();
+    return updated;
+  }
+
+  Future<Map<String, dynamic>> updateProfile({
+    String? fullName,
+    String? phone,
+    int? settlementId,
+    String? password,
+    String? currentPassword,
+  }) async {
+    user = await api.request(
+      '/auth/me',
+      method: 'PATCH',
+      auth: true,
+      body: {
+        'full_name': fullName,
+        'phone': phone,
+        'settlement_id': settlementId,
+        'password': password,
+        'current_password': currentPassword,
+      },
+    ) as Map<String, dynamic>;
+    notifyListeners();
+    return user!;
+  }
+
   Future<Map<String, dynamic>> createListing(
     Map<String, dynamic> body, {
     List<String> imagePaths = const [],
@@ -268,6 +429,8 @@ class AppState extends ChangeNotifier {
   Future<void> logout() async {
     await api.setToken(null);
     user = null;
+    favorites = [];
+    favoriteIds.clear();
     notifyListeners();
   }
 }

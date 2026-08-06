@@ -4,8 +4,16 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../state/app_state.dart';
+import 'create_listing_screen.dart';
 import 'home_shell.dart';
 import 'my_listings_screen.dart';
+
+const reportReasons = {
+  'spam': 'Спам',
+  'fraud': 'Мошенничество',
+  'prohibited': 'Запрещённый товар',
+  'other': 'Другое',
+};
 
 class ListingDetailScreen extends StatefulWidget {
   const ListingDetailScreen({super.key, required this.listingId, this.preview});
@@ -22,6 +30,7 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
   String? error;
   bool loading = true;
   int photoIndex = 0;
+  bool favBusy = false;
 
   @override
   void initState() {
@@ -37,12 +46,13 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
         setState(() {
           item = data;
           loading = false;
+          error = null;
         });
       }
     } catch (e) {
       if (mounted) {
         setState(() {
-          error = e.toString();
+          error = AppState.userFriendlyError(e);
           loading = false;
           item ??= widget.preview;
         });
@@ -53,6 +63,97 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
   Future<void> _call(String phone) async {
     final uri = Uri(scheme: 'tel', path: phone.replaceAll(' ', ''));
     await launchUrl(uri);
+  }
+
+  Future<void> _toggleFavorite() async {
+    if (favBusy || item == null) return;
+    setState(() => favBusy = true);
+    try {
+      final updated = await context.read<AppState>().toggleFavorite(
+            widget.listingId,
+            currentlyFavorited: item!['is_favorited'] == true,
+          );
+      if (mounted) setState(() => item = updated);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(AppState.userFriendlyError(e))),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => favBusy = false);
+    }
+  }
+
+  Future<void> _report() async {
+    String reason = 'spam';
+    final note = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            return AlertDialog(
+              title: const Text('Пожаловаться'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButtonFormField<String>(
+                    value: reason,
+                    decoration: const InputDecoration(labelText: 'Причина', border: OutlineInputBorder()),
+                    items: reportReasons.entries
+                        .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value)))
+                        .toList(),
+                    onChanged: (v) => setLocal(() => reason = v ?? 'spam'),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: note,
+                    decoration: const InputDecoration(
+                      labelText: 'Комментарий (необязательно)',
+                      border: OutlineInputBorder(),
+                    ),
+                    maxLines: 2,
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+                FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Отправить')),
+              ],
+            );
+          },
+        );
+      },
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await context.read<AppState>().reportListing(
+            widget.listingId,
+            reason: reason,
+            note: note.text.trim().isEmpty ? null : note.text.trim(),
+          );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Жалоба отправлена')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(AppState.userFriendlyError(e))),
+        );
+      }
+    }
+  }
+
+  Future<void> _edit() async {
+    if (item == null) return;
+    final ok = await Navigator.push<bool>(
+      context,
+      fastRoute(CreateListingScreen(listingId: widget.listingId, initial: item)),
+    );
+    if (ok == true) await _load();
   }
 
   Future<void> _close() async {
@@ -109,7 +210,7 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AppState.userFriendlyError(e))));
       }
     }
   }
@@ -122,11 +223,30 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
     final images = ((data?['images'] as List?) ?? []).cast<dynamic>();
     final isOwner = data != null && state.user != null && data['author_id'] == state.user!['id'];
     final canClose = isOwner && (data['status'] == 'approved' || data['status'] == 'pending');
+    final favorited = data != null && state.isFavorited(widget.listingId, item: data);
 
     return Scaffold(
       appBar: AppBar(
         title: const Text('Объявление'),
         actions: [
+          if (data != null && !isOwner)
+            IconButton(
+              tooltip: favorited ? 'Убрать из избранного' : 'В избранное',
+              onPressed: favBusy ? null : _toggleFavorite,
+              icon: Icon(favorited ? Icons.favorite : Icons.favorite_border, color: favorited ? scheme.error : null),
+            ),
+          if (isOwner)
+            IconButton(
+              tooltip: 'Изменить',
+              onPressed: _edit,
+              icon: const Icon(Icons.edit_outlined),
+            ),
+          if (!isOwner && data != null)
+            IconButton(
+              tooltip: 'Пожаловаться',
+              onPressed: _report,
+              icon: const Icon(Icons.flag_outlined),
+            ),
           if (canClose)
             TextButton(onPressed: _close, child: const Text('Снять')),
         ],
@@ -237,6 +357,22 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                         onPressed: () => _call(data['contact_phone'] as String),
                         icon: const Icon(Icons.phone),
                         label: const Text('Позвонить'),
+                      ),
+                    ],
+                    if (!isOwner) ...[
+                      const SizedBox(height: 12),
+                      OutlinedButton.icon(
+                        onPressed: _report,
+                        icon: const Icon(Icons.flag_outlined),
+                        label: const Text('Пожаловаться'),
+                      ),
+                    ],
+                    if (isOwner) ...[
+                      const SizedBox(height: 12),
+                      OutlinedButton.icon(
+                        onPressed: _edit,
+                        icon: const Icon(Icons.edit_outlined),
+                        label: const Text('Редактировать'),
                       ),
                     ],
                     if (error != null) ...[

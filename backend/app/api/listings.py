@@ -2,13 +2,31 @@ from pathlib import Path
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, get_optional_user, require_roles
 from app.core.database import get_db
-from app.models import Listing, ListingCategory, ListingImage, ListingStatus, User, UserRole
-from app.schemas import ListingCloseIn, ListingCreate, ListingImageOut, ListingModerationIn, ListingOut, ListingUpdate
+from app.models import (
+    Favorite,
+    Listing,
+    ListingCategory,
+    ListingImage,
+    ListingReport,
+    ListingStatus,
+    User,
+    UserRole,
+)
+from app.schemas import (
+    ListingCloseIn,
+    ListingCreate,
+    ListingImageOut,
+    ListingModerationIn,
+    ListingOut,
+    ListingReportIn,
+    ListingUpdate,
+)
+from app.services.audit import log_action
 
 router = APIRouter(prefix="/listings", tags=["listings"])
 
@@ -34,7 +52,7 @@ def image_url(path: str) -> str:
     return f"/uploads/{path.replace(chr(92), '/')}"
 
 
-def to_out(item: Listing) -> ListingOut:
+def to_out(item: Listing, favorited_ids: set[int] | None = None) -> ListingOut:
     images = [
         ListingImageOut(id=img.id, url=image_url(img.path), sort_order=img.sort_order)
         for img in (item.images or [])
@@ -55,6 +73,7 @@ def to_out(item: Listing) -> ListingOut:
         close_reason=item.close_reason,
         close_note=item.close_note,
         images=images,
+        is_favorited=bool(favorited_ids and item.id in favorited_ids),
         created_at=item.created_at,
         updated_at=item.updated_at,
     )
@@ -72,9 +91,18 @@ def load_listing(db: Session, listing_id: int) -> Listing | None:
     ).scalar_one_or_none()
 
 
+def favorite_ids_for(db: Session, user: User | None) -> set[int]:
+    if not user:
+        return set()
+    rows = db.execute(select(Favorite.listing_id).where(Favorite.user_id == user.id)).scalars().all()
+    return set(rows)
+
+
 @router.get("/admin/all", response_model=list[ListingOut])
 def admin_list_listings(
     status_filter: ListingStatus | None = Query(default=None, alias="status"),
+    q: str | None = None,
+    closed_by_user: bool = False,
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(UserRole.moderator, UserRole.admin)),
 ):
@@ -85,8 +113,42 @@ def admin_list_listings(
     )
     if status_filter:
         stmt = stmt.where(Listing.status == status_filter)
+    if closed_by_user:
+        stmt = stmt.where(Listing.status == ListingStatus.archived, Listing.close_reason.is_not(None))
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        stmt = stmt.join(Listing.author).where(
+            or_(
+                Listing.title.ilike(like),
+                Listing.description.ilike(like),
+                User.full_name.ilike(like),
+                User.email.ilike(like),
+                User.phone.ilike(like),
+                Listing.contact_phone.ilike(like),
+            )
+        )
     stmt = stmt.order_by(Listing.created_at.desc())
-    return [to_out(r) for r in db.execute(stmt).scalars().all()]
+    return [to_out(r) for r in db.execute(stmt).scalars().unique().all()]
+
+
+@router.get("/favorites", response_model=list[ListingOut])
+def list_favorites(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    stmt = (
+        select(Listing)
+        .join(Favorite, Favorite.listing_id == Listing.id)
+        .where(Favorite.user_id == user.id)
+        .options(
+            selectinload(Listing.author),
+            selectinload(Listing.settlement),
+            selectinload(Listing.images),
+        )
+        .order_by(Favorite.created_at.desc())
+    )
+    fav_ids = favorite_ids_for(db, user)
+    return [to_out(r, fav_ids) for r in db.execute(stmt).scalars().unique().all()]
 
 
 @router.get("", response_model=list[ListingOut])
@@ -125,7 +187,8 @@ def list_listings(
         stmt = stmt.order_by(Listing.price.desc(), Listing.created_at.desc())
     else:
         stmt = stmt.order_by(Listing.created_at.desc())
-    return [to_out(r) for r in db.execute(stmt).scalars().all()]
+    fav_ids = favorite_ids_for(db, user)
+    return [to_out(r, fav_ids) for r in db.execute(stmt).scalars().all()]
 
 
 @router.get("/{listing_id}", response_model=ListingOut)
@@ -140,7 +203,7 @@ def get_listing(
     if item.status != ListingStatus.approved:
         if not user or (user.id != item.author_id and user.role not in (UserRole.admin, UserRole.moderator)):
             raise HTTPException(status_code=404, detail="Объявление не найдено")
-    return to_out(item)
+    return to_out(item, favorite_ids_for(db, user))
 
 
 @router.post("", response_model=ListingOut)
@@ -162,7 +225,7 @@ def create_listing(
     db.add(item)
     db.commit()
     item = load_listing(db, item.id)
-    return to_out(item)
+    return to_out(item, favorite_ids_for(db, user))
 
 
 @router.patch("/{listing_id}", response_model=ListingOut)
@@ -179,13 +242,13 @@ def update_listing(
         raise HTTPException(status_code=403, detail="Нет доступа")
     for key, value in payload.model_dump(exclude_unset=True).items():
         setattr(item, key, value)
-    if item.author_id == user.id and user.role == UserRole.user:
+    if item.author_id == user.id:
         item.status = ListingStatus.pending
         item.close_reason = None
         item.close_note = None
     db.commit()
     item = load_listing(db, listing_id)
-    return to_out(item)
+    return to_out(item, favorite_ids_for(db, user))
 
 
 @router.post("/{listing_id}/close", response_model=ListingOut)
@@ -205,7 +268,100 @@ def close_listing(
     item.close_note = (payload.note or "").strip() or CLOSE_REASON_LABELS.get(payload.reason)
     db.commit()
     item = load_listing(db, listing_id)
-    return to_out(item)
+    return to_out(item, favorite_ids_for(db, user))
+
+
+@router.post("/{listing_id}/republish", response_model=ListingOut)
+def republish_listing(
+    listing_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    item = load_listing(db, listing_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Объявление не найдено")
+    if item.author_id != user.id:
+        raise HTTPException(status_code=403, detail="Нет доступа")
+    if item.status not in (ListingStatus.archived, ListingStatus.rejected):
+        raise HTTPException(status_code=400, detail="Повторно опубликовать можно снятое или отклонённое")
+    item.status = ListingStatus.pending
+    item.close_reason = None
+    item.close_note = None
+    item.moderation_note = None
+    db.commit()
+    item = load_listing(db, listing_id)
+    return to_out(item, favorite_ids_for(db, user))
+
+
+@router.post("/{listing_id}/favorite", response_model=ListingOut)
+def add_favorite(
+    listing_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    item = load_listing(db, listing_id)
+    if not item or item.status != ListingStatus.approved:
+        raise HTTPException(status_code=404, detail="Объявление не найдено")
+    exists = db.execute(
+        select(Favorite).where(Favorite.user_id == user.id, Favorite.listing_id == listing_id)
+    ).scalar_one_or_none()
+    if not exists:
+        db.add(Favorite(user_id=user.id, listing_id=listing_id))
+        db.commit()
+    item = load_listing(db, listing_id)
+    return to_out(item, favorite_ids_for(db, user))
+
+
+@router.delete("/{listing_id}/favorite", response_model=ListingOut)
+def remove_favorite(
+    listing_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    fav = db.execute(
+        select(Favorite).where(Favorite.user_id == user.id, Favorite.listing_id == listing_id)
+    ).scalar_one_or_none()
+    if fav:
+        db.delete(fav)
+        db.commit()
+    item = load_listing(db, listing_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Объявление не найдено")
+    return to_out(item, favorite_ids_for(db, user))
+
+
+@router.post("/{listing_id}/report")
+def report_listing(
+    listing_id: int,
+    payload: ListingReportIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    item = load_listing(db, listing_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Объявление не найдено")
+    if item.author_id == user.id:
+        raise HTTPException(status_code=400, detail="Нельзя пожаловаться на своё объявление")
+    recent = db.execute(
+        select(ListingReport).where(
+            ListingReport.listing_id == listing_id,
+            ListingReport.reporter_id == user.id,
+            ListingReport.status == "open",
+        )
+    ).scalar_one_or_none()
+    if recent:
+        raise HTTPException(status_code=400, detail="Жалоба уже отправлена")
+    db.add(
+        ListingReport(
+            listing_id=listing_id,
+            reporter_id=user.id,
+            reason=payload.reason,
+            note=(payload.note or "").strip() or None,
+            status="open",
+        )
+    )
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/{listing_id}/images", response_model=ListingOut)
@@ -250,12 +406,12 @@ async def upload_listing_images(
         next_order += 1
         current += 1
 
-    if item.author_id == user.id and user.role == UserRole.user and item.status == ListingStatus.approved:
+    if item.author_id == user.id and item.status == ListingStatus.approved:
         item.status = ListingStatus.pending
 
     db.commit()
     item = load_listing(db, listing_id)
-    return to_out(item)
+    return to_out(item, favorite_ids_for(db, user))
 
 
 @router.delete("/{listing_id}/images/{image_id}", response_model=ListingOut)
@@ -277,9 +433,11 @@ def delete_listing_image(
     if file_path.exists():
         file_path.unlink()
     db.delete(image)
+    if item.author_id == user.id and item.status == ListingStatus.approved:
+        item.status = ListingStatus.pending
     db.commit()
     item = load_listing(db, listing_id)
-    return to_out(item)
+    return to_out(item, favorite_ids_for(db, user))
 
 
 @router.post("/{listing_id}/moderate", response_model=ListingOut)
@@ -294,8 +452,17 @@ def moderate_listing(
     item = load_listing(db, listing_id)
     if not item:
         raise HTTPException(status_code=404, detail="Объявление не найдено")
+    old = item.status.value
     item.status = payload.status
     item.moderation_note = payload.moderation_note
+    log_action(
+        db,
+        actor=user,
+        action=f"moderate:{payload.status.value}",
+        entity_type="listing",
+        entity_id=item.id,
+        details=f"{old} → {payload.status.value}; note={payload.moderation_note or ''}",
+    )
     db.commit()
     item = load_listing(db, listing_id)
     return to_out(item)

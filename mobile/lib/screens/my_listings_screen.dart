@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
+import 'create_listing_screen.dart';
 import 'home_shell.dart';
 import 'listing_detail_screen.dart';
 
@@ -54,9 +55,35 @@ class _MyListingsScreenState extends State<MyListingsScreen> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          error = e.toString();
+          error = AppState.userFriendlyError(e);
           loading = false;
         });
+      }
+    }
+  }
+
+  Future<void> _edit(Map<String, dynamic> item) async {
+    final ok = await Navigator.push<bool>(
+      context,
+      fastRoute(CreateListingScreen(listingId: item['id'] as int, initial: item)),
+    );
+    if (ok == true) await _load();
+  }
+
+  Future<void> _republish(Map<String, dynamic> item) async {
+    try {
+      await context.read<AppState>().republishListing(item['id'] as int);
+      await _load();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Отправлено на модерацию')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(AppState.userFriendlyError(e))),
+        );
       }
     }
   }
@@ -115,7 +142,7 @@ class _MyListingsScreenState extends State<MyListingsScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AppState.userFriendlyError(e))));
       }
     }
   }
@@ -144,6 +171,8 @@ class _MyListingsScreenState extends State<MyListingsScreen> {
                           final images = (item['images'] as List?) ?? [];
                           final thumb = images.isNotEmpty ? (images.first as Map)['url'] as String? : null;
                           final status = '${item['status']}';
+                          final canClose = status == 'approved' || status == 'pending';
+                          final canRepublish = status == 'archived' || status == 'rejected';
                           return Material(
                             color: Theme.of(context).cardTheme.color,
                             borderRadius: BorderRadius.circular(16),
@@ -201,15 +230,29 @@ class _MyListingsScreenState extends State<MyListingsScreen> {
                                               style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
                                             ),
                                           ],
+                                          const SizedBox(height: 8),
+                                          Wrap(
+                                            spacing: 4,
+                                            children: [
+                                              TextButton(
+                                                onPressed: () => _edit(item),
+                                                child: const Text('Изменить'),
+                                              ),
+                                              if (canRepublish)
+                                                TextButton(
+                                                  onPressed: () => _republish(item),
+                                                  child: const Text('Снова'),
+                                                ),
+                                              if (canClose)
+                                                TextButton(
+                                                  onPressed: () => _close(item),
+                                                  child: const Text('Снять'),
+                                                ),
+                                            ],
+                                          ),
                                         ],
                                       ),
                                     ),
-                                    if (status == 'approved' || status == 'pending')
-                                      IconButton(
-                                        tooltip: 'Снять',
-                                        onPressed: () => _close(item),
-                                        icon: const Icon(Icons.archive_outlined),
-                                      ),
                                   ],
                                 ),
                               ),

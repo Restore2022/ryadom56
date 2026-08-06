@@ -65,10 +65,34 @@ export type Listing = {
   price?: number | null;
   settlement_name?: string | null;
   author_name?: string | null;
+  contact_phone?: string | null;
   moderation_note?: string | null;
   close_reason?: string | null;
   close_note?: string | null;
   images?: { id: number; url: string; sort_order: number }[];
+  created_at: string;
+};
+
+export type ListingReport = {
+  id: number;
+  listing_id: number;
+  listing_title?: string | null;
+  reporter_id: number;
+  reporter_name?: string | null;
+  reason: string;
+  note?: string | null;
+  status: string;
+  created_at: string;
+};
+
+export type AuditLog = {
+  id: number;
+  actor_id: number;
+  actor_name?: string | null;
+  action: string;
+  entity_type: string;
+  entity_id?: number | null;
+  details?: string | null;
   created_at: string;
 };
 

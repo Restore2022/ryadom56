@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Navigate, NavLink, Route, Routes, useNavigate } from 'react-router-dom';
 import { api, mediaUrl, setToken } from './api';
-import type { DirectoryItem, Listing, Settlement, Stats, User } from './api';
+import type { AuditLog, DirectoryItem, Listing, ListingReport, Settlement, Stats, User } from './api';
 import './App.css';
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -51,6 +51,22 @@ const CLOSE_REASON_LABEL: Record<string, string> = {
   busy: 'Пока занят',
   other: 'Другое',
 };
+
+const REPORT_REASON_LABEL: Record<string, string> = {
+  spam: 'Спам',
+  fraud: 'Мошенничество',
+  prohibited: 'Запрещённый контент',
+  other: 'Другое',
+};
+
+function formatDate(value?: string | null) {
+  if (!value) return '—';
+  try {
+    return new Date(value).toLocaleString('ru-RU');
+  } catch {
+    return value;
+  }
+}
 
 function useTheme() {
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
@@ -161,6 +177,12 @@ function Shell({
           <NavLink to="/moderation">
             <span className="nav-ico">☰</span> Модерация
           </NavLink>
+          <NavLink to="/reports">
+            <span className="nav-ico">!</span> Жалобы
+          </NavLink>
+          <NavLink to="/audit">
+            <span className="nav-ico">≡</span> Лог действий
+          </NavLink>
           <NavLink to="/directory">
             <span className="nav-ico">◎</span> Справочник
           </NavLink>
@@ -240,16 +262,28 @@ function Dashboard() {
 function ModerationPage() {
   const [items, setItems] = useState<Listing[]>([]);
   const [filter, setFilter] = useState('pending');
+  const [closedOnly, setClosedOnly] = useState(false);
   const [category, setCategory] = useState('');
   const [query, setQuery] = useState('');
+  const [serverQuery, setServerQuery] = useState('');
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState<number | null>(null);
   const [selected, setSelected] = useState<Listing | null>(null);
+  const [checked, setChecked] = useState<number[]>([]);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   async function load() {
     try {
-      const q = filter ? `?status=${filter}` : '';
-      setItems(await api<Listing[]>(`/listings/admin/all${q}`));
+      const params = new URLSearchParams();
+      if (closedOnly) {
+        params.set('closed_by_user', '1');
+      } else if (filter) {
+        params.set('status', filter);
+      }
+      if (serverQuery.trim()) params.set('q', serverQuery.trim());
+      const qs = params.toString();
+      setItems(await api<Listing[]>(`/listings/admin/all${qs ? `?${qs}` : ''}`));
+      setChecked([]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка');
     }
@@ -257,7 +291,7 @@ function ModerationPage() {
 
   useEffect(() => {
     load();
-  }, [filter]);
+  }, [filter, closedOnly, serverQuery]);
 
   const visible = useMemo(() => {
     return items.filter((item) => {
@@ -268,7 +302,8 @@ function ModerationPage() {
           item.title.toLowerCase().includes(q) ||
           item.description.toLowerCase().includes(q) ||
           (item.author_name || '').toLowerCase().includes(q) ||
-          (item.settlement_name || '').toLowerCase().includes(q)
+          (item.settlement_name || '').toLowerCase().includes(q) ||
+          (item.contact_phone || '').toLowerCase().includes(q)
         );
       }
       return true;
@@ -289,20 +324,53 @@ function ModerationPage() {
     }
   }
 
+  async function bulkModerate(status: 'approved' | 'rejected') {
+    if (!checked.length) return;
+    setBulkBusy(true);
+    try {
+      await api('/admin/listings/bulk-moderate', {
+        method: 'POST',
+        body: JSON.stringify({ ids: checked, status }),
+      });
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  function toggleCheck(id: number) {
+    setChecked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
+
   return (
     <div>
       <div className="page-head">
         <div>
           <h1>Модерация</h1>
-          <p>Проверка и просмотр объявлений</p>
+          <p>Проверка, поиск по автору/телефону, массовые действия</p>
         </div>
       </div>
 
       <div className="toolbar">
-        <select value={filter} onChange={(e) => setFilter(e.target.value)}>
+        <select
+          value={closedOnly ? 'closed' : filter}
+          onChange={(e) => {
+            if (e.target.value === 'closed') {
+              setClosedOnly(true);
+              setFilter('archived');
+            } else {
+              setClosedOnly(false);
+              setFilter(e.target.value);
+            }
+          }}
+        >
           <option value="pending">На проверке</option>
           <option value="approved">Одобренные</option>
           <option value="rejected">Отклонённые</option>
+          <option value="archived">Снятые (все)</option>
+          <option value="closed">Снятые пользователем</option>
           <option value="">Все</option>
         </select>
         <select value={category} onChange={(e) => setCategory(e.target.value)}>
@@ -314,30 +382,60 @@ function ModerationPage() {
           ))}
         </select>
         <input
-          placeholder="Поиск…"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Серверный поиск: автор, телефон, email…"
+          value={serverQuery}
+          onChange={(e) => setServerQuery(e.target.value)}
           style={{ maxWidth: 280 }}
         />
+        <input
+          placeholder="Локальный фильтр…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          style={{ maxWidth: 200 }}
+        />
       </div>
+
+      {checked.length > 0 && (
+        <div className="toolbar">
+          <span className="muted">Выбрано: {checked.length}</span>
+          <button className="btn" type="button" disabled={bulkBusy} onClick={() => bulkModerate('approved')}>
+            Одобрить выбранные
+          </button>
+          <button className="btn danger" type="button" disabled={bulkBusy} onClick={() => bulkModerate('rejected')}>
+            Отклонить выбранные
+          </button>
+        </div>
+      )}
 
       {error && <p className="error">{error}</p>}
 
       <div className="list">
         {visible.map((item) => (
           <article key={item.id} className="row-card" onClick={() => setSelected(item)}>
-            <div>
-              <h3 className="row-title">{item.title}</h3>
-              <div className="meta">
-                <span className={STATUS_CHIP[item.status] || 'chip'}>{STATUS_LABEL[item.status] || item.status}</span>
-                <span className="chip">{CATEGORY_LABELS[item.category] || item.category}</span>
-                <span className="chip neutral">{item.settlement_name}</span>
-                <span className="chip neutral">{item.author_name}</span>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+              <input
+                type="checkbox"
+                checked={checked.includes(item.id)}
+                onClick={(e) => e.stopPropagation()}
+                onChange={() => toggleCheck(item.id)}
+              />
+              <div>
+                <h3 className="row-title">{item.title}</h3>
+                <div className="meta">
+                  <span className={STATUS_CHIP[item.status] || 'chip'}>{STATUS_LABEL[item.status] || item.status}</span>
+                  <span className="chip">{CATEGORY_LABELS[item.category] || item.category}</span>
+                  <span className="chip neutral">{item.settlement_name}</span>
+                  <span className="chip neutral">{item.author_name}</span>
+                  {item.contact_phone && <span className="chip neutral">{item.contact_phone}</span>}
+                  {item.close_reason && (
+                    <span className="chip warn">{CLOSE_REASON_LABEL[item.close_reason] || item.close_reason}</span>
+                  )}
+                </div>
+                <p className="row-body">
+                  {item.description.length > 160 ? `${item.description.slice(0, 160)}…` : item.description}
+                </p>
+                {item.price != null && <div className="price">{item.price.toLocaleString('ru-RU')} ₽</div>}
               </div>
-              <p className="row-body">
-                {item.description.length > 160 ? `${item.description.slice(0, 160)}…` : item.description}
-              </p>
-              {item.price != null && <div className="price">{item.price.toLocaleString('ru-RU')} ₽</div>}
             </div>
             <div className="actions" onClick={(e) => e.stopPropagation()}>
               <button className="btn" disabled={busyId === item.id} onClick={() => moderate(item.id, 'approved')}>
@@ -378,7 +476,7 @@ function ModerationPage() {
               {selected.description}
             </p>
             <p className="muted" style={{ marginTop: 14 }}>
-              Автор: {selected.author_name || '—'}
+              Автор: {selected.author_name || '—'} · Тел: {selected.contact_phone || '—'}
             </p>
             {selected.close_reason && (
               <p className="muted">
@@ -401,6 +499,139 @@ function ModerationPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ReportsPage() {
+  const [items, setItems] = useState<ListingReport[]>([]);
+  const [status, setStatus] = useState('open');
+  const [error, setError] = useState('');
+
+  async function load() {
+    try {
+      const qs = status ? `?status=${status}` : '';
+      setItems(await api<ListingReport[]>(`/admin/reports${qs}`));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    }
+  }
+
+  useEffect(() => {
+    load().catch(console.error);
+  }, [status]);
+
+  async function setReportStatus(id: number, next: 'reviewed' | 'dismissed') {
+    await api(`/admin/reports/${id}`, { method: 'PATCH', body: JSON.stringify({ status: next }) });
+    await load();
+  }
+
+  return (
+    <div>
+      <div className="page-head">
+        <div>
+          <h1>Жалобы</h1>
+          <p>Сигналы пользователей по объявлениям</p>
+        </div>
+      </div>
+      <div className="toolbar">
+        <select value={status} onChange={(e) => setStatus(e.target.value)}>
+          <option value="open">Открытые</option>
+          <option value="reviewed">Просмотренные</option>
+          <option value="dismissed">Отклонённые</option>
+          <option value="">Все</option>
+        </select>
+      </div>
+      {error && <p className="error">{error}</p>}
+      <div className="list">
+        {items.map((r) => (
+          <article key={r.id} className="row-card">
+            <div>
+              <h3 className="row-title">{r.listing_title || `Объявление #${r.listing_id}`}</h3>
+              <div className="meta">
+                <span className="chip warn">{REPORT_REASON_LABEL[r.reason] || r.reason}</span>
+                <span className="chip neutral">{r.reporter_name}</span>
+                <span className="chip">{r.status}</span>
+              </div>
+              {r.note && <p className="row-body">{r.note}</p>}
+              <p className="muted">{formatDate(r.created_at)}</p>
+            </div>
+            <div className="actions">
+              {r.status === 'open' && (
+                <>
+                  <button className="btn" type="button" onClick={() => setReportStatus(r.id, 'reviewed')}>
+                    Просмотрено
+                  </button>
+                  <button className="btn secondary" type="button" onClick={() => setReportStatus(r.id, 'dismissed')}>
+                    Отклонить
+                  </button>
+                </>
+              )}
+            </div>
+          </article>
+        ))}
+        {!items.length && <div className="empty">Жалоб нет</div>}
+      </div>
+    </div>
+  );
+}
+
+function AuditPage() {
+  const [items, setItems] = useState<AuditLog[]>([]);
+  const [query, setQuery] = useState('');
+  const [error, setError] = useState('');
+
+  async function load(q = query) {
+    try {
+      const qs = q.trim() ? `?q=${encodeURIComponent(q.trim())}` : '';
+      setItems(await api<AuditLog[]>(`/admin/audit-log${qs}`));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    }
+  }
+
+  useEffect(() => {
+    load('').catch(console.error);
+  }, []);
+
+  return (
+    <div>
+      <div className="page-head">
+        <div>
+          <h1>Лог действий</h1>
+          <p>Модераторы, админы и редакторы</p>
+        </div>
+      </div>
+      <div className="toolbar">
+        <input
+          placeholder="Поиск по действию, автору, деталям…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <button className="btn" type="button" onClick={() => load(query)}>
+          Найти
+        </button>
+      </div>
+      {error && <p className="error">{error}</p>}
+      <div className="list">
+        {items.map((row) => (
+          <article key={row.id} className="row-card">
+            <div>
+              <h3 className="row-title">{row.action}</h3>
+              <div className="meta">
+                <span className="chip">{row.actor_name || `user #${row.actor_id}`}</span>
+                <span className="chip neutral">
+                  {row.entity_type}
+                  {row.entity_id != null ? ` #${row.entity_id}` : ''}
+                </span>
+                <span className="chip neutral">{formatDate(row.created_at)}</span>
+              </div>
+              {row.details && <p className="row-body">{row.details}</p>}
+            </div>
+          </article>
+        ))}
+        {!items.length && <div className="empty">Записей пока нет</div>}
+      </div>
     </div>
   );
 }
@@ -673,15 +904,6 @@ function DirectoryPage() {
       </div>
     </div>
   );
-}
-
-function formatDate(value?: string | null) {
-  if (!value) return '—';
-  try {
-    return new Date(value).toLocaleString('ru-RU');
-  } catch {
-    return value;
-  }
 }
 
 function UsersPage() {
@@ -978,6 +1200,8 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Dashboard />} />
         <Route path="/moderation" element={<ModerationPage />} />
+        <Route path="/reports" element={<ReportsPage />} />
+        <Route path="/audit" element={<AuditPage />} />
         <Route path="/directory" element={<DirectoryPage />} />
         {user!.role === 'admin' && <Route path="/users" element={<UsersPage />} />}
         <Route path="*" element={<Navigate to="/" replace />} />

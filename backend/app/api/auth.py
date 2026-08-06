@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session, selectinload
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.security import create_access_token, hash_password, verify_password
-from app.models import User
-from app.schemas import DeviceInfoIn, LoginIn, RegisterIn, TokenOut, UserOut
+from app.models import Settlement, User
+from app.schemas import DeviceInfoIn, LoginIn, ProfileUpdateIn, RegisterIn, TokenOut, UserOut
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -81,6 +81,39 @@ def login(payload: LoginIn, request: Request, db: Session = Depends(get_db)):
 @router.get("/me", response_model=UserOut)
 def me(user: User = Depends(get_current_user)):
     return user
+
+
+@router.patch("/me", response_model=UserOut)
+def update_me(
+    payload: ProfileUpdateIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    db_user = db.execute(
+        select(User).options(selectinload(User.settlement)).where(User.id == user.id)
+    ).scalar_one()
+    data = payload.model_dump(exclude_unset=True)
+    if "password" in data and data["password"]:
+        if not payload.current_password or not verify_password(payload.current_password, db_user.password_hash):
+            raise HTTPException(status_code=400, detail="Неверный текущий пароль")
+        db_user.password_hash = hash_password(data.pop("password"))
+    data.pop("current_password", None)
+    if "settlement_id" in data and data["settlement_id"] is not None:
+        settlement = db.execute(select(Settlement).where(Settlement.id == data["settlement_id"])).scalar_one_or_none()
+        if not settlement:
+            raise HTTPException(status_code=400, detail="Населённый пункт не найден")
+    if "full_name" in data and data["full_name"]:
+        db_user.full_name = data["full_name"].strip()
+    if "phone" in data:
+        phone = data["phone"]
+        db_user.phone = phone.strip() if phone else None
+    if "settlement_id" in data and data["settlement_id"] is not None:
+        db_user.settlement_id = data["settlement_id"]
+    db.commit()
+    db_user = db.execute(
+        select(User).options(selectinload(User.settlement)).where(User.id == user.id)
+    ).scalar_one()
+    return db_user
 
 
 @router.post("/device", response_model=UserOut)
