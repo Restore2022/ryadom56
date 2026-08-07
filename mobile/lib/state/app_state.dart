@@ -30,7 +30,9 @@ class AppState extends ChangeNotifier {
   int? filterSettlementId;
   String filterQuery = '';
   String sort = 'newest';
+  bool filterHasPhotos = false;
   bool listingsLoading = false;
+  int unreadNotifications = 0;
 
   String? directoryCategory;
   int? directorySettlementId;
@@ -107,6 +109,7 @@ class AppState extends ChangeNotifier {
         await reportDeviceInfo();
       }
       await Future.wait([loadListings(), loadDirectory()]);
+      if (user != null) await refreshUnreadNotifications();
       if (!listingsOffline) error = null;
     } catch (e) {
       error = userFriendlyError(e);
@@ -202,6 +205,7 @@ class AppState extends ChangeNotifier {
       if (filterCategory != null) params['category'] = filterCategory!;
       if (filterSettlementId != null) params['settlement_id'] = '$filterSettlementId';
       if (filterQuery.trim().isNotEmpty) params['q'] = filterQuery.trim();
+      if (filterHasPhotos) params['has_photos'] = 'true';
       final qs = params.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&');
       final data = await api.request('/listings?$qs', auth: true);
       List<dynamic> items;
@@ -278,6 +282,7 @@ class AppState extends ChangeNotifier {
     int? settlementId,
     String? query,
     String? sortBy,
+    bool? hasPhotos,
     bool clearCategory = false,
     bool clearSettlement = false,
   }) async {
@@ -293,6 +298,7 @@ class AppState extends ChangeNotifier {
     }
     if (query != null) filterQuery = query;
     if (sortBy != null) sort = sortBy;
+    if (hasPhotos != null) filterHasPhotos = hasPhotos;
     await loadListings();
   }
 
@@ -301,11 +307,13 @@ class AppState extends ChangeNotifier {
     int? settlementId,
     String? query,
     String? sortBy,
+    bool? hasPhotos,
   }) async {
     filterCategory = category;
     filterSettlementId = settlementId;
     if (query != null) filterQuery = query;
     if (sortBy != null) sort = sortBy;
+    if (hasPhotos != null) filterHasPhotos = hasPhotos;
     await loadListings();
   }
 
@@ -406,14 +414,72 @@ class AppState extends ChangeNotifier {
     int id,
     Map<String, dynamic> body, {
     List<String> imagePaths = const [],
+    bool asDraft = false,
   }) async {
-    var updated = await api.request('/listings/$id', method: 'PATCH', auth: true, body: body) as Map<String, dynamic>;
+    final payload = {...body, 'as_draft': asDraft};
+    var updated = await api.request('/listings/$id', method: 'PATCH', auth: true, body: payload) as Map<String, dynamic>;
     if (imagePaths.isNotEmpty) {
       updated = await api.uploadListingImages(id, imagePaths);
     }
     await loadListings();
     notifyListeners();
     return updated;
+  }
+
+  Future<Map<String, dynamic>> createListing(
+    Map<String, dynamic> body, {
+    List<String> imagePaths = const [],
+    bool asDraft = false,
+  }) async {
+    final payload = {...body, 'as_draft': asDraft};
+    final created = await api.request('/listings', method: 'POST', auth: true, body: payload) as Map<String, dynamic>;
+    if (imagePaths.isNotEmpty) {
+      final id = created['id'] as int;
+      final withImages = await api.uploadListingImages(id, imagePaths);
+      await loadListings();
+      notifyListeners();
+      return withImages;
+    }
+    await loadListings();
+    notifyListeners();
+    return created;
+  }
+
+  Future<List<dynamic>> loadAuthorListings(int authorId) async {
+    final data = await api.request(
+      '/listings?author_id=$authorId&sort=newest&limit=50&offset=0',
+      auth: true,
+    );
+    if (data is Map) return (data['items'] as List<dynamic>?) ?? [];
+    return data as List<dynamic>;
+  }
+
+  Future<List<dynamic>> loadNotifications() async {
+    return await api.request('/notifications', auth: true) as List<dynamic>;
+  }
+
+  Future<void> refreshUnreadNotifications() async {
+    if (user == null) {
+      unreadNotifications = 0;
+      notifyListeners();
+      return;
+    }
+    try {
+      final data = await api.request('/notifications/unread-count', auth: true) as Map<String, dynamic>;
+      unreadNotifications = (data['count'] as num?)?.toInt() ?? 0;
+      notifyListeners();
+    } catch (_) {}
+  }
+
+  Future<void> markNotificationRead(int id) async {
+    await api.request('/notifications/$id/read', method: 'POST', auth: true);
+    await refreshUnreadNotifications();
+  }
+
+  Future<void> markAllNotificationsRead() async {
+    await api.request('/notifications/read-all', method: 'POST', auth: true);
+    unreadNotifications = 0;
+    notifyListeners();
   }
 
   Future<Map<String, dynamic>> updateProfile({
@@ -439,23 +505,6 @@ class AppState extends ChangeNotifier {
     return user!;
   }
 
-  Future<Map<String, dynamic>> createListing(
-    Map<String, dynamic> body, {
-    List<String> imagePaths = const [],
-  }) async {
-    final created = await api.request('/listings', method: 'POST', auth: true, body: body) as Map<String, dynamic>;
-    if (imagePaths.isNotEmpty) {
-      final id = created['id'] as int;
-      final withImages = await api.uploadListingImages(id, imagePaths);
-      await loadListings();
-      notifyListeners();
-      return withImages;
-    }
-    await loadListings();
-    notifyListeners();
-    return created;
-  }
-
   Future<Map<String, dynamic>> closeListing(int id, {required String reason, String? note}) async {
     final updated = await api.request(
       '/listings/$id/close',
@@ -479,6 +528,7 @@ class AppState extends ChangeNotifier {
     user = await api.request('/auth/me', auth: true) as Map<String, dynamic>;
     await reportDeviceInfo();
     await refreshPublic();
+    await refreshUnreadNotifications();
     notifyListeners();
   }
 
@@ -488,6 +538,7 @@ class AppState extends ChangeNotifier {
     user = await api.request('/auth/me', auth: true) as Map<String, dynamic>;
     await reportDeviceInfo();
     await refreshPublic();
+    await refreshUnreadNotifications();
     notifyListeners();
   }
 
@@ -496,6 +547,7 @@ class AppState extends ChangeNotifier {
     user = null;
     favorites = [];
     favoriteIds.clear();
+    unreadNotifications = 0;
     await loadListings();
     notifyListeners();
   }

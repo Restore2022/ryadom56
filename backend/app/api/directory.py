@@ -21,6 +21,7 @@ def to_out(item: DirectoryItem) -> DirectoryOut:
         address=item.address,
         phone=item.phone,
         website=item.website,
+        hours=item.hours,
         lat=item.lat,
         lon=item.lon,
         is_published=item.is_published,

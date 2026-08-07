@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../auth_prompt.dart';
 import '../state/app_state.dart';
+import 'author_listings_screen.dart';
 import 'create_listing_screen.dart';
 import 'home_shell.dart';
 import 'my_listings_screen.dart';
@@ -32,6 +33,7 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
   bool loading = true;
   int photoIndex = 0;
   bool favBusy = false;
+  bool phoneRevealed = false;
 
   @override
   void initState() {
@@ -341,14 +343,35 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                           const SizedBox(height: 22),
                           const Divider(),
                           const SizedBox(height: 12),
-                          _InfoRow(icon: Icons.person_outline, label: 'Автор', value: '${data['author_name'] ?? '—'}'),
-                          if (data['contact_phone'] != null)
+                          InkWell(
+                            onTap: () {
+                              final authorId = data['author_id'] as int?;
+                              final name = '${data['author_name'] ?? 'Автор'}';
+                              if (authorId == null) return;
+                              Navigator.push(
+                                context,
+                                fastRoute(AuthorListingsScreen(authorId: authorId, authorName: name)),
+                              );
+                            },
+                            child: _InfoRow(
+                              icon: Icons.person_outline,
+                              label: 'Автор',
+                              value: '${data['author_name'] ?? '—'} · другие объявления',
+                            ),
+                          ),
+                          if (data['contact_phone'] != null && (isOwner || phoneRevealed))
                             _InfoRow(icon: Icons.phone_outlined, label: 'Телефон', value: '${data['contact_phone']}'),
                           _InfoRow(
                             icon: Icons.schedule_outlined,
                             label: 'Опубликовано',
                             value: _fmtDate(data['created_at']?.toString()),
                           ),
+                          if (isOwner && data['status'] == 'rejected' && data['moderation_note'] != null)
+                            _InfoRow(
+                              icon: Icons.info_outline,
+                              label: 'Причина отклонения',
+                              value: '${data['moderation_note']}',
+                            ),
                           if (data['close_reason'] != null)
                             _InfoRow(
                               icon: Icons.archive_outlined,
@@ -361,9 +384,16 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                     if (data['contact_phone'] != null) ...[
                       const SizedBox(height: 16),
                       FilledButton.icon(
-                        onPressed: () => _call(data['contact_phone'] as String),
+                        onPressed: () async {
+                          if (!phoneRevealed) {
+                            final loggedIn = await ensureLoggedIn(context, message: 'Войдите, чтобы увидеть телефон');
+                            if (!loggedIn || !mounted) return;
+                            setState(() => phoneRevealed = true);
+                          }
+                          await _call(data['contact_phone'] as String);
+                        },
                         icon: const Icon(Icons.phone),
-                        label: const Text('Позвонить'),
+                        label: Text(phoneRevealed || isOwner ? 'Позвонить' : 'Показать / Позвонить'),
                       ),
                     ],
                     if (!isOwner) ...[

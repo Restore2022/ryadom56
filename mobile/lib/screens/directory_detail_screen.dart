@@ -89,6 +89,8 @@ class DirectoryDetailScreen extends StatelessWidget {
                 const Divider(),
                 if (address != null && address.isNotEmpty)
                   _Row(icon: Icons.place_outlined, label: 'Адрес', value: address),
+                if (item['hours'] != null && '${item['hours']}'.isNotEmpty)
+                  _Row(icon: Icons.schedule_outlined, label: 'Часы работы', value: '${item['hours']}'),
                 if (phone != null && phone.isNotEmpty) _Row(icon: Icons.phone_outlined, label: 'Телефон', value: phone),
                 if (website != null && website.isNotEmpty)
                   _Row(icon: Icons.language_outlined, label: 'Сайт', value: website),

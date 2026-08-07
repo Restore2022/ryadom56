@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Navigate, NavLink, Route, Routes, useNavigate } from 'react-router-dom';
+import { Navigate, NavLink, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, mediaUrl, setToken } from './api';
 import type { AuditLog, DirectoryItem, Listing, ListingReport, Settlement, Stats, User } from './api';
 import './App.css';
@@ -43,6 +43,7 @@ const STATUS_LABEL: Record<string, string> = {
   approved: 'Опубликовано',
   rejected: 'Отклонено',
   archived: 'Снято',
+  draft: 'Черновик',
 };
 
 const CLOSE_REASON_LABEL: Record<string, string> = {
@@ -260,8 +261,10 @@ function Dashboard() {
 }
 
 function ModerationPage() {
+  const [searchParams] = useSearchParams();
+  const listingIdParam = searchParams.get('listingId');
   const [items, setItems] = useState<Listing[]>([]);
-  const [filter, setFilter] = useState('pending');
+  const [filter, setFilter] = useState(() => (listingIdParam ? '' : 'pending'));
   const [closedOnly, setClosedOnly] = useState(false);
   const [category, setCategory] = useState('');
   const [query, setQuery] = useState('');
@@ -271,6 +274,12 @@ function ModerationPage() {
   const [selected, setSelected] = useState<Listing | null>(null);
   const [checked, setChecked] = useState<number[]>([]);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [moderationNote, setModerationNote] = useState('');
+
+  function closeModal() {
+    setSelected(null);
+    setModerationNote('');
+  }
 
   async function load() {
     try {
@@ -293,6 +302,33 @@ function ModerationPage() {
     load();
   }, [filter, closedOnly, serverQuery]);
 
+  useEffect(() => {
+    if (!listingIdParam) return;
+    const id = Number(listingIdParam);
+    if (!Number.isFinite(id)) return;
+    setFilter('');
+    setClosedOnly(false);
+    setModerationNote('');
+
+    async function openFromParam() {
+      try {
+        const list = await api<Listing[]>('/listings/admin/all');
+        setItems(list);
+        const found = list.find((item) => item.id === id);
+        if (found) {
+          setSelected(found);
+          return;
+        }
+        const item = await api<Listing>(`/listings/${id}`);
+        setSelected(item);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Ошибка');
+      }
+    }
+
+    openFromParam().catch(console.error);
+  }, [listingIdParam]);
+
   const visible = useMemo(() => {
     return items.filter((item) => {
       if (category && item.category !== category) return false;
@@ -310,14 +346,19 @@ function ModerationPage() {
     });
   }, [items, category, query]);
 
-  async function moderate(id: number, status: 'approved' | 'rejected') {
+  async function moderate(id: number, status: 'approved' | 'rejected', noteOverride?: string | null) {
     setBusyId(id);
     try {
+      const note =
+        status === 'rejected'
+          ? (noteOverride !== undefined ? noteOverride : moderationNote.trim() || null)
+          : null;
       await api(`/listings/${id}/moderate`, {
         method: 'POST',
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({ status, moderation_note: note }),
       });
       setSelected(null);
+      setModerationNote('');
       await load();
     } finally {
       setBusyId(null);
@@ -326,11 +367,17 @@ function ModerationPage() {
 
   async function bulkModerate(status: 'approved' | 'rejected') {
     if (!checked.length) return;
+    let moderation_note: string | null = null;
+    if (status === 'rejected') {
+      const note = window.prompt('Причина отклонения для автора');
+      if (note === null) return;
+      moderation_note = note.trim() || null;
+    }
     setBulkBusy(true);
     try {
       await api('/admin/listings/bulk-moderate', {
         method: 'POST',
-        body: JSON.stringify({ ids: checked, status }),
+        body: JSON.stringify({ ids: checked, status, moderation_note }),
       });
       await load();
     } catch (err) {
@@ -342,6 +389,11 @@ function ModerationPage() {
 
   function toggleCheck(id: number) {
     setChecked((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  }
+
+  function openListing(item: Listing) {
+    setSelected(item);
+    setModerationNote('');
   }
 
   return (
@@ -369,6 +421,7 @@ function ModerationPage() {
           <option value="pending">На проверке</option>
           <option value="approved">Одобренные</option>
           <option value="rejected">Отклонённые</option>
+          <option value="draft">Черновики</option>
           <option value="archived">Снятые (все)</option>
           <option value="closed">Снятые пользователем</option>
           <option value="">Все</option>
@@ -411,7 +464,7 @@ function ModerationPage() {
 
       <div className="list">
         {visible.map((item) => (
-          <article key={item.id} className="row-card" onClick={() => setSelected(item)}>
+          <article key={item.id} className="row-card" onClick={() => openListing(item)}>
             <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
               <input
                 type="checkbox"
@@ -441,10 +494,10 @@ function ModerationPage() {
               <button className="btn" disabled={busyId === item.id} onClick={() => moderate(item.id, 'approved')}>
                 Одобрить
               </button>
-              <button className="btn danger" disabled={busyId === item.id} onClick={() => moderate(item.id, 'rejected')}>
+              <button className="btn danger" disabled={busyId === item.id} onClick={() => openListing(item)}>
                 Отклонить
               </button>
-              <button className="btn ghost" onClick={() => setSelected(item)}>
+              <button className="btn ghost" onClick={() => openListing(item)}>
                 Открыть
               </button>
             </div>
@@ -454,7 +507,7 @@ function ModerationPage() {
       </div>
 
       {selected && (
-        <div className="modal-backdrop" onClick={() => setSelected(null)}>
+        <div className="modal-backdrop" onClick={closeModal}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
             <div className="meta">
               <span className={STATUS_CHIP[selected.status] || 'chip'}>{STATUS_LABEL[selected.status]}</span>
@@ -485,6 +538,15 @@ function ModerationPage() {
               </p>
             )}
             {selected.moderation_note && <p className="muted">Заметка: {selected.moderation_note}</p>}
+            <label className="field" style={{ display: 'block', marginTop: 14 }}>
+              Причина отклонения (для автора)
+              <textarea
+                value={moderationNote}
+                onChange={(e) => setModerationNote(e.target.value)}
+                placeholder="Укажите причину, если отклоняете"
+                rows={3}
+              />
+            </label>
             <div className="modal-actions">
               <button className="btn" disabled={busyId === selected.id} onClick={() => moderate(selected.id, 'approved')}>
                 Одобрить
@@ -492,7 +554,7 @@ function ModerationPage() {
               <button className="btn danger" disabled={busyId === selected.id} onClick={() => moderate(selected.id, 'rejected')}>
                 Отклонить
               </button>
-              <button className="btn secondary" onClick={() => setSelected(null)}>
+              <button className="btn secondary" onClick={closeModal}>
                 Закрыть
               </button>
             </div>
@@ -504,6 +566,7 @@ function ModerationPage() {
 }
 
 function ReportsPage() {
+  const navigate = useNavigate();
   const [items, setItems] = useState<ListingReport[]>([]);
   const [status, setStatus] = useState('open');
   const [error, setError] = useState('');
@@ -524,6 +587,10 @@ function ReportsPage() {
   async function setReportStatus(id: number, next: 'reviewed' | 'dismissed') {
     await api(`/admin/reports/${id}`, { method: 'PATCH', body: JSON.stringify({ status: next }) });
     await load();
+  }
+
+  function goToListing(listingId: number) {
+    navigate(`/moderation?listingId=${listingId}`);
   }
 
   return (
@@ -547,7 +614,13 @@ function ReportsPage() {
         {items.map((r) => (
           <article key={r.id} className="row-card">
             <div>
-              <h3 className="row-title">{r.listing_title || `Объявление #${r.listing_id}`}</h3>
+              <h3
+                className="row-title"
+                style={{ cursor: 'pointer' }}
+                onClick={() => goToListing(r.listing_id)}
+              >
+                {r.listing_title || `Объявление #${r.listing_id}`}
+              </h3>
               <div className="meta">
                 <span className="chip warn">{REPORT_REASON_LABEL[r.reason] || r.reason}</span>
                 <span className="chip neutral">{r.reporter_name}</span>
@@ -557,6 +630,9 @@ function ReportsPage() {
               <p className="muted">{formatDate(r.created_at)}</p>
             </div>
             <div className="actions">
+              <button className="btn ghost" type="button" onClick={() => goToListing(r.listing_id)}>
+                К объявлению
+              </button>
               {r.status === 'open' && (
                 <>
                   <button className="btn" type="button" onClick={() => setReportStatus(r.id, 'reviewed')}>
@@ -644,6 +720,7 @@ type DirectoryForm = {
   address: string;
   phone: string;
   website: string;
+  hours: string;
   lat: string;
   lon: string;
   is_published: boolean;
@@ -657,6 +734,7 @@ const EMPTY_DIR: DirectoryForm = {
   address: '',
   phone: '',
   website: '',
+  hours: '',
   lat: '',
   lon: '',
   is_published: true,
@@ -671,6 +749,7 @@ function directoryPayload(form: DirectoryForm) {
     address: form.address || null,
     phone: form.phone || null,
     website: form.website || null,
+    hours: form.hours || null,
     lat: form.lat === '' ? null : Number(form.lat),
     lon: form.lon === '' ? null : Number(form.lon),
     is_published: form.is_published,
@@ -706,6 +785,7 @@ function DirectoryPage() {
       address: item.address || '',
       phone: item.phone || '',
       website: item.website || '',
+      hours: item.hours || '',
       lat: item.lat != null ? String(item.lat) : '',
       lon: item.lon != null ? String(item.lon) : '',
       is_published: item.is_published,
@@ -805,6 +885,14 @@ function DirectoryPage() {
           <label className="field">
             Сайт
             <input value={form.website} onChange={(e) => setForm({ ...form, website: e.target.value })} />
+          </label>
+          <label className="field">
+            Часы работы
+            <input
+              value={form.hours}
+              onChange={(e) => setForm({ ...form, hours: e.target.value })}
+              placeholder="пн–пт 9:00–18:00"
+            />
           </label>
           <label className="field">
             Опубликовано

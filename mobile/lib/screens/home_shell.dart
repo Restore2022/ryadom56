@@ -13,6 +13,7 @@ import 'favorites_screen.dart';
 import 'legal_doc_screen.dart';
 import 'listing_detail_screen.dart';
 import 'my_listings_screen.dart';
+import 'notifications_screen.dart';
 
 Route<T> fastRoute<T>(Widget page) {
   return PageRouteBuilder<T>(
@@ -234,6 +235,14 @@ class _ListingsTabState extends State<_ListingsTab> {
                   label: 'Все',
                   selected: state.filterCategory == null,
                   onSelected: (_) => state.applyListingFilters(clearCategory: true),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: RyadomFilterChip(
+                  label: 'С фото',
+                  selected: state.filterHasPhotos,
+                  onSelected: (_) => state.applyListingFilters(hasPhotos: !state.filterHasPhotos),
                 ),
               ),
               ...['goods', 'services', 'jobs', 'rent', 'free', 'lost_found'].map(
@@ -905,6 +914,18 @@ class _ProfileTab extends StatelessWidget {
           ),
         ),
         const SizedBox(height: 16),
+        ListTile(
+          leading: Badge(
+            isLabelVisible: state.unreadNotifications > 0,
+            label: Text('${state.unreadNotifications}'),
+            child: const Icon(Icons.notifications_outlined),
+          ),
+          title: const Text('Уведомления'),
+          subtitle: const Text('Одобрения, отклонения, жалобы'),
+          trailing: const Icon(Icons.chevron_right),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          onTap: () => Navigator.push(context, fastRoute(const NotificationsScreen())),
+        ),
         ListTile(
           leading: const Icon(Icons.inventory_2_outlined),
           title: const Text('Мои объявления'),

@@ -5,7 +5,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api import admin_panel, auth, directory, legal, listings, settlements
+from app.api import admin_panel, auth, directory, legal, listings, notifications, settlements
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.services.seed import init_db, seed_db
@@ -35,6 +35,7 @@ app.include_router(settlements.router, prefix="/api")
 app.include_router(listings.router, prefix="/api")
 app.include_router(directory.router, prefix="/api")
 app.include_router(legal.router, prefix="/api")
+app.include_router(notifications.router, prefix="/api")
 app.include_router(admin_panel.router, prefix="/api")
 app.mount("/uploads", StaticFiles(directory="data/uploads"), name="uploads")
 

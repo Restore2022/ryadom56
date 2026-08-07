@@ -64,6 +64,7 @@ export type Listing = {
   status: string;
   price?: number | null;
   settlement_name?: string | null;
+  author_id?: number;
   author_name?: string | null;
   contact_phone?: string | null;
   moderation_note?: string | null;
@@ -106,6 +107,7 @@ export type DirectoryItem = {
   address?: string | null;
   phone?: string | null;
   website?: string | null;
+  hours?: string | null;
   lat?: number | null;
   lon?: number | null;
   is_published: boolean;

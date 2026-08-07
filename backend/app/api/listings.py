@@ -2,7 +2,7 @@ from pathlib import Path
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from sqlalchemy import func, or_, select
+from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, get_optional_user, require_roles
@@ -29,6 +29,7 @@ from app.schemas import (
     ListingUpdate,
 )
 from app.services.audit import log_action
+from app.services.notify import notify_user
 
 router = APIRouter(prefix="/listings", tags=["listings"])
 
@@ -160,6 +161,8 @@ def list_listings(
     q: str | None = None,
     sort: str = Query(default="newest", pattern="^(newest|oldest|price_asc|price_desc)$"),
     mine: bool = False,
+    author_id: int | None = None,
+    has_photos: bool | None = None,
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -176,6 +179,8 @@ def list_listings(
         stmt = stmt.where(Listing.author_id == user.id)
     else:
         stmt = stmt.where(Listing.status == ListingStatus.approved)
+        if author_id is not None:
+            stmt = stmt.where(Listing.author_id == author_id)
     if category:
         stmt = stmt.where(Listing.category == category)
     if settlement_id:
@@ -183,6 +188,10 @@ def list_listings(
     if q:
         like = f"%{q.strip()}%"
         stmt = stmt.where(Listing.title.ilike(like) | Listing.description.ilike(like))
+    if has_photos is True:
+        stmt = stmt.where(exists().where(ListingImage.listing_id == Listing.id))
+    elif has_photos is False:
+        stmt = stmt.where(~exists().where(ListingImage.listing_id == Listing.id))
     if sort == "oldest":
         stmt = stmt.order_by(Listing.created_at.asc())
     elif sort == "price_asc":
@@ -197,6 +206,8 @@ def list_listings(
         count_stmt = count_stmt.where(Listing.author_id == user.id)
     else:
         count_stmt = count_stmt.where(Listing.status == ListingStatus.approved)
+        if author_id is not None:
+            count_stmt = count_stmt.where(Listing.author_id == author_id)
     if category:
         count_stmt = count_stmt.where(Listing.category == category)
     if settlement_id:
@@ -204,6 +215,10 @@ def list_listings(
     if q:
         like = f"%{q.strip()}%"
         count_stmt = count_stmt.where(Listing.title.ilike(like) | Listing.description.ilike(like))
+    if has_photos is True:
+        count_stmt = count_stmt.where(exists().where(ListingImage.listing_id == Listing.id))
+    elif has_photos is False:
+        count_stmt = count_stmt.where(~exists().where(ListingImage.listing_id == Listing.id))
     total = int(db.execute(count_stmt).scalar_one())
 
     stmt = stmt.offset(offset).limit(limit)
@@ -233,15 +248,17 @@ def create_listing(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    data = payload.model_dump()
+    as_draft = bool(data.pop("as_draft", False))
     item = Listing(
         author_id=user.id,
-        settlement_id=payload.settlement_id,
-        category=payload.category,
-        title=payload.title.strip(),
-        description=payload.description.strip(),
-        price=payload.price,
-        contact_phone=payload.contact_phone,
-        status=ListingStatus.pending,
+        settlement_id=data["settlement_id"],
+        category=data["category"],
+        title=data["title"].strip(),
+        description=data["description"].strip(),
+        price=data.get("price"),
+        contact_phone=data.get("contact_phone"),
+        status=ListingStatus.draft if as_draft else ListingStatus.pending,
     )
     db.add(item)
     db.commit()
@@ -261,12 +278,19 @@ def update_listing(
         raise HTTPException(status_code=404, detail="Объявление не найдено")
     if item.author_id != user.id and user.role not in (UserRole.admin, UserRole.moderator):
         raise HTTPException(status_code=403, detail="Нет доступа")
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    as_draft = data.pop("as_draft", None)
+    for key, value in data.items():
         setattr(item, key, value)
     if item.author_id == user.id:
-        item.status = ListingStatus.pending
+        if as_draft is True:
+            item.status = ListingStatus.draft
+        else:
+            item.status = ListingStatus.pending
         item.close_reason = None
         item.close_note = None
+        if as_draft is not True:
+            item.moderation_note = None
     db.commit()
     item = load_listing(db, listing_id)
     return to_out(item, favorite_ids_for(db, user))
@@ -303,8 +327,8 @@ def republish_listing(
         raise HTTPException(status_code=404, detail="Объявление не найдено")
     if item.author_id != user.id:
         raise HTTPException(status_code=403, detail="Нет доступа")
-    if item.status not in (ListingStatus.archived, ListingStatus.rejected):
-        raise HTTPException(status_code=400, detail="Повторно опубликовать можно снятое или отклонённое")
+    if item.status not in (ListingStatus.archived, ListingStatus.rejected, ListingStatus.draft):
+        raise HTTPException(status_code=400, detail="Повторно опубликовать можно черновик, снятое или отклонённое")
     item.status = ListingStatus.pending
     item.close_reason = None
     item.close_note = None
@@ -508,6 +532,28 @@ def moderate_listing(
         entity_id=item.id,
         details=f"{old} → {payload.status.value}; note={payload.moderation_note or ''}",
     )
+    if payload.status == ListingStatus.approved:
+        notify_user(
+            db,
+            user_id=item.author_id,
+            type="listing_approved",
+            title="Объявление одобрено",
+            body=f"«{item.title}» опубликовано и видно в ленте.",
+            listing_id=item.id,
+        )
+    elif payload.status == ListingStatus.rejected:
+        note = (payload.moderation_note or "").strip()
+        body = f"«{item.title}» отклонено."
+        if note:
+            body = f"{body} Причина: {note}"
+        notify_user(
+            db,
+            user_id=item.author_id,
+            type="listing_rejected",
+            title="Объявление отклонено",
+            body=body,
+            listing_id=item.id,
+        )
     db.commit()
     item = load_listing(db, listing_id)
     return to_out(item)

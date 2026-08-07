@@ -21,6 +21,7 @@ class ListingCategory(str, Enum):
 
 
 class ListingStatus(str, Enum):
+    draft = "draft"
     pending = "pending"
     approved = "approved"
     rejected = "rejected"
@@ -103,6 +104,7 @@ class ListingCreate(BaseModel):
     settlement_id: int
     price: float | None = None
     contact_phone: str | None = Field(default=None, max_length=32)
+    as_draft: bool = False
 
 
 class ListingUpdate(BaseModel):
@@ -112,6 +114,7 @@ class ListingUpdate(BaseModel):
     settlement_id: int | None = None
     price: float | None = None
     contact_phone: str | None = None
+    as_draft: bool | None = None
 
 
 class ListingModerationIn(BaseModel):
@@ -222,6 +225,7 @@ class DirectoryCreate(BaseModel):
     address: str | None = None
     phone: str | None = None
     website: str | None = None
+    hours: str | None = Field(default=None, max_length=255)
     lat: float | None = None
     lon: float | None = None
     is_published: bool = True
@@ -235,6 +239,7 @@ class DirectoryUpdate(BaseModel):
     address: str | None = None
     phone: str | None = None
     website: str | None = None
+    hours: str | None = Field(default=None, max_length=255)
     lat: float | None = None
     lon: float | None = None
     is_published: bool | None = None
@@ -250,6 +255,7 @@ class DirectoryOut(BaseModel):
     address: str | None
     phone: str | None
     website: str | None
+    hours: str | None = None
     lat: float | None
     lon: float | None
     is_published: bool
@@ -294,3 +300,16 @@ class StatsOut(BaseModel):
     listings_approved: int
     directory_items: int
     settlements: int
+
+
+class NotificationOut(BaseModel):
+    id: int
+    type: str
+    title: str
+    body: str | None
+    listing_id: int | None
+    is_read: bool
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

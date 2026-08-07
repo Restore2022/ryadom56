@@ -27,6 +27,7 @@ from app.schemas import (
     UserRoleUpdate,
 )
 from app.services.audit import log_action
+from app.services.notify import notify_user
 from app.api.listings import load_listing, to_out
 
 router = APIRouter(prefix="/admin", tags=["admin"])
@@ -132,6 +133,28 @@ def bulk_moderate(
             entity_id=item.id,
             details=f"{old} → {payload.status.value}",
         )
+        if payload.status == ListingStatus.approved:
+            notify_user(
+                db,
+                user_id=item.author_id,
+                type="listing_approved",
+                title="Объявление одобрено",
+                body=f"«{item.title}» опубликовано и видно в ленте.",
+                listing_id=item.id,
+            )
+        elif payload.status == ListingStatus.rejected:
+            note = (payload.moderation_note or "").strip()
+            body = f"«{item.title}» отклонено."
+            if note:
+                body = f"{body} Причина: {note}"
+            notify_user(
+                db,
+                user_id=item.author_id,
+                type="listing_rejected",
+                title="Объявление отклонено",
+                body=body,
+                listing_id=item.id,
+            )
         result.append(item)
     db.commit()
     return [to_out(load_listing(db, i.id)) for i in result]
@@ -191,6 +214,16 @@ def update_report(
         entity_type="report",
         entity_id=report.id,
         details=f"listing={report.listing_id}",
+    )
+    title_txt = report.listing.title if report.listing else f"#{report.listing_id}"
+    status_label = "просмотрена" if payload.status == "reviewed" else "отклонена"
+    notify_user(
+        db,
+        user_id=report.reporter_id,
+        type="report_reviewed",
+        title="Жалоба рассмотрена",
+        body=f"Ваша жалоба на «{title_txt}» {status_label}.",
+        listing_id=report.listing_id,
     )
     db.commit()
     db.refresh(report)

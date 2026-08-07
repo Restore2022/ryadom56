@@ -15,6 +15,7 @@ const closeReasons = {
 };
 
 const statusLabels = {
+  'draft': 'Черновик',
   'pending': 'На проверке',
   'approved': 'Опубликовано',
   'rejected': 'Отклонено',
@@ -172,7 +173,7 @@ class _MyListingsScreenState extends State<MyListingsScreen> {
                           final thumb = images.isNotEmpty ? (images.first as Map)['url'] as String? : null;
                           final status = '${item['status']}';
                           final canClose = status == 'approved' || status == 'pending';
-                          final canRepublish = status == 'archived' || status == 'rejected';
+                          final canRepublish = status == 'archived' || status == 'rejected' || status == 'draft';
                           return Material(
                             color: Theme.of(context).cardTheme.color,
                             borderRadius: BorderRadius.circular(16),
@@ -223,6 +224,13 @@ class _MyListingsScreenState extends State<MyListingsScreen> {
                                             statusLabels[status] ?? status,
                                             style: TextStyle(color: scheme.primary, fontSize: 12, fontWeight: FontWeight.w600),
                                           ),
+                                          if (status == 'rejected' && item['moderation_note'] != null) ...[
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              'Причина: ${item['moderation_note']}',
+                                              style: TextStyle(color: scheme.error, fontSize: 12),
+                                            ),
+                                          ],
                                           if (item['close_reason'] != null) ...[
                                             const SizedBox(height: 2),
                                             Text(
@@ -241,7 +249,7 @@ class _MyListingsScreenState extends State<MyListingsScreen> {
                                               if (canRepublish)
                                                 TextButton(
                                                   onPressed: () => _republish(item),
-                                                  child: const Text('Снова'),
+                                                  child: Text(status == 'draft' ? 'Отправить' : 'Снова'),
                                                 ),
                                               if (canClose)
                                                 TextButton(

@@ -171,8 +171,8 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
           const SizedBox(height: 4),
           Text(
             widget.isEdit
-                ? 'Можно удалить, поменять порядок и добавить новые (камера или галерея).'
-                : 'Камера или галерея, до $maxPhotos фото.',
+                ? 'Можно удалить, поменять порядок и добавить новые. До 5 фото, лучше днём при хорошем свете.'
+                : 'До 5 фото — камера или галерея. Лучше снимать днём при хорошем свете.',
             style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 12),
           ),
           const SizedBox(height: 8),
@@ -343,7 +343,7 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
           if (widget.isEdit) ...[
             const SizedBox(height: 8),
             Text(
-              'После сохранения объявление снова уйдёт на модерацию.',
+              'После отправки на модерацию объявление снова проверит администратор. Черновик можно дописать позже.',
               style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 13),
             ),
           ],
@@ -353,73 +353,82 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
           ],
           const SizedBox(height: 16),
           FilledButton(
-            onPressed: busy
-                ? null
-                : () async {
-                    final titleText = title.text.trim();
-                    final descText = description.text.trim();
-                    if (titleText.length < 2) {
-                      setState(() => error = 'Укажите заголовок');
-                      return;
-                    }
-                    if (descText.length < 3) {
-                      setState(() => error = 'Описание слишком короткое');
-                      return;
-                    }
-                    if (settlementId == null) {
-                      setState(() => error = 'Выберите населённый пункт');
-                      return;
-                    }
-                    setState(() {
-                      busy = true;
-                      error = null;
-                    });
-                    final body = {
-                      'title': titleText,
-                      'description': descText,
-                      'category': category,
-                      'settlement_id': settlementId,
-                      'price': price.text.trim().isEmpty ? null : double.tryParse(price.text.trim().replaceAll(',', '.')),
-                      'contact_phone': phone.text.trim().isEmpty ? null : phone.text.trim(),
-                    };
-                    try {
-                      final app = context.read<AppState>();
-                      if (widget.isEdit) {
-                        await app.updateListing(
-                          widget.listingId!,
-                          body,
-                          imagePaths: photos.map((e) => e.path).toList(),
-                        );
-                      } else {
-                        await app.createListing(
-                          body,
-                          imagePaths: photos.map((e) => e.path).toList(),
-                        );
-                      }
-                      if (context.mounted) {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text(
-                              widget.isEdit ? 'Изменения отправлены на модерацию' : 'Отправлено на модерацию',
-                            ),
-                          ),
-                        );
-                        Navigator.pop(context, true);
-                      }
-                    } catch (e) {
-                      setState(() => error = AppState.userFriendlyError(e));
-                    } finally {
-                      if (mounted) setState(() => busy = false);
-                    }
-                  },
+            onPressed: busy ? null : () => _submit(asDraft: false),
             child: Text(
               busy
                   ? (widget.isEdit ? 'Сохранение…' : 'Публикация…')
-                  : (widget.isEdit ? 'Сохранить' : 'Отправить на модерацию'),
+                  : (widget.isEdit ? 'Отправить на модерацию' : 'Отправить на модерацию'),
             ),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton(
+            onPressed: busy ? null : () => _submit(asDraft: true),
+            child: const Text('Сохранить черновик'),
           ),
         ],
       ),
     );
+  }
+
+  Future<void> _submit({required bool asDraft}) async {
+    final titleText = title.text.trim();
+    final descText = description.text.trim();
+    if (titleText.length < 2) {
+      setState(() => error = 'Укажите заголовок');
+      return;
+    }
+    if (descText.length < 3) {
+      setState(() => error = 'Описание слишком короткое');
+      return;
+    }
+    if (settlementId == null) {
+      setState(() => error = 'Выберите населённый пункт');
+      return;
+    }
+    setState(() {
+      busy = true;
+      error = null;
+    });
+    final body = {
+      'title': titleText,
+      'description': descText,
+      'category': category,
+      'settlement_id': settlementId,
+      'price': price.text.trim().isEmpty ? null : double.tryParse(price.text.trim().replaceAll(',', '.')),
+      'contact_phone': phone.text.trim().isEmpty ? null : phone.text.trim(),
+    };
+    try {
+      final app = context.read<AppState>();
+      if (widget.isEdit) {
+        await app.updateListing(
+          widget.listingId!,
+          body,
+          imagePaths: photos.map((e) => e.path).toList(),
+          asDraft: asDraft,
+        );
+      } else {
+        await app.createListing(
+          body,
+          imagePaths: photos.map((e) => e.path).toList(),
+          asDraft: asDraft,
+        );
+      }
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              asDraft
+                  ? 'Черновик сохранён'
+                  : (widget.isEdit ? 'Изменения отправлены на модерацию' : 'Отправлено на модерацию'),
+            ),
+          ),
+        );
+        Navigator.pop(context, true);
+      }
+    } catch (e) {
+      setState(() => error = AppState.userFriendlyError(e));
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
   }
 }

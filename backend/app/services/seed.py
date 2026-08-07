@@ -24,6 +24,10 @@ LISTING_COLUMNS = {
     "close_note": "TEXT",
 }
 
+DIRECTORY_COLUMNS = {
+    "hours": "VARCHAR(255)",
+}
+
 
 def init_db() -> None:
     Path("data").mkdir(exist_ok=True)
@@ -31,6 +35,7 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _migrate_user_columns()
     _migrate_listing_columns()
+    _migrate_directory_columns()
 
 
 def _migrate_user_columns() -> None:
@@ -53,6 +58,17 @@ def _migrate_listing_columns() -> None:
         for name, sql_type in LISTING_COLUMNS.items():
             if name not in existing:
                 conn.execute(text(f"ALTER TABLE listings ADD COLUMN {name} {sql_type}"))
+
+
+def _migrate_directory_columns() -> None:
+    inspector = inspect(engine)
+    if "directory_items" not in inspector.get_table_names():
+        return
+    existing = {col["name"] for col in inspector.get_columns("directory_items")}
+    with engine.begin() as conn:
+        for name, sql_type in DIRECTORY_COLUMNS.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE directory_items ADD COLUMN {name} {sql_type}"))
 
 
 def seed_db(session: Session) -> None:
