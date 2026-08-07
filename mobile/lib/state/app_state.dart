@@ -16,6 +16,10 @@ class AppState extends ChangeNotifier {
   Map<String, dynamic>? user;
   List<dynamic> settlements = [];
   List<dynamic> listings = [];
+  int listingsTotal = 0;
+  bool listingsHasMore = false;
+  bool listingsLoadingMore = false;
+  static const listingsPageSize = 20;
   List<dynamic> directory = [];
   List<dynamic> favorites = [];
   final Set<int> favoriteIds = {};
@@ -180,27 +184,58 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> loadListings() async {
-    listingsLoading = true;
+  Future<void> loadListings({bool append = false}) async {
+    if (append) {
+      if (!listingsHasMore || listingsLoadingMore || listingsLoading) return;
+      listingsLoadingMore = true;
+    } else {
+      listingsLoading = true;
+    }
     notifyListeners();
     try {
-      final params = <String, String>{'sort': sort};
+      final offset = append ? listings.length : 0;
+      final params = <String, String>{
+        'sort': sort,
+        'limit': '$listingsPageSize',
+        'offset': '$offset',
+      };
       if (filterCategory != null) params['category'] = filterCategory!;
       if (filterSettlementId != null) params['settlement_id'] = '$filterSettlementId';
       if (filterQuery.trim().isNotEmpty) params['q'] = filterQuery.trim();
       final qs = params.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&');
-      listings = await api.request('/listings?$qs', auth: true) as List<dynamic>;
+      final data = await api.request('/listings?$qs', auth: true);
+      List<dynamic> items;
+      int total;
+      if (data is Map) {
+        items = (data['items'] as List<dynamic>?) ?? [];
+        total = (data['total'] as num?)?.toInt() ?? items.length;
+      } else {
+        items = data as List<dynamic>;
+        total = items.length;
+      }
+      if (append) {
+        listings = [...listings, ...items];
+      } else {
+        listings = items;
+      }
+      listingsTotal = total;
+      listingsHasMore = listings.length < listingsTotal;
       _syncFavoriteIdsFromListings();
       listingsOffline = false;
       if (error == offlineMessage) error = null;
     } catch (e) {
-      listingsOffline = true;
-      error = userFriendlyError(e);
+      if (!append) {
+        listingsOffline = true;
+        error = userFriendlyError(e);
+      }
     } finally {
       listingsLoading = false;
+      listingsLoadingMore = false;
       notifyListeners();
     }
   }
+
+  Future<void> loadMoreListings() => loadListings(append: true);
 
   Future<void> loadDirectory() async {
     directoryLoading = true;
@@ -279,7 +314,37 @@ class AppState extends ChangeNotifier {
   }
 
   Future<List<dynamic>> loadMyListings() async {
-    return await api.request('/listings?mine=true&sort=newest', auth: true) as List<dynamic>;
+    final data = await api.request('/listings?mine=true&sort=newest&limit=100&offset=0', auth: true);
+    if (data is Map) {
+      return (data['items'] as List<dynamic>?) ?? [];
+    }
+    return data as List<dynamic>;
+  }
+
+  Future<Map<String, dynamic>> getLegalDoc(String slug) async {
+    return await api.request('/legal/$slug') as Map<String, dynamic>;
+  }
+
+  Future<List<dynamic>> loadLegalDocs() async {
+    return await api.request('/legal') as List<dynamic>;
+  }
+
+  Future<Map<String, dynamic>> deleteListingImage(int listingId, int imageId) async {
+    final updated = await api.request('/listings/$listingId/images/$imageId', method: 'DELETE', auth: true)
+        as Map<String, dynamic>;
+    notifyListeners();
+    return updated;
+  }
+
+  Future<Map<String, dynamic>> reorderListingImages(int listingId, List<int> imageIds) async {
+    final updated = await api.request(
+      '/listings/$listingId/images/reorder',
+      method: 'PATCH',
+      auth: true,
+      body: {'image_ids': imageIds},
+    ) as Map<String, dynamic>;
+    notifyListeners();
+    return updated;
   }
 
   Future<List<dynamic>> loadFavorites() async {
@@ -431,6 +496,7 @@ class AppState extends ChangeNotifier {
     user = null;
     favorites = [];
     favoriteIds.clear();
+    await loadListings();
     notifyListeners();
   }
 }

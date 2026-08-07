@@ -130,6 +130,10 @@ class ListingImageOut(BaseModel):
     sort_order: int
 
 
+class ListingImagesReorderIn(BaseModel):
+    image_ids: list[int] = Field(min_length=1, max_length=5)
+
+
 class ListingOut(BaseModel):
     id: int
     author_id: int
@@ -152,6 +156,13 @@ class ListingOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ListingPageOut(BaseModel):
+    items: list[ListingOut]
+    total: int
+    limit: int
+    offset: int
 
 
 class ProfileUpdateIn(BaseModel):

@@ -55,7 +55,13 @@ class _LoginScreenState extends State<LoginScreen> {
                       });
                       try {
                         await context.read<AppState>().login(email.text.trim(), password.text);
-                        if (context.mounted) Navigator.pushReplacementNamed(context, '/home');
+                        if (context.mounted) {
+                          if (Navigator.canPop(context)) {
+                            Navigator.pop(context);
+                          } else {
+                            Navigator.pushReplacementNamed(context, '/home');
+                          }
+                        }
                       } catch (e) {
                         setState(() => error = e.toString());
                       } finally {
@@ -67,6 +73,16 @@ class _LoginScreenState extends State<LoginScreen> {
             TextButton(
               onPressed: () => Navigator.pushNamed(context, '/register'),
               child: const Text('Создать аккаунт'),
+            ),
+            TextButton(
+              onPressed: () {
+                if (Navigator.canPop(context)) {
+                  Navigator.pop(context);
+                } else {
+                  Navigator.pushReplacementNamed(context, '/home');
+                }
+              },
+              child: const Text('Смотреть без входа'),
             ),
             const SizedBox(height: 8),
             Align(

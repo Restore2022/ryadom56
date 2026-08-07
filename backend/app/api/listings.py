@@ -2,7 +2,7 @@ from pathlib import Path
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, get_optional_user, require_roles
@@ -21,8 +21,10 @@ from app.schemas import (
     ListingCloseIn,
     ListingCreate,
     ListingImageOut,
+    ListingImagesReorderIn,
     ListingModerationIn,
     ListingOut,
+    ListingPageOut,
     ListingReportIn,
     ListingUpdate,
 )
@@ -151,13 +153,15 @@ def list_favorites(
     return [to_out(r, fav_ids) for r in db.execute(stmt).scalars().unique().all()]
 
 
-@router.get("", response_model=list[ListingOut])
+@router.get("", response_model=ListingPageOut)
 def list_listings(
     category: ListingCategory | None = None,
     settlement_id: int | None = None,
     q: str | None = None,
     sort: str = Query(default="newest", pattern="^(newest|oldest|price_asc|price_desc)$"),
     mine: bool = False,
+    limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     user: User | None = Depends(get_optional_user),
 ):
@@ -187,8 +191,25 @@ def list_listings(
         stmt = stmt.order_by(Listing.price.desc(), Listing.created_at.desc())
     else:
         stmt = stmt.order_by(Listing.created_at.desc())
+
+    count_stmt = select(func.count()).select_from(Listing)
+    if mine:
+        count_stmt = count_stmt.where(Listing.author_id == user.id)
+    else:
+        count_stmt = count_stmt.where(Listing.status == ListingStatus.approved)
+    if category:
+        count_stmt = count_stmt.where(Listing.category == category)
+    if settlement_id:
+        count_stmt = count_stmt.where(Listing.settlement_id == settlement_id)
+    if q:
+        like = f"%{q.strip()}%"
+        count_stmt = count_stmt.where(Listing.title.ilike(like) | Listing.description.ilike(like))
+    total = int(db.execute(count_stmt).scalar_one())
+
+    stmt = stmt.offset(offset).limit(limit)
     fav_ids = favorite_ids_for(db, user)
-    return [to_out(r, fav_ids) for r in db.execute(stmt).scalars().all()]
+    items = [to_out(r, fav_ids) for r in db.execute(stmt).scalars().unique().all()]
+    return ListingPageOut(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/{listing_id}", response_model=ListingOut)
@@ -433,6 +454,30 @@ def delete_listing_image(
     if file_path.exists():
         file_path.unlink()
     db.delete(image)
+    if item.author_id == user.id and item.status == ListingStatus.approved:
+        item.status = ListingStatus.pending
+    db.commit()
+    item = load_listing(db, listing_id)
+    return to_out(item, favorite_ids_for(db, user))
+
+
+@router.patch("/{listing_id}/images/reorder", response_model=ListingOut)
+def reorder_listing_images(
+    listing_id: int,
+    payload: ListingImagesReorderIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    item = load_listing(db, listing_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Объявление не найдено")
+    if item.author_id != user.id and user.role not in (UserRole.admin, UserRole.moderator):
+        raise HTTPException(status_code=403, detail="Нет доступа")
+    by_id = {img.id: img for img in (item.images or [])}
+    if len(payload.image_ids) != len(by_id) or set(payload.image_ids) != set(by_id):
+        raise HTTPException(status_code=400, detail="Список фото не совпадает с объявлением")
+    for order, image_id in enumerate(payload.image_ids):
+        by_id[image_id].sort_order = order
     if item.author_id == user.id and item.status == ListingStatus.approved:
         item.status = ListingStatus.pending
     db.commit()

@@ -3,12 +3,14 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../auth_prompt.dart';
 import '../state/app_state.dart';
 import 'about_screen.dart';
 import 'create_listing_screen.dart';
 import 'directory_detail_screen.dart';
 import 'edit_profile_screen.dart';
 import 'favorites_screen.dart';
+import 'legal_doc_screen.dart';
 import 'listing_detail_screen.dart';
 import 'my_listings_screen.dart';
 
@@ -123,7 +125,7 @@ class _HomeShellState extends State<HomeShell> {
           if (index == 0)
             IconButton(
               icon: const Icon(Icons.add_circle_outline),
-              onPressed: () => Navigator.push(context, fastRoute(const CreateListingScreen())),
+              onPressed: () => _openCreate(context),
             ),
         ],
       ),
@@ -139,12 +141,18 @@ class _HomeShellState extends State<HomeShell> {
       ),
       floatingActionButton: index == 0
           ? FloatingActionButton.extended(
-              onPressed: () => Navigator.push(context, fastRoute(const CreateListingScreen())),
+              onPressed: () => _openCreate(context),
               icon: const Icon(Icons.add),
               label: const Text('Подать'),
             )
           : null,
     );
+  }
+
+  Future<void> _openCreate(BuildContext context) async {
+    final ok = await ensureLoggedIn(context, message: 'Войдите, чтобы подать объявление');
+    if (!ok || !context.mounted) return;
+    await Navigator.push(context, fastRoute(const CreateListingScreen()));
   }
 }
 
@@ -245,7 +253,12 @@ class _ListingsTabState extends State<_ListingsTab> {
           padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
           child: Row(
             children: [
-              Text('${items.length} объявл.', style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)),
+              Text(
+                state.listingsTotal > 0
+                    ? '${state.listingsTotal} объявл.'
+                    : '${items.length} объявл.',
+                style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+              ),
               const Spacer(),
               DropdownButtonHideUnderline(
                 child: DropdownButton<String>(
@@ -273,14 +286,28 @@ class _ListingsTabState extends State<_ListingsTab> {
                           Center(child: Text('Ничего не найдено')),
                         ],
                       )
-                    : ListView.separated(
-                        padding: const EdgeInsets.fromLTRB(16, 4, 16, 100),
-                        itemCount: items.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 12),
-                        itemBuilder: (_, i) {
-                          final item = items[i] as Map<String, dynamic>;
-                          return _ListingCard(item: item);
+                    : NotificationListener<ScrollNotification>(
+                        onNotification: (n) {
+                          if (n.metrics.pixels >= n.metrics.maxScrollExtent - 240) {
+                            state.loadMoreListings();
+                          }
+                          return false;
                         },
+                        child: ListView.separated(
+                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 100),
+                          itemCount: items.length + (state.listingsLoadingMore ? 1 : 0),
+                          separatorBuilder: (_, __) => const SizedBox(height: 12),
+                          itemBuilder: (_, i) {
+                            if (i >= items.length) {
+                              return const Padding(
+                                padding: EdgeInsets.symmetric(vertical: 16),
+                                child: Center(child: CircularProgressIndicator()),
+                              );
+                            }
+                            final item = items[i] as Map<String, dynamic>;
+                            return _ListingCard(item: item);
+                          },
+                        ),
                       ),
           ),
         ),
@@ -471,6 +498,8 @@ class _ListingCard extends StatelessWidget {
                   tooltip: favorited ? 'Убрать из избранного' : 'В избранное',
                   visualDensity: VisualDensity.compact,
                   onPressed: () async {
+                    final loggedIn = await ensureLoggedIn(context, message: 'Войдите, чтобы сохранить в избранное');
+                    if (!loggedIn || !context.mounted) return;
                     try {
                       await state.toggleFavorite(id, currentlyFavorited: favorited);
                     } catch (e) {
@@ -772,9 +801,84 @@ class _ProfileTab extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    if (user == null) return const SizedBox.shrink();
     final state = context.watch<AppState>();
     final scheme = Theme.of(context).colorScheme;
+    if (user == null) {
+      return ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          Container(
+            padding: const EdgeInsets.all(20),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(22),
+              gradient: LinearGradient(
+                colors: [scheme.primary.withValues(alpha: 0.9), scheme.primary.withValues(alpha: 0.55)],
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Рядом56', style: GoogleFonts.unbounded(color: Colors.white, fontSize: 14)),
+                const SizedBox(height: 8),
+                Text('Гостевой режим', style: GoogleFonts.unbounded(color: Colors.white, fontSize: 26)),
+                const SizedBox(height: 6),
+                const Text(
+                  'Смотрите ленту и справочник. Чтобы звонить и подавать объявления — войдите.',
+                  style: TextStyle(color: Colors.white70),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 16),
+          FilledButton(
+            onPressed: () => Navigator.pushNamed(context, '/login'),
+            child: const Text('Войти'),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton(
+            onPressed: () => Navigator.pushNamed(context, '/register'),
+            child: const Text('Создать аккаунт'),
+          ),
+          const SizedBox(height: 16),
+          ListTile(
+            leading: const Icon(Icons.info_outline),
+            title: const Text('О проекте'),
+            trailing: const Icon(Icons.chevron_right),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            onTap: () => Navigator.push(context, fastRoute(const AboutScreen())),
+          ),
+          ListTile(
+            leading: const Icon(Icons.description_outlined),
+            title: const Text('Пользовательское соглашение'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(context, fastRoute(const LegalDocScreen(slug: 'terms', title: 'Пользовательское соглашение'))),
+          ),
+          ListTile(
+            leading: const Icon(Icons.privacy_tip_outlined),
+            title: const Text('Политика конфиденциальности'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(context, fastRoute(const LegalDocScreen(slug: 'privacy', title: 'Политика конфиденциальности'))),
+          ),
+          ListTile(
+            leading: const Icon(Icons.rule_outlined),
+            title: const Text('Правила объявлений'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(
+              context,
+              fastRoute(const LegalDocScreen(slug: 'listing_rules', title: 'Правила размещения объявлений')),
+            ),
+          ),
+          SwitchListTile(
+            value: state.darkMode,
+            onChanged: state.setDarkMode,
+            title: const Text('Тёмная тема'),
+            secondary: Icon(state.darkMode ? Icons.dark_mode : Icons.light_mode),
+          ),
+        ],
+      );
+    }
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
@@ -828,7 +932,7 @@ class _ProfileTab extends StatelessWidget {
         ListTile(
           leading: const Icon(Icons.info_outline),
           title: const Text('О проекте'),
-          subtitle: const Text('Рядом56 и поддержка'),
+          subtitle: const Text('Рядом56, поддержка и документы'),
           trailing: const Icon(Icons.chevron_right),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           onTap: () => Navigator.push(context, fastRoute(const AboutScreen())),
@@ -845,7 +949,6 @@ class _ProfileTab extends StatelessWidget {
         OutlinedButton(
           onPressed: () async {
             await state.logout();
-            if (context.mounted) Navigator.pushReplacementNamed(context, '/login');
           },
           child: const Text('Выйти'),
         ),

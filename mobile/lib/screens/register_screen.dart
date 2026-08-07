@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
+import 'home_shell.dart';
+import 'legal_doc_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -21,6 +23,44 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool listingRules = false;
   String? error;
   bool busy = false;
+
+  void _openLegal(String slug, String title) {
+    Navigator.push(context, fastRoute(LegalDocScreen(slug: slug, title: title)));
+  }
+
+  Widget _legalCheckbox({
+    required bool value,
+    required ValueChanged<bool?> onChanged,
+    required String prefix,
+    required String linkLabel,
+    required String slug,
+    required String title,
+  }) {
+    final scheme = Theme.of(context).colorScheme;
+    return CheckboxListTile(
+      value: value,
+      onChanged: onChanged,
+      controlAffinity: ListTileControlAffinity.leading,
+      title: Wrap(
+        crossAxisAlignment: WrapCrossAlignment.center,
+        children: [
+          Text('$prefix ', style: TextStyle(color: scheme.onSurface, fontSize: 14, height: 1.35)),
+          GestureDetector(
+            onTap: () => _openLegal(slug, title),
+            child: Text(
+              linkLabel,
+              style: TextStyle(
+                color: scheme.primary,
+                fontWeight: FontWeight.w700,
+                fontSize: 14,
+                decoration: TextDecoration.underline,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -53,23 +93,29 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 .toList(),
             onChanged: (v) => setState(() => settlementId = v),
           ),
-          CheckboxListTile(
+          _legalCheckbox(
             value: terms,
             onChanged: (v) => setState(() => terms = v ?? false),
-            title: const Text('Принимаю пользовательское соглашение'),
-            controlAffinity: ListTileControlAffinity.leading,
+            prefix: 'Принимаю',
+            linkLabel: 'пользовательское соглашение',
+            slug: 'terms',
+            title: 'Пользовательское соглашение',
           ),
-          CheckboxListTile(
+          _legalCheckbox(
             value: privacy,
             onChanged: (v) => setState(() => privacy = v ?? false),
-            title: const Text('Согласен с политикой конфиденциальности'),
-            controlAffinity: ListTileControlAffinity.leading,
+            prefix: 'Согласен с',
+            linkLabel: 'политикой конфиденциальности',
+            slug: 'privacy',
+            title: 'Политика конфиденциальности',
           ),
-          CheckboxListTile(
+          _legalCheckbox(
             value: listingRules,
             onChanged: (v) => setState(() => listingRules = v ?? false),
-            title: const Text('Принимаю правила объявлений'),
-            controlAffinity: ListTileControlAffinity.leading,
+            prefix: 'Принимаю',
+            linkLabel: 'правила объявлений',
+            slug: 'listing_rules',
+            title: 'Правила размещения объявлений',
           ),
           if (error != null) Text(error!, style: const TextStyle(color: Colors.red)),
           const SizedBox(height: 12),
@@ -79,6 +125,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
                 : () async {
                     if (settlementId == null) {
                       setState(() => error = 'Выберите населённый пункт');
+                      return;
+                    }
+                    if (!terms || !privacy || !listingRules) {
+                      setState(() => error = 'Нужно принять все соглашения');
                       return;
                     }
                     setState(() {
@@ -96,7 +146,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
                         'accepted_privacy': privacy,
                         'accepted_listing_rules': listingRules,
                       });
-                      if (context.mounted) Navigator.pushReplacementNamed(context, '/home');
+                      if (context.mounted) {
+                        Navigator.pushNamedAndRemoveUntil(context, '/home', (route) => false);
+                      }
                     } catch (e) {
                       setState(() => error = e.toString());
                     } finally {

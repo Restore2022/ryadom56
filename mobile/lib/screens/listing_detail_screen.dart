@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../auth_prompt.dart';
 import '../state/app_state.dart';
 import 'create_listing_screen.dart';
 import 'home_shell.dart';
@@ -61,12 +62,16 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
   }
 
   Future<void> _call(String phone) async {
+    final loggedIn = await ensureLoggedIn(context, message: 'Войдите, чтобы позвонить автору');
+    if (!loggedIn || !context.mounted) return;
     final uri = Uri(scheme: 'tel', path: phone.replaceAll(' ', ''));
     await launchUrl(uri);
   }
 
   Future<void> _toggleFavorite() async {
     if (favBusy || item == null) return;
+    final loggedIn = await ensureLoggedIn(context, message: 'Войдите, чтобы сохранить в избранное');
+    if (!loggedIn || !context.mounted) return;
     setState(() => favBusy = true);
     try {
       final updated = await context.read<AppState>().toggleFavorite(
@@ -86,6 +91,8 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
   }
 
   Future<void> _report() async {
+    final loggedIn = await ensureLoggedIn(context, message: 'Войдите, чтобы пожаловаться');
+    if (!loggedIn || !context.mounted) return;
     String reason = 'spam';
     final note = TextEditingController();
     final ok = await showDialog<bool>(

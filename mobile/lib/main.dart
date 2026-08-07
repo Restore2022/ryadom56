@@ -71,7 +71,6 @@ class RootGate extends StatelessWidget {
         ),
       );
     }
-    if (state.user == null) return const LoginScreen();
     return const HomeShell();
   }
 }

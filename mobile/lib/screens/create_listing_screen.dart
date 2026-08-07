@@ -28,7 +28,12 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
   String? error;
   bool busy = false;
   final List<XFile> photos = [];
+  final List<Map<String, dynamic>> existingImages = [];
   final picker = ImagePicker();
+
+  static const maxPhotos = 5;
+
+  int get totalPhotoCount => existingImages.length + photos.length;
 
   @override
   void initState() {
@@ -43,6 +48,15 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
       final p = initial['price'];
       if (p != null) price.text = '$p';
       phone.text = (initial['contact_phone'] as String?) ?? (user?['phone'] as String?) ?? '';
+      final imgs = (initial['images'] as List?) ?? [];
+      for (final img in imgs) {
+        if (img is Map<String, dynamic>) {
+          existingImages.add(Map<String, dynamic>.from(img));
+        } else if (img is Map) {
+          existingImages.add(Map<String, dynamic>.from(img));
+        }
+      }
+      existingImages.sort((a, b) => ((a['sort_order'] as int?) ?? 0).compareTo((b['sort_order'] as int?) ?? 0));
     } else {
       settlementId = user?['settlement_id'] as int?;
       phone.text = (user?['phone'] as String?) ?? '';
@@ -58,34 +72,182 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
     super.dispose();
   }
 
-  Future<void> _pickPhotos() async {
-    final remaining = 5 - photos.length;
-    if (remaining <= 0) return;
-    final picked = await picker.pickMultiImage(imageQuality: 40, maxWidth: 1280);
-    if (picked.isEmpty) return;
+  Future<void> _pickSource() async {
+    if (totalPhotoCount >= maxPhotos) return;
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.photo_camera_outlined),
+                title: const Text('Камера'),
+                onTap: () => Navigator.pop(ctx, ImageSource.camera),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined),
+                title: const Text('Галерея'),
+                onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (source == null || !mounted) return;
+    if (source == ImageSource.camera) {
+      final shot = await picker.pickImage(source: ImageSource.camera, imageQuality: 40, maxWidth: 1280);
+      if (shot == null) return;
+      setState(() => photos.add(shot));
+    } else {
+      final remaining = maxPhotos - totalPhotoCount;
+      if (remaining <= 0) return;
+      final picked = await picker.pickMultiImage(imageQuality: 40, maxWidth: 1280);
+      if (picked.isEmpty) return;
+      setState(() => photos.addAll(picked.take(remaining)));
+    }
+  }
+
+  Future<void> _deleteExisting(int index) async {
+    final img = existingImages[index];
+    final id = img['id'] as int?;
+    if (id == null || widget.listingId == null) return;
+    setState(() => busy = true);
+    try {
+      final updated = await context.read<AppState>().deleteListingImage(widget.listingId!, id);
+      final imgs = ((updated['images'] as List?) ?? []).whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+      setState(() {
+        existingImages
+          ..clear()
+          ..addAll(imgs);
+        error = null;
+      });
+    } catch (e) {
+      setState(() => error = AppState.userFriendlyError(e));
+    } finally {
+      if (mounted) setState(() => busy = false);
+    }
+  }
+
+  Future<void> _moveExisting(int index, int delta) async {
+    final next = index + delta;
+    if (next < 0 || next >= existingImages.length || widget.listingId == null) return;
     setState(() {
-      photos.addAll(picked.take(remaining));
+      final item = existingImages.removeAt(index);
+      existingImages.insert(next, item);
     });
+    try {
+      final ids = existingImages.map((e) => e['id'] as int).toList();
+      final updated = await context.read<AppState>().reorderListingImages(widget.listingId!, ids);
+      final imgs = ((updated['images'] as List?) ?? []).whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+      if (mounted) {
+        setState(() {
+          existingImages
+            ..clear()
+            ..addAll(imgs);
+        });
+      }
+    } catch (e) {
+      if (mounted) setState(() => error = AppState.userFriendlyError(e));
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final settlements = context.watch<AppState>().settlements;
+    final state = context.watch<AppState>();
     return Scaffold(
       appBar: AppBar(title: Text(widget.isEdit ? 'Редактировать' : 'Новое объявление')),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           Text(
-            widget.isEdit ? 'Добавить фото (до 5 новых)' : 'Фото (до 5)',
+            'Фото ($totalPhotoCount/$maxPhotos)',
             style: Theme.of(context).textTheme.titleSmall,
+          ),
+          const SizedBox(height: 4),
+          Text(
+            widget.isEdit
+                ? 'Можно удалить, поменять порядок и добавить новые (камера или галерея).'
+                : 'Камера или галерея, до $maxPhotos фото.',
+            style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 12),
           ),
           const SizedBox(height: 8),
           SizedBox(
-            height: 96,
+            height: 140,
             child: ListView(
               scrollDirection: Axis.horizontal,
               children: [
+                ...existingImages.asMap().entries.map((e) {
+                  final url = state.mediaUrl(e.value['url'] as String?);
+                  return Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: SizedBox(
+                      width: 96,
+                      child: Column(
+                        children: [
+                          Expanded(
+                            child: Stack(
+                              children: [
+                                ClipRRect(
+                                  borderRadius: BorderRadius.circular(12),
+                                  child: Image.network(
+                                    url,
+                                    width: 96,
+                                    height: 96,
+                                    fit: BoxFit.cover,
+                                    errorBuilder: (_, __, ___) => Container(
+                                      width: 96,
+                                      height: 96,
+                                      color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                                      child: const Icon(Icons.broken_image_outlined),
+                                    ),
+                                  ),
+                                ),
+                                Positioned(
+                                  top: 4,
+                                  right: 4,
+                                  child: InkWell(
+                                    onTap: busy ? null : () => _deleteExisting(e.key),
+                                    child: const CircleAvatar(
+                                      radius: 12,
+                                      backgroundColor: Colors.black54,
+                                      child: Icon(Icons.close, size: 14, color: Colors.white),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              IconButton(
+                                visualDensity: VisualDensity.compact,
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                                onPressed: e.key == 0 || busy ? null : () => _moveExisting(e.key, -1),
+                                icon: const Icon(Icons.chevron_left, size: 18),
+                              ),
+                              IconButton(
+                                visualDensity: VisualDensity.compact,
+                                padding: EdgeInsets.zero,
+                                constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+                                onPressed: e.key >= existingImages.length - 1 || busy
+                                    ? null
+                                    : () => _moveExisting(e.key, 1),
+                                icon: const Icon(Icons.chevron_right, size: 18),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                }),
                 ...photos.asMap().entries.map((e) {
                   return Padding(
                     padding: const EdgeInsets.only(right: 8),
@@ -111,9 +273,9 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
                     ),
                   );
                 }),
-                if (photos.length < 5)
+                if (totalPhotoCount < maxPhotos)
                   InkWell(
-                    onTap: _pickPhotos,
+                    onTap: busy ? null : _pickSource,
                     borderRadius: BorderRadius.circular(12),
                     child: Container(
                       width: 96,
@@ -221,15 +383,15 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
                       'contact_phone': phone.text.trim().isEmpty ? null : phone.text.trim(),
                     };
                     try {
-                      final state = context.read<AppState>();
+                      final app = context.read<AppState>();
                       if (widget.isEdit) {
-                        await state.updateListing(
+                        await app.updateListing(
                           widget.listingId!,
                           body,
                           imagePaths: photos.map((e) => e.path).toList(),
                         );
                       } else {
-                        await state.createListing(
+                        await app.createListing(
                           body,
                           imagePaths: photos.map((e) => e.path).toList(),
                         );

@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'home_shell.dart';
+import 'legal_doc_screen.dart';
+
 const supportPhone = '+79083211801';
 
 class AboutScreen extends StatelessWidget {
@@ -63,6 +66,36 @@ class AboutScreen extends StatelessWidget {
                   ],
                 ),
               ),
+            ),
+          ),
+          const SizedBox(height: 28),
+          Text('Документы', style: GoogleFonts.unbounded(fontSize: 18, fontWeight: FontWeight.w600)),
+          const SizedBox(height: 8),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Пользовательское соглашение'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(
+              context,
+              fastRoute(const LegalDocScreen(slug: 'terms', title: 'Пользовательское соглашение')),
+            ),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Политика конфиденциальности'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(
+              context,
+              fastRoute(const LegalDocScreen(slug: 'privacy', title: 'Политика конфиденциальности')),
+            ),
+          ),
+          ListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Правила объявлений'),
+            trailing: const Icon(Icons.chevron_right),
+            onTap: () => Navigator.push(
+              context,
+              fastRoute(const LegalDocScreen(slug: 'listing_rules', title: 'Правила размещения объявлений')),
             ),
           ),
           const SizedBox(height: 16),
