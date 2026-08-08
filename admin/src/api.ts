@@ -70,6 +70,7 @@ export type Listing = {
   moderation_note?: string | null;
   close_reason?: string | null;
   close_note?: string | null;
+  is_urgent?: boolean;
   images?: { id: number; url: string; sort_order: number }[];
   created_at: string;
 };
@@ -82,6 +83,7 @@ export type ListingReport = {
   reporter_name?: string | null;
   reason: string;
   note?: string | null;
+  moderator_reply?: string | null;
   status: string;
   created_at: string;
 };

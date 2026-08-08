@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:device_info_plus/device_info_plus.dart';
@@ -23,6 +24,8 @@ class AppState extends ChangeNotifier {
   List<dynamic> directory = [];
   List<dynamic> favorites = [];
   final Set<int> favoriteIds = {};
+  final Set<int> directoryFavoriteIds = {};
+  List<Map<String, dynamic>> viewHistory = [];
   String? error;
   bool listingsOffline = false;
 
@@ -102,6 +105,7 @@ class AppState extends ChangeNotifier {
     try {
       final prefs = await SharedPreferences.getInstance();
       darkMode = prefs.getBool('dark_mode') ?? false;
+      await _loadViewHistory(prefs);
       settlements = await api.request('/settlements') as List<dynamic>;
       final token = await api.token;
       if (token != null) {
@@ -251,7 +255,12 @@ class AppState extends ChangeNotifier {
       if (directoryQuery.trim().isNotEmpty) params['q'] = directoryQuery.trim();
       final qs = params.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&');
       final path = qs.isEmpty ? '/directory' : '/directory?$qs';
-      directory = await api.request(path) as List<dynamic>;
+      directory = await api.request(path, auth: true) as List<dynamic>;
+      for (final item in directory) {
+        if (item is Map && item['is_favorited'] == true && item['id'] is int) {
+          directoryFavoriteIds.add(item['id'] as int);
+        }
+      }
     } finally {
       directoryLoading = false;
       notifyListeners();
@@ -519,6 +528,79 @@ class AppState extends ChangeNotifier {
 
   String mediaUrl(String? path) => api.resolveMedia(path);
 
+  Future<void> _loadViewHistory(SharedPreferences prefs) async {
+    final raw = prefs.getString('view_history');
+    if (raw == null || raw.isEmpty) {
+      viewHistory = [];
+      return;
+    }
+    try {
+      final list = jsonDecode(raw) as List<dynamic>;
+      viewHistory = list.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+    } catch (_) {
+      viewHistory = [];
+    }
+  }
+
+  Future<void> addViewHistory(Map<String, dynamic> item) async {
+    final id = item['id'];
+    if (id is! int) return;
+    viewHistory.removeWhere((e) => e['id'] == id);
+    viewHistory.insert(0, {
+      'id': id,
+      'title': item['title'],
+      'category': item['category'],
+      'price': item['price'],
+      'settlement_name': item['settlement_name'],
+      'images': item['images'],
+      'author_id': item['author_id'],
+      'is_urgent': item['is_urgent'] == true,
+    });
+    if (viewHistory.length > 30) {
+      viewHistory = viewHistory.take(30).toList();
+    }
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('view_history', jsonEncode(viewHistory));
+    notifyListeners();
+  }
+
+  Future<void> clearViewHistory() async {
+    viewHistory = [];
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('view_history');
+    notifyListeners();
+  }
+
+  Future<Map<String, dynamic>> toggleDirectoryFavorite(int id, {bool? currentlyFavorited}) async {
+    final was = currentlyFavorited ?? directoryFavoriteIds.contains(id);
+    final updated = was
+        ? await api.request('/directory/$id/favorite', method: 'DELETE', auth: true) as Map<String, dynamic>
+        : await api.request('/directory/$id/favorite', method: 'POST', auth: true) as Map<String, dynamic>;
+    final favorited = updated['is_favorited'] == true;
+    if (favorited) {
+      directoryFavoriteIds.add(id);
+    } else {
+      directoryFavoriteIds.remove(id);
+    }
+    for (var i = 0; i < directory.length; i++) {
+      final item = directory[i];
+      if (item is Map && item['id'] == id) {
+        directory[i] = {...Map<String, dynamic>.from(item), 'is_favorited': favorited};
+      }
+    }
+    notifyListeners();
+    return updated;
+  }
+
+  Future<List<dynamic>> loadDirectoryFavorites() async {
+    final rows = await api.request('/directory/favorites', auth: true) as List<dynamic>;
+    directoryFavoriteIds
+      ..clear()
+      ..addAll(rows.whereType<Map>().where((e) => e['id'] is int).map((e) => e['id'] as int));
+    notifyListeners();
+    return rows;
+  }
+
   Future<void> login(String email, String password) async {
     final data = await api.request('/auth/login', method: 'POST', body: {
       'email': email,
@@ -547,6 +629,7 @@ class AppState extends ChangeNotifier {
     user = null;
     favorites = [];
     favoriteIds.clear();
+    directoryFavoriteIds.clear();
     unreadNotifications = 0;
     await loadListings();
     notifyListeners();

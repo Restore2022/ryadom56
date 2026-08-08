@@ -50,9 +50,29 @@ CLOSE_REASON_LABELS = {
     "other": "Другое",
 }
 
+MAX_ACTIVE_LISTINGS = 5
+
 
 def image_url(path: str) -> str:
     return f"/uploads/{path.replace(chr(92), '/')}"
+
+
+def count_active_listings(db: Session, user_id: int, exclude_id: int | None = None) -> int:
+    stmt = select(func.count()).select_from(Listing).where(
+        Listing.author_id == user_id,
+        Listing.status.in_([ListingStatus.pending, ListingStatus.approved]),
+    )
+    if exclude_id is not None:
+        stmt = stmt.where(Listing.id != exclude_id)
+    return int(db.execute(stmt).scalar_one())
+
+
+def ensure_active_slot(db: Session, user_id: int, exclude_id: int | None = None) -> None:
+    if count_active_listings(db, user_id, exclude_id=exclude_id) >= MAX_ACTIVE_LISTINGS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Лимит активных объявлений: {MAX_ACTIVE_LISTINGS}. Снимите или дождитесь решения по текущим.",
+        )
 
 
 def to_out(item: Listing, favorited_ids: set[int] | None = None) -> ListingOut:
@@ -75,6 +95,7 @@ def to_out(item: Listing, favorited_ids: set[int] | None = None) -> ListingOut:
         moderation_note=item.moderation_note,
         close_reason=item.close_reason,
         close_note=item.close_note,
+        is_urgent=bool(getattr(item, "is_urgent", False)),
         images=images,
         is_favorited=bool(favorited_ids and item.id in favorited_ids),
         created_at=item.created_at,
@@ -250,6 +271,8 @@ def create_listing(
 ):
     data = payload.model_dump()
     as_draft = bool(data.pop("as_draft", False))
+    if not as_draft:
+        ensure_active_slot(db, user.id)
     item = Listing(
         author_id=user.id,
         settlement_id=data["settlement_id"],
@@ -258,6 +281,7 @@ def create_listing(
         description=data["description"].strip(),
         price=data.get("price"),
         contact_phone=data.get("contact_phone"),
+        is_urgent=bool(data.get("is_urgent", False)),
         status=ListingStatus.draft if as_draft else ListingStatus.pending,
     )
     db.add(item)
@@ -286,6 +310,8 @@ def update_listing(
         if as_draft is True:
             item.status = ListingStatus.draft
         else:
+            if item.status not in (ListingStatus.pending, ListingStatus.approved):
+                ensure_active_slot(db, user.id, exclude_id=item.id)
             item.status = ListingStatus.pending
         item.close_reason = None
         item.close_note = None
@@ -329,6 +355,7 @@ def republish_listing(
         raise HTTPException(status_code=403, detail="Нет доступа")
     if item.status not in (ListingStatus.archived, ListingStatus.rejected, ListingStatus.draft):
         raise HTTPException(status_code=400, detail="Повторно опубликовать можно черновик, снятое или отклонённое")
+    ensure_active_slot(db, user.id, exclude_id=item.id)
     item.status = ListingStatus.pending
     item.close_reason = None
     item.close_note = None
@@ -518,6 +545,8 @@ def moderate_listing(
 ):
     if payload.status not in (ListingStatus.approved, ListingStatus.rejected, ListingStatus.archived):
         raise HTTPException(status_code=400, detail="Недопустимый статус модерации")
+    if payload.status == ListingStatus.rejected and not (payload.moderation_note or "").strip():
+        raise HTTPException(status_code=400, detail="Укажите причину отклонения")
     item = load_listing(db, listing_id)
     if not item:
         raise HTTPException(status_code=404, detail="Объявление не найдено")

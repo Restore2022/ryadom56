@@ -347,6 +347,12 @@ function ModerationPage() {
   }, [items, category, query]);
 
   async function moderate(id: number, status: 'approved' | 'rejected', noteOverride?: string | null) {
+    if (status === 'rejected') {
+      if (!(noteOverride ?? moderationNote).trim()) {
+        setError('Укажите причину отклонения');
+        return;
+      }
+    }
     setBusyId(id);
     try {
       const note =
@@ -371,7 +377,11 @@ function ModerationPage() {
     if (status === 'rejected') {
       const note = window.prompt('Причина отклонения для автора');
       if (note === null) return;
-      moderation_note = note.trim() || null;
+      if (!note.trim()) {
+        alert('Укажите причину отклонения');
+        return;
+      }
+      moderation_note = note.trim();
     }
     setBulkBusy(true);
     try {
@@ -546,12 +556,19 @@ function ModerationPage() {
                 placeholder="Укажите причину, если отклоняете"
                 rows={3}
               />
+              <span className="muted" style={{ display: 'block', marginTop: 6, fontSize: 13 }}>
+                Обязательно при отклонении
+              </span>
             </label>
             <div className="modal-actions">
               <button className="btn" disabled={busyId === selected.id} onClick={() => moderate(selected.id, 'approved')}>
                 Одобрить
               </button>
-              <button className="btn danger" disabled={busyId === selected.id} onClick={() => moderate(selected.id, 'rejected')}>
+              <button
+                className="btn danger"
+                disabled={busyId === selected.id || !moderationNote.trim()}
+                onClick={() => moderate(selected.id, 'rejected')}
+              >
                 Отклонить
               </button>
               <button className="btn secondary" onClick={closeModal}>
@@ -585,7 +602,11 @@ function ReportsPage() {
   }, [status]);
 
   async function setReportStatus(id: number, next: 'reviewed' | 'dismissed') {
-    await api(`/admin/reports/${id}`, { method: 'PATCH', body: JSON.stringify({ status: next }) });
+    const reply = window.prompt('Короткий ответ автору жалобы (необязательно)');
+    await api(`/admin/reports/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status: next, moderator_reply: reply?.trim() || null }),
+    });
     await load();
   }
 
@@ -627,6 +648,7 @@ function ReportsPage() {
                 <span className="chip">{r.status}</span>
               </div>
               {r.note && <p className="row-body">{r.note}</p>}
+              {r.moderator_reply && <p className="muted">Ответ: {r.moderator_reply}</p>}
               <p className="muted">{formatDate(r.created_at)}</p>
             </div>
             <div className="actions">

@@ -115,6 +115,8 @@ def bulk_moderate(
 ):
     if payload.status not in (ListingStatus.approved, ListingStatus.rejected, ListingStatus.archived):
         raise HTTPException(status_code=400, detail="Недопустимый статус")
+    if payload.status == ListingStatus.rejected and not (payload.moderation_note or "").strip():
+        raise HTTPException(status_code=400, detail="Укажите причину отклонения")
     items = db.execute(
         select(Listing)
         .options(selectinload(Listing.author), selectinload(Listing.settlement), selectinload(Listing.images))
@@ -184,6 +186,7 @@ def list_reports(
             reason=r.reason,
             note=r.note,
             status=r.status,
+            moderator_reply=getattr(r, "moderator_reply", None),
             created_at=r.created_at,
         )
         for r in rows
@@ -207,22 +210,27 @@ def update_report(
     report.status = payload.status
     report.reviewed_at = datetime.now(timezone.utc)
     report.reviewed_by_id = user.id
+    reply = (payload.moderator_reply or "").strip() or None
+    report.moderator_reply = reply
     log_action(
         db,
         actor=user,
         action=f"report.{payload.status}",
         entity_type="report",
         entity_id=report.id,
-        details=f"listing={report.listing_id}",
+        details=f"listing={report.listing_id}; reply={reply or ''}",
     )
     title_txt = report.listing.title if report.listing else f"#{report.listing_id}"
     status_label = "просмотрена" if payload.status == "reviewed" else "отклонена"
+    body = f"Ваша жалоба на «{title_txt}» {status_label}."
+    if reply:
+        body = f"{body} Ответ модератора: {reply}"
     notify_user(
         db,
         user_id=report.reporter_id,
         type="report_reviewed",
         title="Жалоба рассмотрена",
-        body=f"Ваша жалоба на «{title_txt}» {status_label}.",
+        body=body,
         listing_id=report.listing_id,
     )
     db.commit()
@@ -236,6 +244,7 @@ def update_report(
         reason=report.reason,
         note=report.note,
         status=report.status,
+        moderator_reply=report.moderator_reply,
         created_at=report.created_at,
     )
 

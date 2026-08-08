@@ -22,6 +22,11 @@ USER_COLUMNS = {
 LISTING_COLUMNS = {
     "close_reason": "VARCHAR(40)",
     "close_note": "TEXT",
+    "is_urgent": "BOOLEAN DEFAULT 0",
+}
+
+REPORT_COLUMNS = {
+    "moderator_reply": "TEXT",
 }
 
 DIRECTORY_COLUMNS = {
@@ -36,6 +41,7 @@ def init_db() -> None:
     _migrate_user_columns()
     _migrate_listing_columns()
     _migrate_directory_columns()
+    _migrate_report_columns()
 
 
 def _migrate_user_columns() -> None:
@@ -69,6 +75,17 @@ def _migrate_directory_columns() -> None:
         for name, sql_type in DIRECTORY_COLUMNS.items():
             if name not in existing:
                 conn.execute(text(f"ALTER TABLE directory_items ADD COLUMN {name} {sql_type}"))
+
+
+def _migrate_report_columns() -> None:
+    inspector = inspect(engine)
+    if "listing_reports" not in inspector.get_table_names():
+        return
+    existing = {col["name"] for col in inspector.get_columns("listing_reports")}
+    with engine.begin() as conn:
+        for name, sql_type in REPORT_COLUMNS.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE listing_reports ADD COLUMN {name} {sql_type}"))
 
 
 def seed_db(session: Session) -> None:

@@ -14,6 +14,8 @@ import 'legal_doc_screen.dart';
 import 'listing_detail_screen.dart';
 import 'my_listings_screen.dart';
 import 'notifications_screen.dart';
+import 'view_history_screen.dart';
+import 'directory_favorites_screen.dart';
 
 Route<T> fastRoute<T>(Widget page) {
   return PageRouteBuilder<T>(
@@ -134,10 +136,22 @@ class _HomeShellState extends State<HomeShell> {
       bottomNavigationBar: NavigationBar(
         selectedIndex: index,
         onDestinationSelected: (i) => setState(() => index = i),
-        destinations: const [
-          NavigationDestination(icon: Icon(Icons.storefront_outlined), selectedIcon: Icon(Icons.storefront), label: 'Лента'),
-          NavigationDestination(icon: Icon(Icons.map_outlined), selectedIcon: Icon(Icons.map), label: 'Справочник'),
-          NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: 'Профиль'),
+        destinations: [
+          const NavigationDestination(icon: Icon(Icons.storefront_outlined), selectedIcon: Icon(Icons.storefront), label: 'Лента'),
+          const NavigationDestination(icon: Icon(Icons.map_outlined), selectedIcon: Icon(Icons.map), label: 'Справочник'),
+          NavigationDestination(
+            icon: Badge(
+              isLabelVisible: state.user != null && state.unreadNotifications > 0,
+              label: Text('${state.unreadNotifications > 99 ? 99 : state.unreadNotifications}'),
+              child: const Icon(Icons.person_outline),
+            ),
+            selectedIcon: Badge(
+              isLabelVisible: state.user != null && state.unreadNotifications > 0,
+              label: Text('${state.unreadNotifications > 99 ? 99 : state.unreadNotifications}'),
+              child: const Icon(Icons.person),
+            ),
+            label: 'Профиль',
+          ),
         ],
       ),
       floatingActionButton: index == 0
@@ -431,6 +445,7 @@ class _ListingCard extends StatelessWidget {
       child: InkWell(
         borderRadius: BorderRadius.circular(18),
         onTap: () {
+          state.addViewHistory(item);
           Navigator.push(
             context,
             fastRoute(ListingDetailScreen(listingId: id, preview: item)),
@@ -440,7 +455,14 @@ class _ListingCard extends StatelessWidget {
           padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(18),
-            border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.45)),
+            border: Border.all(
+              color: item['is_urgent'] == true
+                  ? scheme.error.withValues(alpha: 0.55)
+                  : item['category'] == 'free'
+                      ? scheme.tertiary.withValues(alpha: 0.55)
+                      : scheme.outlineVariant.withValues(alpha: 0.45),
+              width: (item['is_urgent'] == true || item['category'] == 'free') ? 1.6 : 1,
+            ),
           ),
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -472,14 +494,33 @@ class _ListingCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Row(
+                    Wrap(
+                      spacing: 6,
+                      runSpacing: 4,
+                      crossAxisAlignment: WrapCrossAlignment.center,
                       children: [
-                        Expanded(
-                          child: Text(
-                            categoryLabels[item['category']] ?? '${item['category']}',
-                            style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700, fontSize: 12),
-                          ),
+                        Text(
+                          categoryLabels[item['category']] ?? '${item['category']}',
+                          style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700, fontSize: 12),
                         ),
+                        if (item['is_urgent'] == true)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: scheme.error.withValues(alpha: 0.15),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text('Срочно', style: TextStyle(color: scheme.error, fontWeight: FontWeight.w800, fontSize: 11)),
+                          ),
+                        if (item['category'] == 'free')
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: scheme.tertiary.withValues(alpha: 0.18),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text('Бесплатно', style: TextStyle(color: scheme.tertiary, fontWeight: FontWeight.w800, fontSize: 11)),
+                          ),
                         if (item['price'] != null)
                           Text(
                             '${item['price']} ₽',
@@ -659,6 +700,7 @@ class _DirectoryTabState extends State<_DirectoryTab> {
                         itemBuilder: (_, i) {
                           final item = items[i] as Map<String, dynamic>;
                           final phone = item['phone']?.toString();
+                          final dirFav = item['is_favorited'] == true;
                           return Material(
                             color: Theme.of(context).cardTheme.color,
                             borderRadius: BorderRadius.circular(18),
@@ -679,11 +721,37 @@ class _DirectoryTabState extends State<_DirectoryTab> {
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [
-                                    Text(
-                                      categoryLabels[item['category']] ?? '${item['category']}',
-                                      style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700, fontSize: 12),
+                                    Row(
+                                      children: [
+                                        Expanded(
+                                          child: Text(
+                                            categoryLabels[item['category']] ?? '${item['category']}',
+                                            style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700, fontSize: 12),
+                                          ),
+                                        ),
+                                        IconButton(
+                                          visualDensity: VisualDensity.compact,
+                                          tooltip: dirFav ? 'Убрать из избранного' : 'В избранное',
+                                          onPressed: () async {
+                                            final ok = await ensureLoggedIn(context, message: 'Войдите, чтобы сохранить организацию');
+                                            if (!ok || !context.mounted) return;
+                                            try {
+                                              await state.toggleDirectoryFavorite(item['id'] as int, currentlyFavorited: dirFav);
+                                            } catch (e) {
+                                              if (context.mounted) {
+                                                ScaffoldMessenger.of(context).showSnackBar(
+                                                  SnackBar(content: Text(AppState.userFriendlyError(e))),
+                                                );
+                                              }
+                                            }
+                                          },
+                                          icon: Icon(
+                                            dirFav ? Icons.bookmark : Icons.bookmark_border,
+                                            color: dirFav ? scheme.primary : scheme.onSurfaceVariant,
+                                          ),
+                                        ),
+                                      ],
                                     ),
-                                    const SizedBox(height: 8),
                                     Text(
                                       item['title'] as String,
                                       style: GoogleFonts.manrope(fontSize: 18, fontWeight: FontWeight.w800),
@@ -941,6 +1009,22 @@ class _ProfileTab extends StatelessWidget {
           trailing: const Icon(Icons.chevron_right),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           onTap: () => Navigator.push(context, fastRoute(const FavoritesScreen())),
+        ),
+        ListTile(
+          leading: const Icon(Icons.bookmark_outline),
+          title: const Text('Избранные организации'),
+          subtitle: const Text('Справочник'),
+          trailing: const Icon(Icons.chevron_right),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          onTap: () => Navigator.push(context, fastRoute(const DirectoryFavoritesScreen())),
+        ),
+        ListTile(
+          leading: const Icon(Icons.history),
+          title: const Text('История просмотров'),
+          subtitle: const Text('Недавно открытые объявления'),
+          trailing: const Icon(Icons.chevron_right),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          onTap: () => Navigator.push(context, fastRoute(const ViewHistoryScreen())),
         ),
         ListTile(
           leading: const Icon(Icons.manage_accounts_outlined),

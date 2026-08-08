@@ -103,6 +103,7 @@ class Listing(Base):
     contact_phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
     status: Mapped[ListingStatus] = mapped_column(Enum(ListingStatus), default=ListingStatus.pending)
     moderation_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    is_urgent: Mapped[bool] = mapped_column(Boolean, default=False)
     close_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
     close_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -188,6 +189,7 @@ class ListingReport(Base):
     reason: Mapped[str] = mapped_column(String(40), nullable=False)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="open")  # open / reviewed / dismissed
+    moderator_reply: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     reviewed_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
@@ -195,6 +197,18 @@ class ListingReport(Base):
     listing: Mapped["Listing"] = relationship()
     reporter: Mapped["User"] = relationship(foreign_keys=[reporter_id], back_populates="reports")
     reviewed_by: Mapped["User | None"] = relationship(foreign_keys=[reviewed_by_id])
+
+
+class DirectoryFavorite(Base):
+    __tablename__ = "directory_favorites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    directory_id: Mapped[int] = mapped_column(ForeignKey("directory_items.id"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    user: Mapped["User"] = relationship()
+    directory_item: Mapped["DirectoryItem"] = relationship()
 
 
 class AuditLog(Base):

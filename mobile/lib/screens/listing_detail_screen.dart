@@ -51,6 +51,7 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
           loading = false;
           error = null;
         });
+        context.read<AppState>().addViewHistory(data);
       }
     } catch (e) {
       if (mounted) {

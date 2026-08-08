@@ -25,8 +25,10 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
   final phone = TextEditingController();
   String category = 'goods';
   int? settlementId;
+  bool isUrgent = false;
   String? error;
   bool busy = false;
+  bool savedOnExit = false;
   final List<XFile> photos = [];
   final List<Map<String, dynamic>> existingImages = [];
   final picker = ImagePicker();
@@ -48,6 +50,7 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
       final p = initial['price'];
       if (p != null) price.text = '$p';
       phone.text = (initial['contact_phone'] as String?) ?? (user?['phone'] as String?) ?? '';
+      isUrgent = initial['is_urgent'] == true;
       final imgs = (initial['images'] as List?) ?? [];
       for (final img in imgs) {
         if (img is Map<String, dynamic>) {
@@ -159,7 +162,13 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
   Widget build(BuildContext context) {
     final settlements = context.watch<AppState>().settlements;
     final state = context.watch<AppState>();
-    return Scaffold(
+    return PopScope(
+      canPop: true,
+      onPopInvokedWithResult: (didPop, _) async {
+        if (!didPop || savedOnExit || busy) return;
+        await _autosaveDraft();
+      },
+      child: Scaffold(
       appBar: AppBar(title: Text(widget.isEdit ? 'Редактировать' : 'Новое объявление')),
       body: ListView(
         padding: const EdgeInsets.all(16),
@@ -340,6 +349,13 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
             controller: phone,
             decoration: const InputDecoration(labelText: 'Телефон для связи', border: OutlineInputBorder()),
           ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: isUrgent,
+            onChanged: (v) => setState(() => isUrgent = v),
+            title: const Text('Срочно'),
+            subtitle: const Text('Выделить объявление в ленте'),
+          ),
           if (widget.isEdit) ...[
             const SizedBox(height: 8),
             Text(
@@ -367,7 +383,35 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
           ),
         ],
       ),
+    ),
     );
+  }
+
+  bool get _hasContent {
+    return title.text.trim().length >= 2 || description.text.trim().length >= 3 || photos.isNotEmpty || existingImages.isNotEmpty;
+  }
+
+  Future<void> _autosaveDraft() async {
+    if (!_hasContent || settlementId == null) return;
+    if (title.text.trim().length < 2 || description.text.trim().length < 3) return;
+    try {
+      final body = {
+        'title': title.text.trim(),
+        'description': description.text.trim(),
+        'category': category,
+        'settlement_id': settlementId,
+        'price': price.text.trim().isEmpty ? null : double.tryParse(price.text.trim().replaceAll(',', '.')),
+        'contact_phone': phone.text.trim().isEmpty ? null : phone.text.trim(),
+        'is_urgent': isUrgent,
+      };
+      final app = context.read<AppState>();
+      if (widget.isEdit) {
+        await app.updateListing(widget.listingId!, body, imagePaths: photos.map((e) => e.path).toList(), asDraft: true);
+      } else {
+        await app.createListing(body, imagePaths: photos.map((e) => e.path).toList(), asDraft: true);
+      }
+      savedOnExit = true;
+    } catch (_) {}
   }
 
   Future<void> _submit({required bool asDraft}) async {
@@ -396,6 +440,7 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
       'settlement_id': settlementId,
       'price': price.text.trim().isEmpty ? null : double.tryParse(price.text.trim().replaceAll(',', '.')),
       'contact_phone': phone.text.trim().isEmpty ? null : phone.text.trim(),
+      'is_urgent': isUrgent,
     };
     try {
       final app = context.read<AppState>();
@@ -413,6 +458,7 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
           asDraft: asDraft,
         );
       }
+      savedOnExit = true;
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

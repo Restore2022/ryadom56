@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../auth_prompt.dart';
 import '../state/app_state.dart';
 import 'home_shell.dart';
 
@@ -54,7 +55,34 @@ class DirectoryDetailScreen extends StatelessWidget {
     final hasMap = (item['lat'] is num && item['lon'] is num) || (address != null && address.isNotEmpty);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Контакт')),
+      appBar: AppBar(
+        title: const Text('Контакт'),
+        actions: [
+          Consumer<AppState>(
+            builder: (context, state, _) {
+              final id = item['id'] as int?;
+              final fav = id != null && (state.directoryFavoriteIds.contains(id) || item['is_favorited'] == true);
+              return IconButton(
+                tooltip: fav ? 'Убрать из избранного' : 'В избранное',
+                onPressed: id == null
+                    ? null
+                    : () async {
+                        final ok = await ensureLoggedIn(context, message: 'Войдите, чтобы сохранить организацию');
+                        if (!ok || !context.mounted) return;
+                        try {
+                          await state.toggleDirectoryFavorite(id, currentlyFavorited: fav);
+                        } catch (e) {
+                          if (context.mounted) {
+                            ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AppState.userFriendlyError(e))));
+                          }
+                        }
+                      },
+                icon: Icon(fav ? Icons.bookmark : Icons.bookmark_border),
+              );
+            },
+          ),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
         children: [

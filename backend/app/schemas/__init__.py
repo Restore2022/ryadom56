@@ -104,6 +104,7 @@ class ListingCreate(BaseModel):
     settlement_id: int
     price: float | None = None
     contact_phone: str | None = Field(default=None, max_length=32)
+    is_urgent: bool = False
     as_draft: bool = False
 
 
@@ -114,6 +115,7 @@ class ListingUpdate(BaseModel):
     settlement_id: int | None = None
     price: float | None = None
     contact_phone: str | None = None
+    is_urgent: bool | None = None
     as_draft: bool | None = None
 
 
@@ -152,6 +154,7 @@ class ListingOut(BaseModel):
     moderation_note: str | None
     close_reason: str | None = None
     close_note: str | None = None
+    is_urgent: bool = False
     images: list[ListingImageOut] = []
     is_favorited: bool = False
     created_at: datetime
@@ -190,6 +193,7 @@ class ListingReportOut(BaseModel):
     reason: str
     note: str | None
     status: str
+    moderator_reply: str | None = None
     created_at: datetime
 
     class Config:
@@ -198,6 +202,7 @@ class ListingReportOut(BaseModel):
 
 class ReportStatusUpdate(BaseModel):
     status: str = Field(pattern="^(open|reviewed|dismissed)$")
+    moderator_reply: str | None = Field(default=None, max_length=500)
 
 
 class BulkModerateIn(BaseModel):
@@ -259,6 +264,7 @@ class DirectoryOut(BaseModel):
     lat: float | None
     lon: float | None
     is_published: bool
+    is_favorited: bool = False
     created_at: datetime
     updated_at: datetime
 
