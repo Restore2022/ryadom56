@@ -5,7 +5,20 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api import admin_panel, app_update, auth, directory, events, legal, listings, notifications, settlements, transport
+from app.api import (
+    admin_panel,
+    alerts,
+    app_update,
+    auth,
+    directory,
+    events,
+    legal,
+    listings,
+    news,
+    notifications,
+    settlements,
+    transport,
+)
 from app.core.config import settings
 from app.core.database import SessionLocal
 from app.services.seed import init_db, seed_db
@@ -36,6 +49,8 @@ app.include_router(listings.router, prefix="/api")
 app.include_router(directory.router, prefix="/api")
 app.include_router(events.router, prefix="/api")
 app.include_router(transport.router, prefix="/api")
+app.include_router(news.router, prefix="/api")
+app.include_router(alerts.router, prefix="/api")
 app.include_router(legal.router, prefix="/api")
 app.include_router(notifications.router, prefix="/api")
 app.include_router(app_update.router, prefix="/api")

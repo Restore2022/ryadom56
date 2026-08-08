@@ -6,10 +6,12 @@ import type {
   BlacklistEntry,
   DirectoryItem,
   AppUpdateInfo,
+  DistrictAlert,
   EventItem,
   LegalDocument,
   Listing,
   ListingReport,
+  NewsItem,
   Settlement,
   Stats,
   TransportRoute,
@@ -417,6 +419,16 @@ function Shell({
               <span className="nav-ico">→</span> Транспорт
             </NavLink>
           )}
+          {directory && (
+            <NavLink to="/news">
+              <span className="nav-ico">✉</span> Новости
+            </NavLink>
+          )}
+          {directory && (
+            <NavLink to="/alerts">
+              <span className="nav-ico">⚡</span> Срочное
+            </NavLink>
+          )}
           {mod && (
             <NavLink to="/blacklist">
               <span className="nav-ico">⊘</span> Чёрный список
@@ -544,6 +556,14 @@ function Dashboard({ isAdmin }: { isAdmin?: boolean }) {
           <div className="label">Маршруты</div>
           <div className="value">{stats.transport_routes ?? 0}</div>
         </div>
+        <div className="stat brand">
+          <div className="label">Новости</div>
+          <div className="value">{stats.news_total ?? 0}</div>
+        </div>
+        <div className="stat warn">
+          <div className="label">Активные срочные</div>
+          <div className="value">{stats.active_alerts ?? 0}</div>
+        </div>
         <div className="stat">
           <div className="label">Одобр. / откл. (30 дн.)</div>
           <div className="value" style={{ fontSize: 22 }}>
@@ -584,6 +604,26 @@ function Dashboard({ isAdmin }: { isAdmin?: boolean }) {
               </li>
             ))}
             {!stats.top_categories?.length && <li className="muted">Пока нет данных</li>}
+          </ul>
+        </div>
+        <div className="panel">
+          <h2>Топ афиши / транспорта</h2>
+          <ul className="cat-list">
+            {(stats.top_events || []).map((e) => (
+              <li key={`ev-${e.id}`}>
+                <span>{e.title}</span>
+                <strong>{e.views}</strong>
+              </li>
+            ))}
+            {(stats.top_routes || []).map((r) => (
+              <li key={`rt-${r.id}`}>
+                <span>{r.title}</span>
+                <strong>{r.views}</strong>
+              </li>
+            ))}
+            {!stats.top_events?.length && !stats.top_routes?.length && (
+              <li className="muted">Пока нет просмотров</li>
+            )}
           </ul>
         </div>
       </div>
@@ -2071,6 +2111,12 @@ function UsersPage() {
   );
 }
 
+const EVENT_STATUS_LABELS: Record<string, string> = {
+  draft: 'Черновик',
+  scheduled: 'Запланировано',
+  published: 'Опубликовано',
+};
+
 type EventForm = {
   title: string;
   description: string;
@@ -2080,6 +2126,7 @@ type EventForm = {
   settlement_id: number | '';
   address: string;
   is_published: boolean;
+  publish_at: string;
 };
 
 const EMPTY_EVENT: EventForm = {
@@ -2091,6 +2138,7 @@ const EMPTY_EVENT: EventForm = {
   settlement_id: '',
   address: '',
   is_published: true,
+  publish_at: '',
 };
 
 function EventsPage() {
@@ -2098,15 +2146,18 @@ function EventsPage() {
   const [settlements, setSettlements] = useState<Settlement[]>([]);
   const [form, setForm] = useState<EventForm>(EMPTY_EVENT);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [coverPreview, setCoverPreview] = useState<string | null>(null);
+  const [coverFile, setCoverFile] = useState<File | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
-  const [publishedFilter, setPublishedFilter] = useState<'all' | 'published' | 'hidden'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'draft' | 'scheduled' | 'published'>('all');
 
   async function load() {
+    const qs = statusFilter === 'all' ? '' : `?status=${statusFilter}`;
     const [ev, s] = await Promise.all([
-      api<EventItem[]>('/events'),
+      api<EventItem[]>(`/events${qs}`),
       api<Settlement[]>('/settlements'),
     ]);
     setItems(ev);
@@ -2115,11 +2166,13 @@ function EventsPage() {
 
   useEffect(() => {
     load().catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
-  }, []);
+  }, [statusFilter]);
 
   function openCreate() {
     setEditingId(null);
     setForm(EMPTY_EVENT);
+    setCoverPreview(null);
+    setCoverFile(null);
     setError('');
     setModalOpen(true);
   }
@@ -2135,7 +2188,10 @@ function EventsPage() {
       settlement_id: item.settlement_id ?? '',
       address: item.address || '',
       is_published: item.is_published,
+      publish_at: toDatetimeLocal(item.publish_at),
     });
+    setCoverPreview(item.cover_url ? mediaUrl(item.cover_url) : null);
+    setCoverFile(null);
     setError('');
     setModalOpen(true);
   }
@@ -2144,6 +2200,13 @@ function EventsPage() {
     if (busy) return;
     setModalOpen(false);
     setError('');
+    setCoverFile(null);
+  }
+
+  async function uploadCover(eventId: number, file: File) {
+    const fd = new FormData();
+    fd.append('file', file);
+    await api(`/events/${eventId}/cover`, { method: 'POST', body: fd });
   }
 
   async function saveItem(e: React.FormEvent) {
@@ -2164,14 +2227,21 @@ function EventsPage() {
       settlement_id: form.settlement_id === '' ? null : Number(form.settlement_id),
       address: form.address.trim() || null,
       is_published: form.is_published,
+      publish_at: form.publish_at ? fromDatetimeLocal(form.publish_at) : null,
     };
     try {
+      let id = editingId;
       if (editingId) {
         await api(`/events/${editingId}`, { method: 'PATCH', body: JSON.stringify(body) });
       } else {
-        await api('/events', { method: 'POST', body: JSON.stringify(body) });
+        const created = await api<EventItem>('/events', { method: 'POST', body: JSON.stringify(body) });
+        id = created.id;
+      }
+      if (id != null && coverFile) {
+        await uploadCover(id, coverFile);
       }
       setModalOpen(false);
+      setCoverFile(null);
       await load();
       pushToast(editingId ? 'Событие обновлено' : 'Событие создано');
     } catch (err) {
@@ -2203,20 +2273,19 @@ function EventsPage() {
       <div className="toolbar">
         <input placeholder="Поиск…" value={query} onChange={(e) => setQuery(e.target.value)} />
         <select
-          value={publishedFilter}
-          onChange={(e) => setPublishedFilter(e.target.value as 'all' | 'published' | 'hidden')}
+          value={statusFilter}
+          onChange={(e) => setStatusFilter(e.target.value as 'all' | 'draft' | 'scheduled' | 'published')}
         >
           <option value="all">Все статусы</option>
+          <option value="draft">Черновики</option>
+          <option value="scheduled">Запланированные</option>
           <option value="published">Опубликованные</option>
-          <option value="hidden">Скрытые</option>
         </select>
       </div>
       {error && !modalOpen && <p className="error">{error}</p>}
       <div className="list">
         {items
           .filter((item) => {
-            if (publishedFilter === 'published' && !item.is_published) return false;
-            if (publishedFilter === 'hidden' && item.is_published) return false;
             if (!query.trim()) return true;
             const q = query.trim().toLowerCase();
             return (
@@ -2227,13 +2296,27 @@ function EventsPage() {
           })
           .map((item) => (
             <article key={item.id} className="row-card">
+              {item.cover_url && (
+                <img
+                  src={mediaUrl(item.cover_url)}
+                  alt=""
+                  style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 10, border: '1px solid var(--line)' }}
+                />
+              )}
               <div className="row-main">
                 <h3 className="row-title">{item.title}</h3>
                 <div className="meta">
                   <span className="chip">{formatDate(item.starts_at)}</span>
                   <span className="chip neutral">{item.place_text}</span>
                   {item.settlement_name && <span className="chip neutral">{item.settlement_name}</span>}
-                  {item.is_published ? <span className="chip ok">Опубликовано</span> : <span className="chip warn">Скрыто</span>}
+                  <span
+                    className={`chip ${item.status === 'published' ? 'ok' : item.status === 'scheduled' ? 'warn' : 'neutral'}`}
+                  >
+                    {EVENT_STATUS_LABELS[item.status || ''] || (item.is_published ? 'Опубликовано' : 'Черновик')}
+                  </span>
+                  {item.view_count != null && (
+                    <span className="chip neutral">просмотры: {item.view_count}</span>
+                  )}
                 </div>
                 <p className="row-body">{item.description.length > 160 ? `${item.description.slice(0, 160)}…` : item.description}</p>
               </div>
@@ -2306,15 +2389,44 @@ function EventsPage() {
                   <input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
                 </label>
                 <label className="field">
-                  Статус
+                  Публикация
                   <select
                     value={form.is_published ? '1' : '0'}
                     onChange={(e) => setForm({ ...form, is_published: e.target.value === '1' })}
                   >
                     <option value="1">Опубликовано</option>
-                    <option value="0">Скрыто</option>
+                    <option value="0">Черновик / скрыто</option>
                   </select>
                 </label>
+                <label className="field">
+                  Отложенная публикация
+                  <input
+                    type="datetime-local"
+                    value={form.publish_at}
+                    onChange={(e) => setForm({ ...form, publish_at: e.target.value })}
+                  />
+                </label>
+                <label className="field full">
+                  Обложка
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0] || null;
+                      setCoverFile(file);
+                      if (file) setCoverPreview(URL.createObjectURL(file));
+                    }}
+                  />
+                </label>
+                {coverPreview && (
+                  <div className="field full">
+                    <img
+                      src={coverPreview}
+                      alt="Обложка"
+                      style={{ width: 160, height: 100, objectFit: 'cover', borderRadius: 10, border: '1px solid var(--line)' }}
+                    />
+                  </div>
+                )}
                 <label className="field full">
                   Описание
                   <textarea
@@ -2342,11 +2454,21 @@ function EventsPage() {
   );
 }
 
+const DAYS_MODE_LABELS: Record<string, string> = {
+  all: 'Все дни',
+  weekdays: 'Будни',
+  weekends: 'Выходные',
+};
+
 type TransportForm = {
   title: string;
   route_number: string;
   description: string;
   schedule_text: string;
+  schedule_weekdays: string;
+  schedule_weekends: string;
+  stops_text: string;
+  days_mode: 'all' | 'weekdays' | 'weekends';
   notes: string;
   settlement_id: number | '';
   is_published: boolean;
@@ -2357,6 +2479,10 @@ const EMPTY_TRANSPORT: TransportForm = {
   route_number: '',
   description: '',
   schedule_text: '',
+  schedule_weekdays: '',
+  schedule_weekends: '',
+  stops_text: '',
+  days_mode: 'all',
   notes: '',
   settlement_id: '',
   is_published: true,
@@ -2400,6 +2526,10 @@ function TransportPage() {
       route_number: item.route_number || '',
       description: item.description || '',
       schedule_text: item.schedule_text,
+      schedule_weekdays: item.schedule_weekdays || '',
+      schedule_weekends: item.schedule_weekends || '',
+      stops_text: item.stops_text || '',
+      days_mode: (item.days_mode as TransportForm['days_mode']) || 'all',
       notes: item.notes || '',
       settlement_id: item.settlement_id ?? '',
       is_published: item.is_published,
@@ -2428,6 +2558,10 @@ function TransportPage() {
       route_number: form.route_number.trim() || null,
       description: form.description.trim() || null,
       schedule_text: form.schedule_text.trim(),
+      schedule_weekdays: form.schedule_weekdays.trim() || null,
+      schedule_weekends: form.schedule_weekends.trim() || null,
+      stops_text: form.stops_text.trim() || null,
+      days_mode: form.days_mode,
       notes: form.notes.trim() || null,
       settlement_id: form.settlement_id === '' ? null : Number(form.settlement_id),
       is_published: form.is_published,
@@ -2501,7 +2635,11 @@ function TransportPage() {
                 </h3>
                 <div className="meta">
                   {item.settlement_name && <span className="chip neutral">{item.settlement_name}</span>}
+                  <span className="chip neutral">{DAYS_MODE_LABELS[item.days_mode || 'all'] || item.days_mode}</span>
                   {item.is_published ? <span className="chip ok">Опубликовано</span> : <span className="chip warn">Скрыто</span>}
+                  {item.view_count != null && (
+                    <span className="chip neutral">просмотры: {item.view_count}</span>
+                  )}
                   <span className="chip neutral">обн. {formatDate(item.updated_at)}</span>
                 </div>
                 <p className="row-body" style={{ whiteSpace: 'pre-wrap' }}>
@@ -2556,6 +2694,19 @@ function TransportPage() {
                   </select>
                 </label>
                 <label className="field">
+                  Дни работы
+                  <select
+                    value={form.days_mode}
+                    onChange={(e) =>
+                      setForm({ ...form, days_mode: e.target.value as TransportForm['days_mode'] })
+                    }
+                  >
+                    <option value="all">Все дни</option>
+                    <option value="weekdays">Будни</option>
+                    <option value="weekends">Выходные</option>
+                  </select>
+                </label>
+                <label className="field">
                   Статус
                   <select
                     value={form.is_published ? '1' : '0'}
@@ -2570,18 +2721,469 @@ function TransportPage() {
                   <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
                 </label>
                 <label className="field full">
-                  Расписание
+                  Остановки (по одной в строке)
+                  <textarea
+                    rows={5}
+                    value={form.stops_text}
+                    onChange={(e) => setForm({ ...form, stops_text: e.target.value })}
+                    placeholder={'Сакмара (остановка у ДК)\nТатарская Каргала\nОренбург, автовокзал'}
+                  />
+                </label>
+                <label className="field full">
+                  Расписание (общее)
                   <textarea
                     required
-                    rows={10}
+                    rows={6}
                     value={form.schedule_text}
                     onChange={(e) => setForm({ ...form, schedule_text: e.target.value })}
-                    placeholder="Времена отправления по дням…"
+                    placeholder="Времена отправления…"
+                  />
+                </label>
+                <label className="field full">
+                  Расписание в будни (необяз.)
+                  <textarea
+                    rows={3}
+                    value={form.schedule_weekdays}
+                    onChange={(e) => setForm({ ...form, schedule_weekdays: e.target.value })}
+                  />
+                </label>
+                <label className="field full">
+                  Расписание в выходные (необяз.)
+                  <textarea
+                    rows={3}
+                    value={form.schedule_weekends}
+                    onChange={(e) => setForm({ ...form, schedule_weekends: e.target.value })}
                   />
                 </label>
                 <label className="field full">
                   Заметки
                   <textarea rows={3} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+                </label>
+              </div>
+              {error && <p className="error">{error}</p>}
+              <div className="modal-actions">
+                <button className="btn" type="submit" disabled={busy}>
+                  {busy ? 'Сохранение…' : 'Сохранить'}
+                </button>
+                <button className="btn secondary" type="button" disabled={busy} onClick={closeModal}>
+                  Отмена
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type NewsForm = {
+  title: string;
+  body: string;
+  settlement_id: number | '';
+  is_published: boolean;
+};
+
+const EMPTY_NEWS: NewsForm = {
+  title: '',
+  body: '',
+  settlement_id: '',
+  is_published: true,
+};
+
+function NewsPage() {
+  const [items, setItems] = useState<NewsItem[]>([]);
+  const [settlements, setSettlements] = useState<Settlement[]>([]);
+  const [form, setForm] = useState<NewsForm>(EMPTY_NEWS);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [query, setQuery] = useState('');
+  const [publishedFilter, setPublishedFilter] = useState<'all' | 'published' | 'hidden'>('all');
+
+  async function load() {
+    const [news, s] = await Promise.all([
+      api<NewsItem[]>('/news'),
+      api<Settlement[]>('/settlements'),
+    ]);
+    setItems(news);
+    setSettlements(s);
+  }
+
+  useEffect(() => {
+    load().catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+  }, []);
+
+  function openCreate() {
+    setEditingId(null);
+    setForm(EMPTY_NEWS);
+    setError('');
+    setModalOpen(true);
+  }
+
+  function startEdit(item: NewsItem) {
+    setEditingId(item.id);
+    setForm({
+      title: item.title,
+      body: item.body,
+      settlement_id: item.settlement_id ?? '',
+      is_published: item.is_published,
+    });
+    setError('');
+    setModalOpen(true);
+  }
+
+  function closeModal() {
+    if (busy) return;
+    setModalOpen(false);
+    setError('');
+  }
+
+  async function saveItem(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    if (!form.title.trim() || form.body.trim().length < 3) {
+      setError('Укажите заголовок и текст новости');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    const body = {
+      title: form.title.trim(),
+      body: form.body.trim(),
+      settlement_id: form.settlement_id === '' ? null : Number(form.settlement_id),
+      is_published: form.is_published,
+    };
+    try {
+      if (editingId) {
+        await api(`/news/${editingId}`, { method: 'PATCH', body: JSON.stringify(body) });
+      } else {
+        await api('/news', { method: 'POST', body: JSON.stringify(body) });
+      }
+      setModalOpen(false);
+      await load();
+      pushToast(editingId ? 'Новость обновлена' : 'Новость создана');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id: number) {
+    if (!(await confirmAction('Удалить новость?'))) return;
+    await api(`/news/${id}`, { method: 'DELETE' });
+    if (editingId === id) closeModal();
+    await load();
+    pushToast('Новость удалена');
+  }
+
+  return (
+    <div>
+      <div className="page-head">
+        <div>
+          <h1>Новости</h1>
+          <p>Новости района для приложения</p>
+        </div>
+        <button className="btn" type="button" onClick={openCreate}>
+          Добавить новость
+        </button>
+      </div>
+      <div className="toolbar">
+        <input placeholder="Поиск…" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <select
+          value={publishedFilter}
+          onChange={(e) => setPublishedFilter(e.target.value as 'all' | 'published' | 'hidden')}
+        >
+          <option value="all">Все статусы</option>
+          <option value="published">Опубликованные</option>
+          <option value="hidden">Скрытые</option>
+        </select>
+      </div>
+      {error && !modalOpen && <p className="error">{error}</p>}
+      <div className="list">
+        {items
+          .filter((item) => {
+            if (publishedFilter === 'published' && !item.is_published) return false;
+            if (publishedFilter === 'hidden' && item.is_published) return false;
+            if (!query.trim()) return true;
+            const q = query.trim().toLowerCase();
+            return (
+              item.title.toLowerCase().includes(q) ||
+              item.body.toLowerCase().includes(q) ||
+              (item.settlement_name || '').toLowerCase().includes(q)
+            );
+          })
+          .map((item) => (
+            <article key={item.id} className="row-card">
+              <div className="row-main">
+                <h3 className="row-title">{item.title}</h3>
+                <div className="meta">
+                  {item.settlement_name && <span className="chip neutral">{item.settlement_name}</span>}
+                  {item.is_published ? (
+                    <span className="chip ok">Опубликовано</span>
+                  ) : (
+                    <span className="chip warn">Скрыто</span>
+                  )}
+                  <span className="chip neutral">{formatDate(item.published_at || item.created_at)}</span>
+                </div>
+                <p className="row-body">{item.body.length > 160 ? `${item.body.slice(0, 160)}…` : item.body}</p>
+              </div>
+              <div className="actions">
+                <button className="btn" type="button" onClick={() => startEdit(item)}>
+                  Изменить
+                </button>
+                <button className="btn danger" type="button" onClick={() => remove(item.id)}>
+                  Удалить
+                </button>
+              </div>
+            </article>
+          ))}
+        {!items.length && <div className="empty">Новостей пока нет</div>}
+      </div>
+
+      {modalOpen && (
+        <div className="modal-backdrop" onClick={closeModal}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 'min(720px, 100%)' }}>
+            <h2>{editingId ? 'Редактировать новость' : 'Новая новость'}</h2>
+            <form onSubmit={saveItem}>
+              <div className="grid2">
+                <label className="field">
+                  Заголовок
+                  <input required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+                </label>
+                <label className="field">
+                  Населённый пункт
+                  <select
+                    value={form.settlement_id === '' ? '' : String(form.settlement_id)}
+                    onChange={(e) =>
+                      setForm({ ...form, settlement_id: e.target.value ? Number(e.target.value) : '' })
+                    }
+                  >
+                    <option value="">Весь район</option>
+                    {settlements.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.display_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  Статус
+                  <select
+                    value={form.is_published ? '1' : '0'}
+                    onChange={(e) => setForm({ ...form, is_published: e.target.value === '1' })}
+                  >
+                    <option value="1">Опубликовано</option>
+                    <option value="0">Скрыто</option>
+                  </select>
+                </label>
+                <label className="field full">
+                  Текст
+                  <textarea
+                    required
+                    rows={8}
+                    value={form.body}
+                    onChange={(e) => setForm({ ...form, body: e.target.value })}
+                  />
+                </label>
+              </div>
+              {error && <p className="error">{error}</p>}
+              <div className="modal-actions">
+                <button className="btn" type="submit" disabled={busy}>
+                  {busy ? 'Сохранение…' : 'Сохранить'}
+                </button>
+                <button className="btn secondary" type="button" disabled={busy} onClick={closeModal}>
+                  Отмена
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+const ALERT_KIND_LABELS: Record<string, string> = {
+  info: 'Инфо',
+  warn: 'Важно',
+  danger: 'Срочно',
+};
+
+type AlertForm = {
+  message: string;
+  kind: 'info' | 'warn' | 'danger';
+  is_active: boolean;
+};
+
+const EMPTY_ALERT: AlertForm = {
+  message: '',
+  kind: 'info',
+  is_active: true,
+};
+
+function AlertsPage() {
+  const [items, setItems] = useState<DistrictAlert[]>([]);
+  const [form, setForm] = useState<AlertForm>(EMPTY_ALERT);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    setItems(await api<DistrictAlert[]>('/alerts'));
+  }
+
+  useEffect(() => {
+    load().catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+  }, []);
+
+  function openCreate() {
+    setEditingId(null);
+    setForm(EMPTY_ALERT);
+    setError('');
+    setModalOpen(true);
+  }
+
+  function startEdit(item: DistrictAlert) {
+    setEditingId(item.id);
+    setForm({
+      message: item.message,
+      kind: (item.kind as AlertForm['kind']) || 'info',
+      is_active: item.is_active,
+    });
+    setError('');
+    setModalOpen(true);
+  }
+
+  function closeModal() {
+    if (busy) return;
+    setModalOpen(false);
+    setError('');
+  }
+
+  async function saveItem(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    if (form.message.trim().length < 3) {
+      setError('Укажите текст объявления (от 3 символов)');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    const body = {
+      message: form.message.trim(),
+      kind: form.kind,
+      is_active: form.is_active,
+    };
+    try {
+      if (editingId) {
+        await api(`/alerts/${editingId}`, { method: 'PATCH', body: JSON.stringify(body) });
+      } else {
+        await api('/alerts', { method: 'POST', body: JSON.stringify(body) });
+      }
+      setModalOpen(false);
+      await load();
+      pushToast(editingId ? 'Объявление обновлено' : 'Объявление создано');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id: number) {
+    if (!(await confirmAction('Удалить срочное объявление?'))) return;
+    await api(`/alerts/${id}`, { method: 'DELETE' });
+    if (editingId === id) closeModal();
+    await load();
+    pushToast('Объявление удалено');
+  }
+
+  return (
+    <div>
+      <div className="page-head">
+        <div>
+          <h1>Срочное</h1>
+          <p>
+            Районные оповещения. Активное объявление доступно публично: <code>GET /alerts/active</code>
+          </p>
+        </div>
+        <button className="btn" type="button" onClick={openCreate}>
+          Добавить объявление
+        </button>
+      </div>
+      {error && !modalOpen && <p className="error">{error}</p>}
+      <div className="list">
+        {items.map((item) => (
+          <article key={item.id} className="row-card">
+            <div className="row-main">
+              <h3 className="row-title">{item.message}</h3>
+              <div className="meta">
+                <span
+                  className={`chip ${item.kind === 'danger' ? 'warn' : item.kind === 'warn' ? 'warn' : 'neutral'}`}
+                >
+                  {ALERT_KIND_LABELS[item.kind] || item.kind}
+                </span>
+                {item.is_active ? (
+                  <span className="chip ok">Активно</span>
+                ) : (
+                  <span className="chip neutral">Выкл.</span>
+                )}
+                <span className="chip neutral">{formatDate(item.updated_at)}</span>
+              </div>
+            </div>
+            <div className="actions">
+              <button className="btn" type="button" onClick={() => startEdit(item)}>
+                Изменить
+              </button>
+              <button className="btn danger" type="button" onClick={() => remove(item.id)}>
+                Удалить
+              </button>
+            </div>
+          </article>
+        ))}
+        {!items.length && <div className="empty">Срочных объявлений пока нет</div>}
+      </div>
+
+      {modalOpen && (
+        <div className="modal-backdrop" onClick={closeModal}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 'min(560px, 100%)' }}>
+            <h2>{editingId ? 'Редактировать объявление' : 'Новое объявление'}</h2>
+            <form onSubmit={saveItem}>
+              <div className="grid2">
+                <label className="field full">
+                  Текст
+                  <textarea
+                    required
+                    rows={4}
+                    maxLength={280}
+                    value={form.message}
+                    onChange={(e) => setForm({ ...form, message: e.target.value })}
+                  />
+                </label>
+                <label className="field">
+                  Тип
+                  <select
+                    value={form.kind}
+                    onChange={(e) => setForm({ ...form, kind: e.target.value as AlertForm['kind'] })}
+                  >
+                    <option value="info">Инфо</option>
+                    <option value="warn">Важно</option>
+                    <option value="danger">Срочно</option>
+                  </select>
+                </label>
+                <label className="field">
+                  Статус
+                  <select
+                    value={form.is_active ? '1' : '0'}
+                    onChange={(e) => setForm({ ...form, is_active: e.target.value === '1' })}
+                  >
+                    <option value="1">Активно</option>
+                    <option value="0">Выкл.</option>
+                  </select>
                 </label>
               </div>
               {error && <p className="error">{error}</p>}
@@ -2939,6 +3541,8 @@ export default function App() {
         {canEditDirectory(user!.role) && <Route path="/directory" element={<DirectoryPage />} />}
         {canEditDirectory(user!.role) && <Route path="/events" element={<EventsPage />} />}
         {canEditDirectory(user!.role) && <Route path="/transport" element={<TransportPage />} />}
+        {canEditDirectory(user!.role) && <Route path="/news" element={<NewsPage />} />}
+        {canEditDirectory(user!.role) && <Route path="/alerts" element={<AlertsPage />} />}
         {canModerate(user!.role) && <Route path="/blacklist" element={<BlacklistPage />} />}
         {user!.role === 'admin' && <Route path="/users" element={<UsersPage />} />}
         {user!.role === 'admin' && <Route path="/legal" element={<LegalPage />} />}

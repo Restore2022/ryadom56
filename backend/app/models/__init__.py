@@ -185,7 +185,10 @@ class Event(Base):
     address: Mapped[str | None] = mapped_column(String(255), nullable=True)
     lat: Mapped[float | None] = mapped_column(Float, nullable=True)
     lon: Mapped[float | None] = mapped_column(Float, nullable=True)
+    cover_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    publish_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
     is_published: Mapped[bool] = mapped_column(Boolean, default=True)
+    view_count: Mapped[int] = mapped_column(Integer, default=0)
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -204,15 +207,65 @@ class TransportRoute(Base):
     route_number: Mapped[str | None] = mapped_column(String(40), nullable=True)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     schedule_text: Mapped[str] = mapped_column(Text, nullable=False)
+    schedule_weekdays: Mapped[str | None] = mapped_column(Text, nullable=True)
+    schedule_weekends: Mapped[str | None] = mapped_column(Text, nullable=True)
+    stops_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    days_mode: Mapped[str] = mapped_column(String(20), default="all")  # all | weekdays | weekends
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     settlement_id: Mapped[int | None] = mapped_column(ForeignKey("settlements.id"), nullable=True)
     is_published: Mapped[bool] = mapped_column(Boolean, default=True)
+    view_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
 
     settlement: Mapped["Settlement | None"] = relationship()
+
+
+class TransportFavorite(Base):
+    __tablename__ = "transport_favorites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    route_id: Mapped[int] = mapped_column(ForeignKey("transport_routes.id"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DistrictNews(Base):
+    __tablename__ = "district_news"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(200), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    settlement_id: Mapped[int | None] = mapped_column(ForeignKey("settlements.id"), nullable=True)
+    is_published: Mapped[bool] = mapped_column(Boolean, default=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    settlement: Mapped["Settlement | None"] = relationship()
+
+
+class DistrictAlert(Base):
+    """Срочный баннер сверху ленты объявлений."""
+
+    __tablename__ = "district_alerts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    message: Mapped[str] = mapped_column(String(280), nullable=False)
+    kind: Mapped[str] = mapped_column(String(20), default="info")  # info | warn | danger
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
 
 class Favorite(Base):

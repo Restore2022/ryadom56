@@ -1,10 +1,39 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
 
-class TransportDetailScreen extends StatelessWidget {
+import '../auth_prompt.dart';
+import '../state/app_state.dart';
+import '../ui_helpers.dart';
+
+class TransportDetailScreen extends StatefulWidget {
   const TransportDetailScreen({super.key, required this.item});
 
   final Map<String, dynamic> item;
+
+  @override
+  State<TransportDetailScreen> createState() => _TransportDetailScreenState();
+}
+
+class _TransportDetailScreenState extends State<TransportDetailScreen> {
+  late Map<String, dynamic> item;
+  bool togglingFavorite = false;
+
+  @override
+  void initState() {
+    super.initState();
+    item = Map<String, dynamic>.from(widget.item);
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final id = item['id'];
+      if (id is! int) return;
+      final state = context.read<AppState>();
+      state.trackTransportView(id);
+      try {
+        final fresh = await state.getTransportRoute(id);
+        if (mounted) setState(() => item = fresh);
+      } catch (_) {}
+    });
+  }
 
   String _fmtUpdated(String? iso) {
     if (iso == null || iso.isEmpty) return '—';
@@ -13,15 +42,73 @@ class TransportDetailScreen extends StatelessWidget {
     return '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}';
   }
 
+  Future<void> _toggleFavorite() async {
+    final id = item['id'];
+    if (id is! int) return;
+    final loggedIn = await ensureLoggedIn(context, message: 'Войдите, чтобы сохранить маршрут в избранное');
+    if (!loggedIn || !mounted) return;
+    final state = context.read<AppState>();
+    final was = state.isTransportFavorited(id, item: item);
+    setState(() => togglingFavorite = true);
+    try {
+      final updated = await state.toggleTransportFavorite(id, currentlyFavorited: was);
+      if (mounted) setState(() => item = updated);
+    } catch (e) {
+      if (mounted) showAppSnack(context, AppState.userFriendlyError(e), error: true);
+    } finally {
+      if (mounted) setState(() => togglingFavorite = false);
+    }
+  }
+
+  Widget _scheduleBlock(BuildContext context, String title, String text) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(title, style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 16)),
+        const SizedBox(height: 10),
+        Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(
+            color: Theme.of(context).cardTheme.color,
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.5)),
+          ),
+          child: Text(text, style: const TextStyle(height: 1.45, fontSize: 15)),
+        ),
+      ],
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final state = context.watch<AppState>();
     final number = item['route_number']?.toString();
     final notes = item['notes']?.toString();
     final description = item['description']?.toString();
+    final weekdays = item['schedule_weekdays']?.toString();
+    final weekends = item['schedule_weekends']?.toString();
+    final schedule = item['schedule_text']?.toString() ?? '';
+    final stops = (item['stops'] as List?)?.map((e) => e.toString()).where((e) => e.isNotEmpty).toList() ?? [];
+    final id = item['id'];
+    final favorited = id is int && state.isTransportFavorited(id, item: item);
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Маршрут')),
+      appBar: AppBar(
+        title: const Text('Маршрут'),
+        actions: [
+          IconButton(
+            tooltip: favorited ? 'Убрать из избранного' : 'В избранное',
+            onPressed: togglingFavorite ? null : _toggleFavorite,
+            icon: Icon(
+              favorited ? Icons.star : Icons.star_border,
+              color: favorited ? scheme.primary : null,
+            ),
+          ),
+        ],
+      ),
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
         children: [
@@ -47,22 +134,59 @@ class TransportDetailScreen extends StatelessWidget {
             const SizedBox(height: 16),
             Text(description, style: const TextStyle(height: 1.4)),
           ],
-          const SizedBox(height: 20),
-          Text('Расписание', style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 16)),
-          const SizedBox(height: 10),
-          Container(
-            width: double.infinity,
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: Theme.of(context).cardTheme.color,
-              borderRadius: BorderRadius.circular(16),
-              border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.5)),
-            ),
-            child: Text(
-              '${item['schedule_text']}',
-              style: const TextStyle(height: 1.45, fontSize: 15),
-            ),
+          const SizedBox(height: 16),
+          FilledButton.tonalIcon(
+            onPressed: togglingFavorite ? null : _toggleFavorite,
+            icon: Icon(favorited ? Icons.star : Icons.star_border),
+            label: Text(favorited ? 'В избранном' : 'В избранное'),
           ),
+          if (stops.isNotEmpty) ...[
+            const SizedBox(height: 20),
+            Text('Остановки', style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 16)),
+            const SizedBox(height: 10),
+            ...stops.asMap().entries.map(
+              (e) => Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 26,
+                      height: 26,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: scheme.primary.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Text(
+                        '${e.key + 1}',
+                        style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w800, fontSize: 12),
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(child: Text(e.value, style: const TextStyle(height: 1.35))),
+                  ],
+                ),
+              ),
+            ),
+          ],
+          const SizedBox(height: 20),
+          if (weekdays != null && weekdays.isNotEmpty) ...[
+            _scheduleBlock(context, 'Будни', weekdays),
+            const SizedBox(height: 16),
+          ],
+          if (weekends != null && weekends.isNotEmpty) ...[
+            _scheduleBlock(context, 'Выходные', weekends),
+            const SizedBox(height: 16),
+          ],
+          if (schedule.isNotEmpty &&
+              (weekdays == null || weekdays.isEmpty) &&
+              (weekends == null || weekends.isEmpty))
+            _scheduleBlock(context, 'Расписание', schedule)
+          else if (schedule.isNotEmpty &&
+              ((weekdays != null && weekdays.isNotEmpty) || (weekends != null && weekends.isNotEmpty))) ...[
+            _scheduleBlock(context, 'Общее расписание', schedule),
+          ],
           if (notes != null && notes.isNotEmpty) ...[
             const SizedBox(height: 20),
             Text('Важно', style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 16)),

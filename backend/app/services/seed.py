@@ -8,7 +8,17 @@ from app.core.config import settings
 from app.core.database import Base, engine
 from app.core.security import hash_password
 from app.core.seed_data import LEGAL_DOCS, SETTLEMENTS
-from app.models import AppUpdate, Event, LegalDocument, Settlement, TransportRoute, User, UserRole
+from app.models import (
+    AppUpdate,
+    DistrictAlert,
+    DistrictNews,
+    Event,
+    LegalDocument,
+    Settlement,
+    TransportRoute,
+    User,
+    UserRole,
+)
 
 USER_COLUMNS = {
     "last_ip": "VARCHAR(64)",
@@ -38,16 +48,33 @@ DIRECTORY_COLUMNS = {
     "hours": "VARCHAR(255)",
 }
 
+EVENT_COLUMNS = {
+    "cover_path": "VARCHAR(255)",
+    "publish_at": "DATETIME",
+    "view_count": "INTEGER DEFAULT 0",
+}
+
+TRANSPORT_COLUMNS = {
+    "schedule_weekdays": "TEXT",
+    "schedule_weekends": "TEXT",
+    "stops_text": "TEXT",
+    "days_mode": "VARCHAR(20) DEFAULT 'all'",
+    "view_count": "INTEGER DEFAULT 0",
+}
+
 
 def init_db() -> None:
     Path("data").mkdir(exist_ok=True)
     Path("data/uploads").mkdir(parents=True, exist_ok=True)
+    Path("data/uploads/events").mkdir(parents=True, exist_ok=True)
     Path("data/releases").mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)
     _migrate_user_columns()
     _migrate_listing_columns()
     _migrate_directory_columns()
     _migrate_report_columns()
+    _migrate_event_columns()
+    _migrate_transport_columns()
 
 
 def _migrate_user_columns() -> None:
@@ -92,6 +119,28 @@ def _migrate_report_columns() -> None:
         for name, sql_type in REPORT_COLUMNS.items():
             if name not in existing:
                 conn.execute(text(f"ALTER TABLE listing_reports ADD COLUMN {name} {sql_type}"))
+
+
+def _migrate_event_columns() -> None:
+    inspector = inspect(engine)
+    if "events" not in inspector.get_table_names():
+        return
+    existing = {col["name"] for col in inspector.get_columns("events")}
+    with engine.begin() as conn:
+        for name, sql_type in EVENT_COLUMNS.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE events ADD COLUMN {name} {sql_type}"))
+
+
+def _migrate_transport_columns() -> None:
+    inspector = inspect(engine)
+    if "transport_routes" not in inspector.get_table_names():
+        return
+    existing = {col["name"] for col in inspector.get_columns("transport_routes")}
+    with engine.begin() as conn:
+        for name, sql_type in TRANSPORT_COLUMNS.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE transport_routes ADD COLUMN {name} {sql_type}"))
 
 
 def seed_db(session: Session) -> None:
@@ -148,6 +197,9 @@ def seed_db(session: Session) -> None:
 
     _seed_events(session)
     _seed_transport(session)
+    _seed_news(session)
+    _seed_alerts(session)
+    _enrich_transport(session)
 
     session.commit()
 
@@ -232,6 +284,10 @@ def _seed_transport(session: Session) -> None:
                 "07:30, 09:20, 11:40, 14:15, 17:10, 20:00\n\n"
                 "В пути около 40–50 минут. Расписание ориентировочное."
             ),
+            schedule_weekdays="06:40, 08:10, 10:30, 13:00, 16:20, 18:45",
+            schedule_weekends="08:10, 13:00, 18:45",
+            stops_text="Сакмара (остановка у ДК)\nТатарская Каргала\nОренбург, автовокзал",
+            days_mode="all",
             notes="Уточняйте у перевозчика в праздничные дни.",
             settlement_id=sakmara,
             is_published=True,
@@ -247,6 +303,10 @@ def _seed_transport(session: Session) -> None:
                 "Суббота: 08:30 и 15:00 в обе стороны.\n"
                 "Воскресенье: рейсов нет."
             ),
+            schedule_weekdays="07:15, 12:40, 17:30",
+            schedule_weekends="08:30, 15:00",
+            stops_text="Сакмара\nМарьевка\nЕгорьевка",
+            days_mode="all",
             notes=None,
             settlement_id=sakmara,
             is_published=True,
@@ -261,6 +321,8 @@ def _seed_transport(session: Session) -> None:
                 "Татарская Каргала → Сакмара:\n"
                 "07:50, 12:10, 16:30"
             ),
+            stops_text="Сакмара\nТатарская Каргала",
+            days_mode="weekdays",
             notes="Остановки по требованию на согласованных точках.",
             settlement_id=sakmara,
             is_published=True,
@@ -274,6 +336,8 @@ def _seed_transport(session: Session) -> None:
                 "Сакмара 09:00 → Светлый ~09:45\n"
                 "Светлый 17:30 → Сакмара ~18:15"
             ),
+            stops_text="Сакмара\nСветлый",
+            days_mode="weekends",
             notes="Мест ограничено — лучше уточнять заранее.",
             settlement_id=sakmara,
             is_published=True,
@@ -281,4 +345,49 @@ def _seed_transport(session: Session) -> None:
     ]
     for item in samples:
         session.add(item)
+
+
+def _enrich_transport(session: Session) -> None:
+    for route in session.execute(select(TransportRoute)).scalars().all():
+        if not route.stops_text and "Оренбург" in route.title:
+            route.stops_text = "Сакмара (остановка у ДК)\nТатарская Каргала\nОренбург, автовокзал"
+        if not route.days_mode:
+            route.days_mode = "all"
+
+
+def _seed_news(session: Session) -> None:
+    if session.execute(select(DistrictNews).limit(1)).scalar_one_or_none() is not None:
+        return
+    sakmara = _settlement_id(session, "село Сакмара")
+    now = datetime.now(timezone.utc)
+    session.add(
+        DistrictNews(
+            title="График работы администрации на праздники",
+            body="В праздничные дни приём граждан — по предварительной записи. Телефон для справок уточняйте в справочнике.",
+            settlement_id=sakmara,
+            is_published=True,
+            published_at=now,
+        )
+    )
+    session.add(
+        DistrictNews(
+            title="Субботник в районе",
+            body="Приглашаем жителей принять участие в весеннем субботнике. Встреча у Дома культуры в 9:00.",
+            settlement_id=None,
+            is_published=True,
+            published_at=now - timedelta(days=2),
+        )
+    )
+
+
+def _seed_alerts(session: Session) -> None:
+    if session.execute(select(DistrictAlert).limit(1)).scalar_one_or_none() is not None:
+        return
+    session.add(
+        DistrictAlert(
+            message="Будьте осторожны на дорогах: возможна гололёдица.",
+            kind="warn",
+            is_active=True,
+        )
+    )
 

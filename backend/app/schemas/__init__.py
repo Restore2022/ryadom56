@@ -340,6 +340,7 @@ class EventCreate(BaseModel):
     lat: float | None = None
     lon: float | None = None
     is_published: bool = True
+    publish_at: datetime | None = None
 
 
 class EventUpdate(BaseModel):
@@ -353,6 +354,7 @@ class EventUpdate(BaseModel):
     lat: float | None = None
     lon: float | None = None
     is_published: bool | None = None
+    publish_at: datetime | None = None
 
 
 class EventOut(BaseModel):
@@ -367,7 +369,11 @@ class EventOut(BaseModel):
     address: str | None
     lat: float | None
     lon: float | None
+    cover_url: str | None = None
+    publish_at: datetime | None = None
     is_published: bool
+    view_count: int = 0
+    status: str = "published"  # draft | scheduled | published
     created_by_id: int | None = None
     created_at: datetime
     updated_at: datetime
@@ -381,6 +387,10 @@ class TransportCreate(BaseModel):
     route_number: str | None = Field(default=None, max_length=40)
     description: str | None = Field(default=None, max_length=4000)
     schedule_text: str = Field(min_length=3, max_length=12000)
+    schedule_weekdays: str | None = Field(default=None, max_length=12000)
+    schedule_weekends: str | None = Field(default=None, max_length=12000)
+    stops_text: str | None = Field(default=None, max_length=8000)
+    days_mode: str = Field(default="all", pattern="^(all|weekdays|weekends)$")
     notes: str | None = Field(default=None, max_length=2000)
     settlement_id: int | None = None
     is_published: bool = True
@@ -391,6 +401,10 @@ class TransportUpdate(BaseModel):
     route_number: str | None = Field(default=None, max_length=40)
     description: str | None = Field(default=None, max_length=4000)
     schedule_text: str | None = Field(default=None, min_length=3, max_length=12000)
+    schedule_weekdays: str | None = Field(default=None, max_length=12000)
+    schedule_weekends: str | None = Field(default=None, max_length=12000)
+    stops_text: str | None = Field(default=None, max_length=8000)
+    days_mode: str | None = Field(default=None, pattern="^(all|weekdays|weekends)$")
     notes: str | None = Field(default=None, max_length=2000)
     settlement_id: int | None = None
     is_published: bool | None = None
@@ -402,10 +416,78 @@ class TransportOut(BaseModel):
     route_number: str | None
     description: str | None
     schedule_text: str
+    schedule_weekdays: str | None = None
+    schedule_weekends: str | None = None
+    stops_text: str | None = None
+    stops: list[str] = []
+    days_mode: str = "all"
     notes: str | None
     settlement_id: int | None
     settlement_name: str | None = None
     is_published: bool
+    is_favorited: bool = False
+    view_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class NewsCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=200)
+    body: str = Field(min_length=3, max_length=12000)
+    settlement_id: int | None = None
+    is_published: bool = True
+    published_at: datetime | None = None
+
+
+class NewsUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=2, max_length=200)
+    body: str | None = Field(default=None, min_length=3, max_length=12000)
+    settlement_id: int | None = None
+    is_published: bool | None = None
+    published_at: datetime | None = None
+
+
+class NewsOut(BaseModel):
+    id: int
+    title: str
+    body: str
+    settlement_id: int | None
+    settlement_name: str | None = None
+    is_published: bool
+    published_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class AlertCreate(BaseModel):
+    message: str = Field(min_length=3, max_length=280)
+    kind: str = Field(default="info", pattern="^(info|warn|danger)$")
+    is_active: bool = True
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+
+
+class AlertUpdate(BaseModel):
+    message: str | None = Field(default=None, min_length=3, max_length=280)
+    kind: str | None = Field(default=None, pattern="^(info|warn|danger)$")
+    is_active: bool | None = None
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+
+
+class AlertOut(BaseModel):
+    id: int
+    message: str
+    kind: str
+    is_active: bool
+    starts_at: datetime | None
+    ends_at: datetime | None
     created_at: datetime
     updated_at: datetime
 
@@ -429,6 +511,10 @@ class StatsOut(BaseModel):
     events_total: int = 0
     events_upcoming: int = 0
     transport_routes: int = 0
+    news_total: int = 0
+    active_alerts: int = 0
+    top_events: list[dict] = []
+    top_routes: list[dict] = []
 
 
 class AdminAlertsOut(BaseModel):

@@ -4,22 +4,24 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../auth_prompt.dart';
+import '../event_actions.dart';
 import '../state/app_state.dart';
 import '../ui_helpers.dart';
 import '../update_service.dart';
 import 'about_screen.dart';
 import 'create_listing_screen.dart';
 import 'directory_detail_screen.dart';
+import 'directory_favorites_screen.dart';
 import 'edit_profile_screen.dart';
 import 'event_detail_screen.dart';
 import 'favorites_screen.dart';
 import 'legal_doc_screen.dart';
 import 'listing_detail_screen.dart';
 import 'my_listings_screen.dart';
+import 'news_list_screen.dart';
 import 'notifications_screen.dart';
 import 'transport_detail_screen.dart';
 import 'view_history_screen.dart';
-import 'directory_favorites_screen.dart';
 
 Route<T> fastRoute<T>(Widget page) {
   return PageRouteBuilder<T>(
@@ -125,6 +127,7 @@ class _HomeShellState extends State<HomeShell> {
         state.clearSessionMessage();
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
       }
+      if (mounted) await checkAndShowEventReminders(context);
       if (mounted) {
         await Future<void>.delayed(const Duration(milliseconds: 600));
         if (mounted) await checkForAppUpdate(context);
@@ -242,6 +245,13 @@ class _ListingsTab extends StatefulWidget {
 
 class _ListingsTabState extends State<_ListingsTab> {
   final search = TextEditingController();
+  Map<String, dynamic>? activeAlert;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadAlert());
+  }
 
   @override
   void dispose() {
@@ -249,27 +259,68 @@ class _ListingsTabState extends State<_ListingsTab> {
     super.dispose();
   }
 
+  Future<void> _loadAlert() async {
+    try {
+      final alert = await context.read<AppState>().loadActiveAlert();
+      if (mounted) setState(() => activeAlert = alert);
+    } catch (_) {
+      if (mounted) setState(() => activeAlert = null);
+    }
+  }
+
+  Color _alertBg(BuildContext context, String? kind) {
+    final scheme = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    switch (kind) {
+      case 'danger':
+        return scheme.errorContainer;
+      case 'warn':
+        return isDark ? const Color(0xFF4A3B14) : const Color(0xFFFFF3CD);
+      default:
+        return scheme.primaryContainer;
+    }
+  }
+
+  Color _alertFg(BuildContext context, String? kind) {
+    final scheme = Theme.of(context).colorScheme;
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    switch (kind) {
+      case 'danger':
+        return scheme.onErrorContainer;
+      case 'warn':
+        return isDark ? const Color(0xFFFFE08A) : const Color(0xFF6B4E00);
+      default:
+        return scheme.onPrimaryContainer;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final items = state.listings;
+    final scheme = Theme.of(context).colorScheme;
+    final quick = state.filterCategory == 'jobs'
+        ? 'jobs'
+        : state.filterCategory == 'lost_found'
+            ? 'lost_found'
+            : 'all';
 
     return Column(
       children: [
         if (state.hasConnectionIssue)
           Material(
-            color: Theme.of(context).colorScheme.errorContainer,
+            color: scheme.errorContainer,
             child: Padding(
               padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
               child: Row(
                 children: [
-                  Icon(Icons.wifi_off, color: Theme.of(context).colorScheme.onErrorContainer),
+                  Icon(Icons.wifi_off, color: scheme.onErrorContainer),
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
                       AppState.offlineMessage,
                       style: TextStyle(
-                        color: Theme.of(context).colorScheme.onErrorContainer,
+                        color: scheme.onErrorContainer,
                         fontWeight: FontWeight.w600,
                         fontSize: 13,
                       ),
@@ -283,8 +334,63 @@ class _ListingsTabState extends State<_ListingsTab> {
               ),
             ),
           ),
+        if (activeAlert != null)
+          Material(
+            color: _alertBg(context, activeAlert!['kind']?.toString()),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    activeAlert!['kind'] == 'danger'
+                        ? Icons.warning_amber_rounded
+                        : activeAlert!['kind'] == 'warn'
+                            ? Icons.info_outline
+                            : Icons.campaign_outlined,
+                    color: _alertFg(context, activeAlert!['kind']?.toString()),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      '${activeAlert!['message']}',
+                      style: TextStyle(
+                        color: _alertFg(context, activeAlert!['kind']?.toString()),
+                        fontWeight: FontWeight.w600,
+                        height: 1.35,
+                      ),
+                    ),
+                  ),
+                  IconButton(
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => setState(() => activeAlert = null),
+                    icon: Icon(
+                      Icons.close,
+                      color: _alertFg(context, activeAlert!['kind']?.toString()),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+          leading: Icon(Icons.newspaper_outlined, color: scheme.primary),
+          title: Text(
+            'Новости района',
+            style: GoogleFonts.manrope(fontWeight: FontWeight.w700),
+          ),
+          subtitle: const Text('События и объявления администрации'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () {
+            Navigator.push(
+              context,
+              fastRoute(NewsListScreen(settlementId: state.filterSettlementId)),
+            );
+          },
+        ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
           child: TextField(
             controller: search,
             textInputAction: TextInputAction.search,
@@ -299,6 +405,26 @@ class _ListingsTabState extends State<_ListingsTab> {
             ),
           ),
         ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          child: SegmentedButton<String>(
+            showSelectedIcon: false,
+            segments: const [
+              ButtonSegment(value: 'all', label: Text('Все')),
+              ButtonSegment(value: 'jobs', label: Text('Работа')),
+              ButtonSegment(value: 'lost_found', label: Text('Потеряшки')),
+            ],
+            selected: {quick},
+            onSelectionChanged: (s) {
+              final v = s.first;
+              if (v == 'all') {
+                state.applyListingFilters(clearCategory: true);
+              } else {
+                state.applyListingFilters(category: v);
+              }
+            },
+          ),
+        ),
         SizedBox(
           height: 44,
           child: ListView(
@@ -308,20 +434,12 @@ class _ListingsTabState extends State<_ListingsTab> {
               Padding(
                 padding: const EdgeInsets.only(right: 8),
                 child: RyadomFilterChip(
-                  label: 'Все',
-                  selected: state.filterCategory == null,
-                  onSelected: (_) => state.applyListingFilters(clearCategory: true),
-                ),
-              ),
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: RyadomFilterChip(
                   label: 'С фото',
                   selected: state.filterHasPhotos,
                   onSelected: (_) => state.applyListingFilters(hasPhotos: !state.filterHasPhotos),
                 ),
               ),
-              ...['goods', 'services', 'jobs', 'rent', 'free', 'lost_found'].map(
+              ...['goods', 'services', 'rent', 'free'].map(
                 (c) => Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: RyadomFilterChip(
@@ -342,7 +460,7 @@ class _ListingsTabState extends State<_ListingsTab> {
                 state.listingsTotal > 0
                     ? '${state.listingsTotal} объявл.'
                     : '${items.length} объявл.',
-                style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                style: TextStyle(color: scheme.onSurfaceVariant),
               ),
               const Spacer(),
               DropdownButtonHideUnderline(
@@ -361,7 +479,9 @@ class _ListingsTabState extends State<_ListingsTab> {
         ),
         Expanded(
           child: RefreshIndicator(
-            onRefresh: () => state.loadListings(),
+            onRefresh: () async {
+              await Future.wait([state.loadListings(), _loadAlert()]);
+            },
             child: state.listingsLoading && items.isEmpty
                 ? const Center(child: CircularProgressIndicator())
                 : state.listingsOffline && items.isEmpty
@@ -683,11 +803,17 @@ class _EventsTabState extends State<_EventsTab> {
   String? error;
   /// null = all published ordered by API default upcoming-first mix; true upcoming; false past
   bool? upcomingOnly = true;
+  int? settlementId;
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final user = context.read<AppState>().user;
+      final sid = user?['settlement_id'] as int?;
+      if (sid != null) settlementId = sid;
+      _load();
+    });
   }
 
   Future<void> _load() async {
@@ -696,7 +822,10 @@ class _EventsTabState extends State<_EventsTab> {
       error = null;
     });
     try {
-      final data = await context.read<AppState>().loadEvents(upcoming: upcomingOnly);
+      final data = await context.read<AppState>().loadEvents(
+            upcoming: upcomingOnly,
+            settlementId: settlementId,
+          );
       if (mounted) {
         setState(() {
           items = data;
@@ -724,10 +853,36 @@ class _EventsTabState extends State<_EventsTab> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final settlements = context.watch<AppState>().settlements;
     return Column(
       children: [
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
+          child: DropdownButtonFormField<int?>(
+            value: settlementId != null && settlements.any((s) => s['id'] == settlementId) ? settlementId : null,
+            isExpanded: true,
+            decoration: const InputDecoration(
+              labelText: 'Населённый пункт',
+              prefixIcon: Icon(Icons.place_outlined),
+              border: OutlineInputBorder(),
+            ),
+            items: [
+              const DropdownMenuItem<int?>(value: null, child: Text('Весь район')),
+              ...settlements.map(
+                (s) => DropdownMenuItem<int?>(
+                  value: s['id'] as int,
+                  child: Text(s['display_name'] as String, overflow: TextOverflow.ellipsis),
+                ),
+              ),
+            ],
+            onChanged: (v) {
+              setState(() => settlementId = v);
+              _load();
+            },
+          ),
+        ),
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
           child: SegmentedButton<String>(
             segments: const [
               ButtonSegment(value: 'upcoming', label: Text('Скоро'), icon: Icon(Icons.event_available_outlined, size: 18)),
@@ -845,6 +1000,8 @@ class _TransportTabState extends State<_TransportTab> {
   bool loading = false;
   String? error;
   int? settlementId;
+  String dayFilter = 'today';
+  bool favoritesOnly = false;
 
   @override
   void initState() {
@@ -882,6 +1039,8 @@ class _TransportTabState extends State<_TransportTab> {
       final data = await context.read<AppState>().loadTransport(
             settlementId: settlementId,
             q: search.text.trim().isEmpty ? null : search.text,
+            day: dayFilter,
+            favoritesOnly: favoritesOnly,
           );
       if (mounted) {
         setState(() {
@@ -896,6 +1055,37 @@ class _TransportTabState extends State<_TransportTab> {
           loading = false;
         });
       }
+    }
+  }
+
+  Future<void> _toggleFavoritesFilter() async {
+    if (!favoritesOnly) {
+      final ok = await ensureLoggedIn(context, message: 'Войдите, чтобы видеть избранные маршруты');
+      if (!ok || !mounted) return;
+    }
+    setState(() => favoritesOnly = !favoritesOnly);
+    await _load();
+  }
+
+  Future<void> _toggleFavorite(Map<String, dynamic> item) async {
+    final id = item['id'];
+    if (id is! int) return;
+    final ok = await ensureLoggedIn(context, message: 'Войдите, чтобы сохранить маршрут в избранное');
+    if (!ok || !mounted) return;
+    final state = context.read<AppState>();
+    final was = state.isTransportFavorited(id, item: item);
+    try {
+      final updated = await state.toggleTransportFavorite(id, currentlyFavorited: was);
+      if (!mounted) return;
+      setState(() {
+        final idx = items.indexWhere((e) => e is Map && e['id'] == id);
+        if (idx >= 0) items[idx] = updated;
+        if (favoritesOnly && updated['is_favorited'] != true) {
+          items.removeWhere((e) => e is Map && e['id'] == id);
+        }
+      });
+    } catch (e) {
+      if (mounted) showAppSnack(context, AppState.userFriendlyError(e), error: true);
     }
   }
 
@@ -932,7 +1122,33 @@ class _TransportTabState extends State<_TransportTab> {
             },
           ),
         ),
-        if (settlementId != null)
+        if (settlementId != null) ...[
+          SizedBox(
+            height: 44,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+              children: [
+                for (final entry in const [
+                  ('today', 'Сегодня'),
+                  ('weekdays', 'Будни'),
+                  ('weekends', 'Выходные'),
+                  ('all', 'Все'),
+                ])
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: RyadomFilterChip(
+                      label: entry.$2,
+                      selected: dayFilter == entry.$1,
+                      onSelected: (_) {
+                        setState(() => dayFilter = entry.$1);
+                        _load();
+                      },
+                    ),
+                  ),
+              ],
+            ),
+          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
             child: TextField(
@@ -940,7 +1156,7 @@ class _TransportTabState extends State<_TransportTab> {
               textInputAction: TextInputAction.search,
               onSubmitted: (_) => _load(),
               decoration: InputDecoration(
-                hintText: 'Маршрут, номер…',
+                hintText: 'направление, остановка…',
                 prefixIcon: const Icon(Icons.search),
                 suffixIcon: search.text.isEmpty
                     ? null
@@ -956,17 +1172,24 @@ class _TransportTabState extends State<_TransportTab> {
               onChanged: (_) => setState(() {}),
             ),
           ),
-        if (settlementId != null)
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: Text(
-                '${items.length} маршрутов',
-                style: TextStyle(color: scheme.onSurfaceVariant),
-              ),
+            child: Row(
+              children: [
+                Text(
+                  '${items.length} маршрутов',
+                  style: TextStyle(color: scheme.onSurfaceVariant),
+                ),
+                const Spacer(),
+                RyadomFilterChip(
+                  label: 'Избранное',
+                  selected: favoritesOnly,
+                  onSelected: (_) => _toggleFavoritesFilter(),
+                ),
+              ],
             ),
           ),
+        ],
         Expanded(
           child: settlementId == null
               ? emptyState(
@@ -995,8 +1218,10 @@ class _TransportTabState extends State<_TransportTab> {
                                       height: 280,
                                       child: emptyState(
                                         context: context,
-                                        title: 'Маршрутов нет',
-                                        subtitle: 'Для этого населённого пункта расписаний пока нет',
+                                        title: favoritesOnly ? 'Нет избранных маршрутов' : 'Маршрутов нет',
+                                        subtitle: favoritesOnly
+                                            ? 'Добавьте маршруты звёздочкой в списке'
+                                            : 'Для этого населённого пункта расписаний пока нет',
                                         icon: Icons.directions_bus_outlined,
                                         actionLabel: 'Обновить',
                                         onAction: _load,
@@ -1009,48 +1234,70 @@ class _TransportTabState extends State<_TransportTab> {
                                   itemCount: items.length,
                                   separatorBuilder: (_, __) => const SizedBox(height: 12),
                                   itemBuilder: (_, i) {
-                                    final item = items[i] as Map<String, dynamic>;
+                                    final item = Map<String, dynamic>.from(items[i] as Map);
                                     final number = item['route_number']?.toString();
+                                    final id = item['id'];
+                                    final favorited =
+                                        id is int && state.isTransportFavorited(id, item: item);
                                     return Material(
                                       color: Theme.of(context).cardTheme.color,
                                       borderRadius: BorderRadius.circular(18),
                                       child: InkWell(
                                         borderRadius: BorderRadius.circular(18),
-                                        onTap: () => Navigator.push(
-                                          context,
-                                          fastRoute(TransportDetailScreen(item: item)),
-                                        ),
+                                        onTap: () async {
+                                          await Navigator.push(
+                                            context,
+                                            fastRoute(TransportDetailScreen(item: item)),
+                                          );
+                                          if (mounted) _load();
+                                        },
                                         child: Container(
                                           padding: const EdgeInsets.all(16),
                                           decoration: BoxDecoration(
                                             borderRadius: BorderRadius.circular(18),
                                             border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.45)),
                                           ),
-                                          child: Column(
+                                          child: Row(
                                             crossAxisAlignment: CrossAxisAlignment.start,
                                             children: [
-                                              if (number != null && number.isNotEmpty)
-                                                Text(
-                                                  number,
-                                                  style: TextStyle(
-                                                    color: scheme.primary,
-                                                    fontWeight: FontWeight.w700,
-                                                    fontSize: 12,
-                                                  ),
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                                  children: [
+                                                    if (number != null && number.isNotEmpty)
+                                                      Text(
+                                                        number,
+                                                        style: TextStyle(
+                                                          color: scheme.primary,
+                                                          fontWeight: FontWeight.w700,
+                                                          fontSize: 12,
+                                                        ),
+                                                      ),
+                                                    Text(
+                                                      '${item['title']}',
+                                                      style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 17),
+                                                    ),
+                                                    if (item['description'] != null) ...[
+                                                      const SizedBox(height: 6),
+                                                      Text(
+                                                        '${item['description']}',
+                                                        maxLines: 2,
+                                                        overflow: TextOverflow.ellipsis,
+                                                        style: TextStyle(color: scheme.onSurfaceVariant, height: 1.3),
+                                                      ),
+                                                    ],
+                                                  ],
                                                 ),
-                                              Text(
-                                                '${item['title']}',
-                                                style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 17),
                                               ),
-                                              if (item['description'] != null) ...[
-                                                const SizedBox(height: 6),
-                                                Text(
-                                                  '${item['description']}',
-                                                  maxLines: 2,
-                                                  overflow: TextOverflow.ellipsis,
-                                                  style: TextStyle(color: scheme.onSurfaceVariant, height: 1.3),
+                                              IconButton(
+                                                tooltip: favorited ? 'Убрать из избранного' : 'В избранное',
+                                                visualDensity: VisualDensity.compact,
+                                                onPressed: () => _toggleFavorite(item),
+                                                icon: Icon(
+                                                  favorited ? Icons.star : Icons.star_border,
+                                                  color: favorited ? scheme.primary : scheme.onSurfaceVariant,
                                                 ),
-                                              ],
+                                              ),
                                             ],
                                           ),
                                         ),

@@ -729,12 +729,95 @@ main.content {
   word-break: break-word;
 }
 
+/* Кастомные чекбоксы — везде в админке */
+input[type='checkbox'] {
+  appearance: none;
+  -webkit-appearance: none;
+  box-sizing: border-box;
+  width: 1.25rem;
+  height: 1.25rem;
+  margin: 0;
+  flex-shrink: 0;
+  border: 2px solid var(--line-strong);
+  border-radius: 6px;
+  background: var(--surface);
+  cursor: pointer;
+  position: relative;
+  vertical-align: middle;
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+input[type='checkbox']:hover {
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 18%, transparent);
+}
+
+input[type='checkbox']:focus-visible {
+  outline: none;
+  border-color: var(--brand);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--brand) 28%, transparent);
+}
+
+input[type='checkbox']:checked {
+  background: var(--brand);
+  border-color: var(--brand);
+}
+
+input[type='checkbox']:checked::after {
+  content: '';
+  position: absolute;
+  left: 0.32rem;
+  top: 0.08rem;
+  width: 0.28rem;
+  height: 0.55rem;
+  border: solid #fff;
+  border-width: 0 2.5px 2.5px 0;
+  transform: rotate(45deg);
+}
+
+[data-theme='dark'] input[type='checkbox']:checked::after {
+  border-color: #0a100c;
+}
+
+input[type='checkbox']:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
 .check-inline {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  font-size: 13px;
-  color: var(--ink-soft);
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--surface-2);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--ink);
+  cursor: pointer;
+  user-select: none;
+  transition:
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+
+.check-inline:hover {
+  border-color: color-mix(in srgb, var(--brand) 45%, var(--line));
+}
+
+.check-inline:has(input:checked) {
+  border-color: color-mix(in srgb, var(--brand) 55%, var(--line));
+  background: var(--brand-soft);
+  color: var(--ink);
+}
+
+.check-inline input[type='checkbox'] {
+  margin-top: 0;
 }
 
 .toast {
@@ -848,12 +931,9 @@ main.content {
 }
 
 .row-card .row-check {
-  margin-top: 4px;
-  width: 18px;
-  height: 18px;
-  accent-color: var(--brand);
-  cursor: pointer;
-  flex-shrink: 0;
+  margin-top: 2px;
+  width: 1.25rem;
+  height: 1.25rem;
 }
 
 .row-card .row-main {

@@ -27,6 +27,7 @@ class AppState extends ChangeNotifier {
   List<dynamic> favorites = [];
   final Set<int> favoriteIds = {};
   final Set<int> directoryFavoriteIds = {};
+  final Set<int> transportFavoriteIds = {};
   List<Map<String, dynamic>> viewHistory = [];
   String? error;
   bool listingsOffline = false;
@@ -87,6 +88,7 @@ class AppState extends ChangeNotifier {
       favorites = [];
       favoriteIds.clear();
       directoryFavoriteIds.clear();
+      transportFavoriteIds.clear();
       unreadNotifications = 0;
       sessionMessage = 'Сессия истекла. Войдите снова';
       notifyListeners();
@@ -331,6 +333,21 @@ class AppState extends ChangeNotifier {
     return await api.request('/directory/$id') as Map<String, dynamic>;
   }
 
+  Future<List<dynamic>> loadNews({int? settlementId}) async {
+    final params = <String, String>{};
+    if (settlementId != null) params['settlement_id'] = '$settlementId';
+    final qs = params.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&');
+    final path = qs.isEmpty ? '/news' : '/news?$qs';
+    return await api.request(path) as List<dynamic>;
+  }
+
+  Future<Map<String, dynamic>?> loadActiveAlert() async {
+    final data = await api.request('/alerts/active');
+    if (data == null) return null;
+    if (data is Map) return Map<String, dynamic>.from(data);
+    return null;
+  }
+
   Future<List<dynamic>> loadEvents({bool? upcoming, String? q, int? settlementId}) async {
     final params = <String, String>{};
     if (upcoming != null) params['upcoming'] = upcoming ? '1' : '0';
@@ -345,17 +362,75 @@ class AppState extends ChangeNotifier {
     return await api.request('/events/$id') as Map<String, dynamic>;
   }
 
-  Future<List<dynamic>> loadTransport({String? q, int? settlementId}) async {
+  Future<void> trackEventView(int id) async {
+    try {
+      await api.request('/events/$id/view', method: 'POST');
+    } catch (_) {}
+  }
+
+  void _syncTransportFavoriteIds(List<dynamic> rows) {
+    for (final item in rows) {
+      if (item is Map && item['is_favorited'] == true && item['id'] is int) {
+        transportFavoriteIds.add(item['id'] as int);
+      }
+    }
+  }
+
+  Future<List<dynamic>> loadTransport({
+    String? q,
+    int? settlementId,
+    String? day,
+    bool favoritesOnly = false,
+  }) async {
     final params = <String, String>{};
     if (settlementId != null) params['settlement_id'] = '$settlementId';
     if (q != null && q.trim().isNotEmpty) params['q'] = q.trim();
+    if (day != null && day.isNotEmpty) params['day'] = day;
+    if (favoritesOnly) params['favorites_only'] = 'true';
     final qs = params.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&');
     final path = qs.isEmpty ? '/transport' : '/transport?$qs';
-    return await api.request(path) as List<dynamic>;
+    final rows = await api.request(path, auth: true) as List<dynamic>;
+    _syncTransportFavoriteIds(rows);
+    notifyListeners();
+    return rows;
   }
 
   Future<Map<String, dynamic>> getTransportRoute(int id) async {
-    return await api.request('/transport/$id') as Map<String, dynamic>;
+    final item = await api.request('/transport/$id', auth: true) as Map<String, dynamic>;
+    if (item['is_favorited'] == true) {
+      transportFavoriteIds.add(id);
+    } else {
+      transportFavoriteIds.remove(id);
+    }
+    notifyListeners();
+    return item;
+  }
+
+  Future<void> trackTransportView(int id) async {
+    try {
+      await api.request('/transport/$id/view', method: 'POST', auth: true);
+    } catch (_) {}
+  }
+
+  Future<Map<String, dynamic>> toggleTransportFavorite(int routeId, {bool? currentlyFavorited}) async {
+    final was = currentlyFavorited ?? transportFavoriteIds.contains(routeId);
+    final updated = was
+        ? await api.request('/transport/$routeId/favorite', method: 'DELETE', auth: true) as Map<String, dynamic>
+        : await api.request('/transport/$routeId/favorite', method: 'POST', auth: true) as Map<String, dynamic>;
+    final favorited = updated['is_favorited'] == true;
+    if (favorited) {
+      transportFavoriteIds.add(routeId);
+    } else {
+      transportFavoriteIds.remove(routeId);
+    }
+    notifyListeners();
+    return updated;
+  }
+
+  bool isTransportFavorited(int id, {Map<String, dynamic>? item}) {
+    if (transportFavoriteIds.contains(id)) return true;
+    if (item != null && item['is_favorited'] == true) return true;
+    return false;
   }
 
   Future<void> refreshPublic() async {
@@ -724,6 +799,7 @@ class AppState extends ChangeNotifier {
     favorites = [];
     favoriteIds.clear();
     directoryFavoriteIds.clear();
+    transportFavoriteIds.clear();
     unreadNotifications = 0;
     await loadListings();
     notifyListeners();

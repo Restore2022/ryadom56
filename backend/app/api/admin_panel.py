@@ -16,6 +16,8 @@ from app.models import (
     AuditLog,
     BlacklistEntry,
     DirectoryItem,
+    DistrictAlert,
+    DistrictNews,
     Event,
     Listing,
     ListingReport,
@@ -134,6 +136,26 @@ def stats(
             ).scalar_one()
         ),
         transport_routes=int(db.execute(select(func.count(TransportRoute.id))).scalar_one()),
+        news_total=int(db.execute(select(func.count(DistrictNews.id))).scalar_one()),
+        active_alerts=int(
+            db.execute(select(func.count(DistrictAlert.id)).where(DistrictAlert.is_active.is_(True))).scalar_one()
+        ),
+        top_events=[
+            {"id": eid, "title": title, "views": int(views or 0)}
+            for eid, title, views in db.execute(
+                select(Event.id, Event.title, Event.view_count)
+                .order_by(Event.view_count.desc())
+                .limit(5)
+            ).all()
+        ],
+        top_routes=[
+            {"id": rid, "title": title, "views": int(views or 0)}
+            for rid, title, views in db.execute(
+                select(TransportRoute.id, TransportRoute.title, TransportRoute.view_count)
+                .order_by(TransportRoute.view_count.desc())
+                .limit(5)
+            ).all()
+        ],
     )
 
 

@@ -24,7 +24,7 @@ Future<bool> ensureLoggedIn(
             Text(message, style: Theme.of(ctx).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w700)),
             const SizedBox(height: 8),
             Text(
-              'Гостям доступен просмотр ленты и справочника. Для звонков, избранного и объявлений нужен аккаунт.',
+              'Гостям доступны лента, афиша, транспорт, справочник и новости. Для избранного, подачи объявлений, жалоб и звонков нужен аккаунт.',
               style: TextStyle(color: Theme.of(ctx).colorScheme.onSurfaceVariant, height: 1.4),
             ),
             const SizedBox(height: 16),
