@@ -5,11 +5,13 @@ import type {
   AuditLog,
   BlacklistEntry,
   DirectoryItem,
+  EventItem,
   LegalDocument,
   Listing,
   ListingReport,
   Settlement,
   Stats,
+  TransportRoute,
   User,
 } from './api';
 import './App.css';
@@ -195,6 +197,18 @@ const REPORT_STATUS_LABEL: Record<string, string> = {
   reviewed: 'Просмотрена',
   dismissed: 'Отклонена',
 };
+
+function toDatetimeLocal(value?: string | null) {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function fromDatetimeLocal(value: string): string {
+  return new Date(value).toISOString();
+}
 
 function formatDate(value?: string | null) {
   if (!value) return '—';
@@ -392,6 +406,16 @@ function Shell({
               <span className="nav-ico">◎</span> Справочник
             </NavLink>
           )}
+          {directory && (
+            <NavLink to="/events">
+              <span className="nav-ico">★</span> Афиша
+            </NavLink>
+          )}
+          {directory && (
+            <NavLink to="/transport">
+              <span className="nav-ico">→</span> Транспорт
+            </NavLink>
+          )}
           {mod && (
             <NavLink to="/blacklist">
               <span className="nav-ico">⊘</span> Чёрный список
@@ -501,6 +525,18 @@ function Dashboard({ isAdmin }: { isAdmin?: boolean }) {
         <div className="stat">
           <div className="label">Пользователей</div>
           <div className="value">{stats.users}</div>
+        </div>
+        <div className="stat brand">
+          <div className="label">События (всего)</div>
+          <div className="value">{stats.events_total ?? 0}</div>
+        </div>
+        <div className="stat ok">
+          <div className="label">Скоро в афише</div>
+          <div className="value">{stats.events_upcoming ?? 0}</div>
+        </div>
+        <div className="stat">
+          <div className="label">Маршруты</div>
+          <div className="value">{stats.transport_routes ?? 0}</div>
         </div>
         <div className="stat">
           <div className="label">Одобр. / откл. (30 дн.)</div>
@@ -2029,6 +2065,536 @@ function UsersPage() {
   );
 }
 
+type EventForm = {
+  title: string;
+  description: string;
+  starts_at: string;
+  ends_at: string;
+  place_text: string;
+  settlement_id: number | '';
+  address: string;
+  is_published: boolean;
+};
+
+const EMPTY_EVENT: EventForm = {
+  title: '',
+  description: '',
+  starts_at: '',
+  ends_at: '',
+  place_text: '',
+  settlement_id: '',
+  address: '',
+  is_published: true,
+};
+
+function EventsPage() {
+  const [items, setItems] = useState<EventItem[]>([]);
+  const [settlements, setSettlements] = useState<Settlement[]>([]);
+  const [form, setForm] = useState<EventForm>(EMPTY_EVENT);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [query, setQuery] = useState('');
+  const [publishedFilter, setPublishedFilter] = useState<'all' | 'published' | 'hidden'>('all');
+
+  async function load() {
+    const [ev, s] = await Promise.all([
+      api<EventItem[]>('/events'),
+      api<Settlement[]>('/settlements'),
+    ]);
+    setItems(ev);
+    setSettlements(s);
+  }
+
+  useEffect(() => {
+    load().catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+  }, []);
+
+  function openCreate() {
+    setEditingId(null);
+    setForm(EMPTY_EVENT);
+    setError('');
+    setModalOpen(true);
+  }
+
+  function startEdit(item: EventItem) {
+    setEditingId(item.id);
+    setForm({
+      title: item.title,
+      description: item.description,
+      starts_at: toDatetimeLocal(item.starts_at),
+      ends_at: toDatetimeLocal(item.ends_at),
+      place_text: item.place_text,
+      settlement_id: item.settlement_id ?? '',
+      address: item.address || '',
+      is_published: item.is_published,
+    });
+    setError('');
+    setModalOpen(true);
+  }
+
+  function closeModal() {
+    if (busy) return;
+    setModalOpen(false);
+    setError('');
+  }
+
+  async function saveItem(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    if (!form.title.trim() || !form.description.trim() || !form.place_text.trim() || !form.starts_at) {
+      setError('Заполните название, описание, место и дату начала');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    const body = {
+      title: form.title.trim(),
+      description: form.description.trim(),
+      starts_at: fromDatetimeLocal(form.starts_at),
+      ends_at: form.ends_at ? fromDatetimeLocal(form.ends_at) : null,
+      place_text: form.place_text.trim(),
+      settlement_id: form.settlement_id === '' ? null : Number(form.settlement_id),
+      address: form.address.trim() || null,
+      is_published: form.is_published,
+    };
+    try {
+      if (editingId) {
+        await api(`/events/${editingId}`, { method: 'PATCH', body: JSON.stringify(body) });
+      } else {
+        await api('/events', { method: 'POST', body: JSON.stringify(body) });
+      }
+      setModalOpen(false);
+      await load();
+      pushToast(editingId ? 'Событие обновлено' : 'Событие создано');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id: number) {
+    if (!(await confirmAction('Удалить событие? Это действие нельзя отменить.'))) return;
+    await api(`/events/${id}`, { method: 'DELETE' });
+    if (editingId === id) closeModal();
+    await load();
+    pushToast('Событие удалено');
+  }
+
+  return (
+    <div>
+      <div className="page-head">
+        <div>
+          <h1>Афиша</h1>
+          <p>События района для вкладки «Афиша» в приложении</p>
+        </div>
+        <button className="btn" type="button" onClick={openCreate}>
+          Добавить событие
+        </button>
+      </div>
+      <div className="toolbar">
+        <input placeholder="Поиск…" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <select
+          value={publishedFilter}
+          onChange={(e) => setPublishedFilter(e.target.value as 'all' | 'published' | 'hidden')}
+        >
+          <option value="all">Все статусы</option>
+          <option value="published">Опубликованные</option>
+          <option value="hidden">Скрытые</option>
+        </select>
+      </div>
+      {error && !modalOpen && <p className="error">{error}</p>}
+      <div className="list">
+        {items
+          .filter((item) => {
+            if (publishedFilter === 'published' && !item.is_published) return false;
+            if (publishedFilter === 'hidden' && item.is_published) return false;
+            if (!query.trim()) return true;
+            const q = query.trim().toLowerCase();
+            return (
+              item.title.toLowerCase().includes(q) ||
+              item.place_text.toLowerCase().includes(q) ||
+              (item.settlement_name || '').toLowerCase().includes(q)
+            );
+          })
+          .map((item) => (
+            <article key={item.id} className="row-card">
+              <div className="row-main">
+                <h3 className="row-title">{item.title}</h3>
+                <div className="meta">
+                  <span className="chip">{formatDate(item.starts_at)}</span>
+                  <span className="chip neutral">{item.place_text}</span>
+                  {item.settlement_name && <span className="chip neutral">{item.settlement_name}</span>}
+                  {item.is_published ? <span className="chip ok">Опубликовано</span> : <span className="chip warn">Скрыто</span>}
+                </div>
+                <p className="row-body">{item.description.length > 160 ? `${item.description.slice(0, 160)}…` : item.description}</p>
+              </div>
+              <div className="actions">
+                <button className="btn" type="button" onClick={() => startEdit(item)}>
+                  Изменить
+                </button>
+                <button className="btn danger" type="button" onClick={() => remove(item.id)}>
+                  Удалить
+                </button>
+              </div>
+            </article>
+          ))}
+        {!items.length && <div className="empty">Событий пока нет</div>}
+      </div>
+
+      {modalOpen && (
+        <div className="modal-backdrop" onClick={closeModal}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 'min(720px, 100%)' }}>
+            <h2>{editingId ? 'Редактировать событие' : 'Новое событие'}</h2>
+            <form onSubmit={saveItem}>
+              <div className="grid2">
+                <label className="field">
+                  Название
+                  <input required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+                </label>
+                <label className="field">
+                  Место
+                  <input
+                    required
+                    value={form.place_text}
+                    onChange={(e) => setForm({ ...form, place_text: e.target.value })}
+                  />
+                </label>
+                <label className="field">
+                  Начало
+                  <input
+                    required
+                    type="datetime-local"
+                    value={form.starts_at}
+                    onChange={(e) => setForm({ ...form, starts_at: e.target.value })}
+                  />
+                </label>
+                <label className="field">
+                  Окончание (необяз.)
+                  <input
+                    type="datetime-local"
+                    value={form.ends_at}
+                    onChange={(e) => setForm({ ...form, ends_at: e.target.value })}
+                  />
+                </label>
+                <label className="field">
+                  Населённый пункт
+                  <select
+                    value={form.settlement_id === '' ? '' : String(form.settlement_id)}
+                    onChange={(e) =>
+                      setForm({ ...form, settlement_id: e.target.value ? Number(e.target.value) : '' })
+                    }
+                  >
+                    <option value="">Не указан</option>
+                    {settlements.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.display_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  Адрес
+                  <input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
+                </label>
+                <label className="field">
+                  Статус
+                  <select
+                    value={form.is_published ? '1' : '0'}
+                    onChange={(e) => setForm({ ...form, is_published: e.target.value === '1' })}
+                  >
+                    <option value="1">Опубликовано</option>
+                    <option value="0">Скрыто</option>
+                  </select>
+                </label>
+                <label className="field full">
+                  Описание
+                  <textarea
+                    required
+                    rows={6}
+                    value={form.description}
+                    onChange={(e) => setForm({ ...form, description: e.target.value })}
+                  />
+                </label>
+              </div>
+              {error && <p className="error">{error}</p>}
+              <div className="modal-actions">
+                <button className="btn" type="submit" disabled={busy}>
+                  {busy ? 'Сохранение…' : 'Сохранить'}
+                </button>
+                <button className="btn secondary" type="button" disabled={busy} onClick={closeModal}>
+                  Отмена
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+type TransportForm = {
+  title: string;
+  route_number: string;
+  description: string;
+  schedule_text: string;
+  notes: string;
+  settlement_id: number | '';
+  is_published: boolean;
+};
+
+const EMPTY_TRANSPORT: TransportForm = {
+  title: '',
+  route_number: '',
+  description: '',
+  schedule_text: '',
+  notes: '',
+  settlement_id: '',
+  is_published: true,
+};
+
+function TransportPage() {
+  const [items, setItems] = useState<TransportRoute[]>([]);
+  const [settlements, setSettlements] = useState<Settlement[]>([]);
+  const [form, setForm] = useState<TransportForm>(EMPTY_TRANSPORT);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [query, setQuery] = useState('');
+  const [publishedFilter, setPublishedFilter] = useState<'all' | 'published' | 'hidden'>('all');
+
+  async function load() {
+    const [routes, s] = await Promise.all([
+      api<TransportRoute[]>('/transport'),
+      api<Settlement[]>('/settlements'),
+    ]);
+    setItems(routes);
+    setSettlements(s);
+  }
+
+  useEffect(() => {
+    load().catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+  }, []);
+
+  function openCreate() {
+    setEditingId(null);
+    setForm(EMPTY_TRANSPORT);
+    setError('');
+    setModalOpen(true);
+  }
+
+  function startEdit(item: TransportRoute) {
+    setEditingId(item.id);
+    setForm({
+      title: item.title,
+      route_number: item.route_number || '',
+      description: item.description || '',
+      schedule_text: item.schedule_text,
+      notes: item.notes || '',
+      settlement_id: item.settlement_id ?? '',
+      is_published: item.is_published,
+    });
+    setError('');
+    setModalOpen(true);
+  }
+
+  function closeModal() {
+    if (busy) return;
+    setModalOpen(false);
+    setError('');
+  }
+
+  async function saveItem(e: React.FormEvent) {
+    e.preventDefault();
+    if (busy) return;
+    if (!form.title.trim() || form.schedule_text.trim().length < 3) {
+      setError('Укажите название и расписание');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    const body = {
+      title: form.title.trim(),
+      route_number: form.route_number.trim() || null,
+      description: form.description.trim() || null,
+      schedule_text: form.schedule_text.trim(),
+      notes: form.notes.trim() || null,
+      settlement_id: form.settlement_id === '' ? null : Number(form.settlement_id),
+      is_published: form.is_published,
+    };
+    try {
+      if (editingId) {
+        await api(`/transport/${editingId}`, { method: 'PATCH', body: JSON.stringify(body) });
+      } else {
+        await api('/transport', { method: 'POST', body: JSON.stringify(body) });
+      }
+      setModalOpen(false);
+      await load();
+      pushToast(editingId ? 'Маршрут обновлён' : 'Маршрут создан');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(id: number) {
+    if (!(await confirmAction('Удалить маршрут?'))) return;
+    await api(`/transport/${id}`, { method: 'DELETE' });
+    if (editingId === id) closeModal();
+    await load();
+    pushToast('Маршрут удалён');
+  }
+
+  return (
+    <div>
+      <div className="page-head">
+        <div>
+          <h1>Транспорт</h1>
+          <p>Статические расписания автобусов и маршруток</p>
+        </div>
+        <button className="btn" type="button" onClick={openCreate}>
+          Добавить маршрут
+        </button>
+      </div>
+      <div className="toolbar">
+        <input placeholder="Поиск…" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <select
+          value={publishedFilter}
+          onChange={(e) => setPublishedFilter(e.target.value as 'all' | 'published' | 'hidden')}
+        >
+          <option value="all">Все статусы</option>
+          <option value="published">Опубликованные</option>
+          <option value="hidden">Скрытые</option>
+        </select>
+      </div>
+      {error && !modalOpen && <p className="error">{error}</p>}
+      <div className="list">
+        {items
+          .filter((item) => {
+            if (publishedFilter === 'published' && !item.is_published) return false;
+            if (publishedFilter === 'hidden' && item.is_published) return false;
+            if (!query.trim()) return true;
+            const q = query.trim().toLowerCase();
+            return (
+              item.title.toLowerCase().includes(q) ||
+              (item.route_number || '').toLowerCase().includes(q) ||
+              (item.settlement_name || '').toLowerCase().includes(q)
+            );
+          })
+          .map((item) => (
+            <article key={item.id} className="row-card">
+              <div className="row-main">
+                <h3 className="row-title">
+                  {item.route_number ? `${item.route_number} · ` : ''}
+                  {item.title}
+                </h3>
+                <div className="meta">
+                  {item.settlement_name && <span className="chip neutral">{item.settlement_name}</span>}
+                  {item.is_published ? <span className="chip ok">Опубликовано</span> : <span className="chip warn">Скрыто</span>}
+                  <span className="chip neutral">обн. {formatDate(item.updated_at)}</span>
+                </div>
+                <p className="row-body" style={{ whiteSpace: 'pre-wrap' }}>
+                  {item.schedule_text.length > 180 ? `${item.schedule_text.slice(0, 180)}…` : item.schedule_text}
+                </p>
+              </div>
+              <div className="actions">
+                <button className="btn" type="button" onClick={() => startEdit(item)}>
+                  Изменить
+                </button>
+                <button className="btn danger" type="button" onClick={() => remove(item.id)}>
+                  Удалить
+                </button>
+              </div>
+            </article>
+          ))}
+        {!items.length && <div className="empty">Маршрутов пока нет</div>}
+      </div>
+
+      {modalOpen && (
+        <div className="modal-backdrop" onClick={closeModal}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 'min(720px, 100%)' }}>
+            <h2>{editingId ? 'Редактировать маршрут' : 'Новый маршрут'}</h2>
+            <form onSubmit={saveItem}>
+              <div className="grid2">
+                <label className="field">
+                  Название
+                  <input required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+                </label>
+                <label className="field">
+                  Номер / тип
+                  <input
+                    value={form.route_number}
+                    onChange={(e) => setForm({ ...form, route_number: e.target.value })}
+                    placeholder="112 / м/т"
+                  />
+                </label>
+                <label className="field">
+                  Населённый пункт
+                  <select
+                    value={form.settlement_id === '' ? '' : String(form.settlement_id)}
+                    onChange={(e) =>
+                      setForm({ ...form, settlement_id: e.target.value ? Number(e.target.value) : '' })
+                    }
+                  >
+                    <option value="">Не указан</option>
+                    {settlements.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.display_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  Статус
+                  <select
+                    value={form.is_published ? '1' : '0'}
+                    onChange={(e) => setForm({ ...form, is_published: e.target.value === '1' })}
+                  >
+                    <option value="1">Опубликовано</option>
+                    <option value="0">Скрыто</option>
+                  </select>
+                </label>
+                <label className="field full">
+                  Краткое описание
+                  <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+                </label>
+                <label className="field full">
+                  Расписание
+                  <textarea
+                    required
+                    rows={10}
+                    value={form.schedule_text}
+                    onChange={(e) => setForm({ ...form, schedule_text: e.target.value })}
+                    placeholder="Времена отправления по дням…"
+                  />
+                </label>
+                <label className="field full">
+                  Заметки
+                  <textarea rows={3} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+                </label>
+              </div>
+              {error && <p className="error">{error}</p>}
+              <div className="modal-actions">
+                <button className="btn" type="submit" disabled={busy}>
+                  {busy ? 'Сохранение…' : 'Сохранить'}
+                </button>
+                <button className="btn secondary" type="button" disabled={busy} onClick={closeModal}>
+                  Отмена
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LegalPage() {
   const [items, setItems] = useState<LegalDocument[]>([]);
   const [selected, setSelected] = useState<LegalDocument | null>(null);
@@ -2211,6 +2777,8 @@ export default function App() {
         {canModerate(user!.role) && <Route path="/reports" element={<ReportsPage />} />}
         <Route path="/audit" element={<AuditPage />} />
         {canEditDirectory(user!.role) && <Route path="/directory" element={<DirectoryPage />} />}
+        {canEditDirectory(user!.role) && <Route path="/events" element={<EventsPage />} />}
+        {canEditDirectory(user!.role) && <Route path="/transport" element={<TransportPage />} />}
         {canModerate(user!.role) && <Route path="/blacklist" element={<BlacklistPage />} />}
         {user!.role === 'admin' && <Route path="/users" element={<UsersPage />} />}
         {user!.role === 'admin' && <Route path="/legal" element={<LegalPage />} />}

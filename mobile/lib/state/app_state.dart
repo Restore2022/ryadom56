@@ -331,6 +331,33 @@ class AppState extends ChangeNotifier {
     return await api.request('/directory/$id') as Map<String, dynamic>;
   }
 
+  Future<List<dynamic>> loadEvents({bool? upcoming, String? q, int? settlementId}) async {
+    final params = <String, String>{};
+    if (upcoming != null) params['upcoming'] = upcoming ? '1' : '0';
+    if (settlementId != null) params['settlement_id'] = '$settlementId';
+    if (q != null && q.trim().isNotEmpty) params['q'] = q.trim();
+    final qs = params.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&');
+    final path = qs.isEmpty ? '/events' : '/events?$qs';
+    return await api.request(path) as List<dynamic>;
+  }
+
+  Future<Map<String, dynamic>> getEvent(int id) async {
+    return await api.request('/events/$id') as Map<String, dynamic>;
+  }
+
+  Future<List<dynamic>> loadTransport({String? q, int? settlementId}) async {
+    final params = <String, String>{};
+    if (settlementId != null) params['settlement_id'] = '$settlementId';
+    if (q != null && q.trim().isNotEmpty) params['q'] = q.trim();
+    final qs = params.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&');
+    final path = qs.isEmpty ? '/transport' : '/transport?$qs';
+    return await api.request(path) as List<dynamic>;
+  }
+
+  Future<Map<String, dynamic>> getTransportRoute(int id) async {
+    return await api.request('/transport/$id') as Map<String, dynamic>;
+  }
+
   Future<void> refreshPublic() async {
     await Future.wait([loadListings(), loadDirectory()]);
   }

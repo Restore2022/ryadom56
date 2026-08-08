@@ -329,6 +329,90 @@ class DayStat(BaseModel):
     count: int
 
 
+class EventCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=200)
+    description: str = Field(min_length=3, max_length=8000)
+    starts_at: datetime
+    ends_at: datetime | None = None
+    place_text: str = Field(min_length=2, max_length=255)
+    settlement_id: int | None = None
+    address: str | None = Field(default=None, max_length=255)
+    lat: float | None = None
+    lon: float | None = None
+    is_published: bool = True
+
+
+class EventUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=2, max_length=200)
+    description: str | None = Field(default=None, min_length=3, max_length=8000)
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    place_text: str | None = Field(default=None, min_length=2, max_length=255)
+    settlement_id: int | None = None
+    address: str | None = Field(default=None, max_length=255)
+    lat: float | None = None
+    lon: float | None = None
+    is_published: bool | None = None
+
+
+class EventOut(BaseModel):
+    id: int
+    title: str
+    description: str
+    starts_at: datetime
+    ends_at: datetime | None
+    place_text: str
+    settlement_id: int | None
+    settlement_name: str | None = None
+    address: str | None
+    lat: float | None
+    lon: float | None
+    is_published: bool
+    created_by_id: int | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class TransportCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=200)
+    route_number: str | None = Field(default=None, max_length=40)
+    description: str | None = Field(default=None, max_length=4000)
+    schedule_text: str = Field(min_length=3, max_length=12000)
+    notes: str | None = Field(default=None, max_length=2000)
+    settlement_id: int | None = None
+    is_published: bool = True
+
+
+class TransportUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=2, max_length=200)
+    route_number: str | None = Field(default=None, max_length=40)
+    description: str | None = Field(default=None, max_length=4000)
+    schedule_text: str | None = Field(default=None, min_length=3, max_length=12000)
+    notes: str | None = Field(default=None, max_length=2000)
+    settlement_id: int | None = None
+    is_published: bool | None = None
+
+
+class TransportOut(BaseModel):
+    id: int
+    title: str
+    route_number: str | None
+    description: str | None
+    schedule_text: str
+    notes: str | None
+    settlement_id: int | None
+    settlement_name: str | None = None
+    is_published: bool
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class StatsOut(BaseModel):
     users: int
     listings_pending: int
@@ -342,6 +426,9 @@ class StatsOut(BaseModel):
     moderation_conversion: float | None = None
     listings_per_day: list[DayStat] = []
     top_categories: list[CategoryStat] = []
+    events_total: int = 0
+    events_upcoming: int = 0
+    transport_routes: int = 0
 
 
 class AdminAlertsOut(BaseModel):

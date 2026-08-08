@@ -10,11 +10,13 @@ import 'about_screen.dart';
 import 'create_listing_screen.dart';
 import 'directory_detail_screen.dart';
 import 'edit_profile_screen.dart';
+import 'event_detail_screen.dart';
 import 'favorites_screen.dart';
 import 'legal_doc_screen.dart';
 import 'listing_detail_screen.dart';
 import 'my_listings_screen.dart';
 import 'notifications_screen.dart';
+import 'transport_detail_screen.dart';
 import 'view_history_screen.dart';
 import 'directory_favorites_screen.dart';
 
@@ -157,14 +159,16 @@ class _HomeShellState extends State<HomeShell> {
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
+    final titles = ['Объявления', 'Афиша', 'Справочник', 'Профиль'];
     final pages = [
       const _ListingsTab(),
+      const _EventsTab(),
       const _DirectoryTab(),
       _ProfileTab(user: state.user),
     ];
     return Scaffold(
       appBar: AppBar(
-        title: Text(index == 0 ? 'Объявления' : index == 1 ? 'Справочник' : 'Профиль'),
+        title: Text(titles[index]),
         actions: [
           IconButton(
             tooltip: state.darkMode ? 'Светлая тема' : 'Тёмная тема',
@@ -184,6 +188,7 @@ class _HomeShellState extends State<HomeShell> {
         onDestinationSelected: (i) => setState(() => index = i),
         destinations: [
           const NavigationDestination(icon: Icon(Icons.storefront_outlined), selectedIcon: Icon(Icons.storefront), label: 'Лента'),
+          const NavigationDestination(icon: Icon(Icons.event_outlined), selectedIcon: Icon(Icons.event), label: 'Афиша'),
           const NavigationDestination(icon: Icon(Icons.map_outlined), selectedIcon: Icon(Icons.map), label: 'Справочник'),
           NavigationDestination(
             icon: Badge(
@@ -654,6 +659,168 @@ class _ListingCard extends StatelessWidget {
   }
 }
 
+class _EventsTab extends StatefulWidget {
+  const _EventsTab();
+
+  @override
+  State<_EventsTab> createState() => _EventsTabState();
+}
+
+class _EventsTabState extends State<_EventsTab> {
+  List<dynamic> items = [];
+  bool loading = true;
+  String? error;
+  /// null = all published ordered by API default upcoming-first mix; true upcoming; false past
+  bool? upcomingOnly = true;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  Future<void> _load() async {
+    setState(() {
+      loading = true;
+      error = null;
+    });
+    try {
+      final data = await context.read<AppState>().loadEvents(upcoming: upcomingOnly);
+      if (mounted) {
+        setState(() {
+          items = data;
+          loading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          error = AppState.userFriendlyError(e);
+          loading = false;
+        });
+      }
+    }
+  }
+
+  String _fmtWhen(String? iso) {
+    if (iso == null || iso.isEmpty) return '';
+    final dt = DateTime.tryParse(iso)?.toLocal();
+    if (dt == null) return '';
+    return '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}'
+        ' · ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          child: SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'upcoming', label: Text('Скоро'), icon: Icon(Icons.event_available_outlined, size: 18)),
+              ButtonSegment(value: 'past', label: Text('Прошедшие'), icon: Icon(Icons.history, size: 18)),
+              ButtonSegment(value: 'all', label: Text('Все'), icon: Icon(Icons.list_alt, size: 18)),
+            ],
+            selected: {
+              if (upcomingOnly == true) 'upcoming' else if (upcomingOnly == false) 'past' else 'all',
+            },
+            onSelectionChanged: (s) {
+              final v = s.first;
+              setState(() {
+                upcomingOnly = v == 'upcoming'
+                    ? true
+                    : v == 'past'
+                        ? false
+                        : null;
+              });
+              _load();
+            },
+          ),
+        ),
+        Expanded(
+          child: RefreshIndicator(
+            onRefresh: _load,
+            child: loading && items.isEmpty
+                ? const Center(child: CircularProgressIndicator())
+                : error != null && items.isEmpty
+                    ? ListView(
+                        children: [
+                          SizedBox(
+                            height: 280,
+                            child: errorState(context: context, message: error!, onRetry: _load),
+                          ),
+                        ],
+                      )
+                    : items.isEmpty
+                        ? ListView(
+                            children: [
+                              SizedBox(
+                                height: 280,
+                                child: emptyState(
+                                  context: context,
+                                  title: upcomingOnly == false ? 'Прошедших событий нет' : 'Пока нет событий',
+                                  subtitle: 'Афиша района появится здесь',
+                                  icon: Icons.event_outlined,
+                                  actionLabel: 'Обновить',
+                                  onAction: _load,
+                                ),
+                              ),
+                            ],
+                          )
+                        : ListView.separated(
+                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                            itemCount: items.length,
+                            separatorBuilder: (_, __) => const SizedBox(height: 12),
+                            itemBuilder: (_, i) {
+                              final item = items[i] as Map<String, dynamic>;
+                              return Material(
+                                color: Theme.of(context).cardTheme.color,
+                                borderRadius: BorderRadius.circular(18),
+                                child: InkWell(
+                                  borderRadius: BorderRadius.circular(18),
+                                  onTap: () => Navigator.push(
+                                    context,
+                                    fastRoute(EventDetailScreen(item: item)),
+                                  ),
+                                  child: Container(
+                                    padding: const EdgeInsets.all(16),
+                                    decoration: BoxDecoration(
+                                      borderRadius: BorderRadius.circular(18),
+                                      border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.45)),
+                                    ),
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          _fmtWhen(item['starts_at']?.toString()),
+                                          style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700, fontSize: 12),
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          '${item['title']}',
+                                          style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 17),
+                                        ),
+                                        const SizedBox(height: 6),
+                                        Text(
+                                          '${item['place_text']}${item['settlement_name'] != null ? ' · ${item['settlement_name']}' : ''}',
+                                          style: TextStyle(color: scheme.onSurfaceVariant, height: 1.3),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
 class _DirectoryTab extends StatefulWidget {
   const _DirectoryTab();
 
@@ -663,6 +830,10 @@ class _DirectoryTab extends StatefulWidget {
 
 class _DirectoryTabState extends State<_DirectoryTab> {
   final search = TextEditingController();
+  String section = 'places'; // places | transport
+  List<dynamic> transportItems = [];
+  bool transportLoading = false;
+  String? transportError;
 
   static const dirCategories = [
     'school',
@@ -689,6 +860,29 @@ class _DirectoryTabState extends State<_DirectoryTab> {
     await launchUrl(uri);
   }
 
+  Future<void> _loadTransport() async {
+    setState(() {
+      transportLoading = true;
+      transportError = null;
+    });
+    try {
+      final data = await context.read<AppState>().loadTransport(q: search.text.trim().isEmpty ? null : search.text);
+      if (mounted) {
+        setState(() {
+          transportItems = data;
+          transportLoading = false;
+        });
+      }
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          transportError = AppState.userFriendlyError(e);
+          transportLoading = false;
+        });
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
@@ -698,72 +892,192 @@ class _DirectoryTabState extends State<_DirectoryTab> {
     return Column(
       children: [
         Padding(
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 4),
+          child: SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'places', label: Text('Места'), icon: Icon(Icons.place_outlined, size: 18)),
+              ButtonSegment(value: 'transport', label: Text('Транспорт'), icon: Icon(Icons.directions_bus_outlined, size: 18)),
+            ],
+            selected: {section},
+            onSelectionChanged: (s) {
+              setState(() => section = s.first);
+              if (s.first == 'transport') _loadTransport();
+            },
+          ),
+        ),
+        Padding(
           padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
           child: TextField(
             controller: search,
             textInputAction: TextInputAction.search,
-            onSubmitted: (v) => state.setDirectoryFilters(
-              category: state.directoryCategory,
-              settlementId: state.directorySettlementId,
-              query: v,
-            ),
+            onSubmitted: (v) {
+              if (section == 'transport') {
+                _loadTransport();
+              } else {
+                state.setDirectoryFilters(
+                  category: state.directoryCategory,
+                  settlementId: state.directorySettlementId,
+                  query: v,
+                );
+              }
+            },
             decoration: InputDecoration(
-              hintText: 'Школа, больница, магазин…',
+              hintText: section == 'transport' ? 'Маршрут, номер…' : 'Школа, больница, магазин…',
               prefixIcon: const Icon(Icons.search),
-              suffixIcon: IconButton(
-                icon: const Icon(Icons.tune),
-                onPressed: () => _openFilters(context, state),
-              ),
+              suffixIcon: section == 'places'
+                  ? IconButton(
+                      icon: const Icon(Icons.tune),
+                      onPressed: () => _openFilters(context, state),
+                    )
+                  : null,
             ),
           ),
         ),
-        SizedBox(
-          height: 44,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: RyadomFilterChip(
-                  label: 'Все',
-                  selected: state.directoryCategory == null,
-                  onSelected: (_) => state.setDirectoryFilters(
-                    category: null,
-                    settlementId: state.directorySettlementId,
-                    query: search.text,
-                  ),
-                ),
-              ),
-              ...dirCategories.map(
-                (c) => Padding(
+        if (section == 'places')
+          SizedBox(
+            height: 44,
+            child: ListView(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              children: [
+                Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: RyadomFilterChip(
-                    label: categoryLabels[c] ?? c,
-                    selected: state.directoryCategory == c,
+                    label: 'Все',
+                    selected: state.directoryCategory == null,
                     onSelected: (_) => state.setDirectoryFilters(
-                      category: state.directoryCategory == c ? null : c,
+                      category: null,
                       settlementId: state.directorySettlementId,
                       query: search.text,
                     ),
                   ),
                 ),
-              ),
-            ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              '${items.length} записей',
-              style: TextStyle(color: scheme.onSurfaceVariant),
+                ...dirCategories.map(
+                  (c) => Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: RyadomFilterChip(
+                      label: categoryLabels[c] ?? c,
+                      selected: state.directoryCategory == c,
+                      onSelected: (_) => state.setDirectoryFilters(
+                        category: state.directoryCategory == c ? null : c,
+                        settlementId: state.directorySettlementId,
+                        query: search.text,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
-        ),
+        if (section == 'places')
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                '${items.length} записей',
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
+            ),
+          ),
+        if (section == 'transport')
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 4, 16, 6),
+            child: Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                '${transportItems.length} маршрутов',
+                style: TextStyle(color: scheme.onSurfaceVariant),
+              ),
+            ),
+          ),
         Expanded(
-          child: RefreshIndicator(
+          child: section == 'transport'
+              ? RefreshIndicator(
+                  onRefresh: _loadTransport,
+                  child: transportLoading && transportItems.isEmpty
+                      ? const Center(child: CircularProgressIndicator())
+                      : transportError != null && transportItems.isEmpty
+                          ? ListView(
+                              children: [
+                                SizedBox(
+                                  height: 280,
+                                  child: errorState(
+                                    context: context,
+                                    message: transportError!,
+                                    onRetry: _loadTransport,
+                                  ),
+                                ),
+                              ],
+                            )
+                          : transportItems.isEmpty
+                              ? ListView(
+                                  children: [
+                                    SizedBox(
+                                      height: 280,
+                                      child: emptyState(
+                                        context: context,
+                                        title: 'Маршрутов пока нет',
+                                        subtitle: 'Расписания появятся здесь',
+                                        icon: Icons.directions_bus_outlined,
+                                        actionLabel: 'Обновить',
+                                        onAction: _loadTransport,
+                                      ),
+                                    ),
+                                  ],
+                                )
+                              : ListView.separated(
+                                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                                  itemCount: transportItems.length,
+                                  separatorBuilder: (_, __) => const SizedBox(height: 12),
+                                  itemBuilder: (_, i) {
+                                    final item = transportItems[i] as Map<String, dynamic>;
+                                    final number = item['route_number']?.toString();
+                                    return Material(
+                                      color: Theme.of(context).cardTheme.color,
+                                      borderRadius: BorderRadius.circular(18),
+                                      child: InkWell(
+                                        borderRadius: BorderRadius.circular(18),
+                                        onTap: () => Navigator.push(
+                                          context,
+                                          fastRoute(TransportDetailScreen(item: item)),
+                                        ),
+                                        child: Container(
+                                          padding: const EdgeInsets.all(16),
+                                          decoration: BoxDecoration(
+                                            borderRadius: BorderRadius.circular(18),
+                                            border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.45)),
+                                          ),
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              if (number != null && number.isNotEmpty)
+                                                Text(
+                                                  number,
+                                                  style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700, fontSize: 12),
+                                                ),
+                                              Text(
+                                                '${item['title']}',
+                                                style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 17),
+                                              ),
+                                              if (item['description'] != null) ...[
+                                                const SizedBox(height: 6),
+                                                Text(
+                                                  '${item['description']}',
+                                                  maxLines: 2,
+                                                  overflow: TextOverflow.ellipsis,
+                                                  style: TextStyle(color: scheme.onSurfaceVariant, height: 1.3),
+                                                ),
+                                              ],
+                                            ],
+                                          ),
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                )
+              : RefreshIndicator(
             onRefresh: () => state.loadDirectory(),
             child: state.directoryLoading && items.isEmpty
                 ? const Center(child: CircularProgressIndicator())

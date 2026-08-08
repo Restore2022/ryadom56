@@ -238,6 +238,40 @@ export type Stats = {
   moderation_conversion?: number | null;
   listings_per_day?: { day: string; count: number }[];
   top_categories?: { category: string; count: number }[];
+  events_total?: number;
+  events_upcoming?: number;
+  transport_routes?: number;
+};
+
+export type EventItem = {
+  id: number;
+  title: string;
+  description: string;
+  starts_at: string;
+  ends_at?: string | null;
+  place_text: string;
+  settlement_id?: number | null;
+  settlement_name?: string | null;
+  address?: string | null;
+  lat?: number | null;
+  lon?: number | null;
+  is_published: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TransportRoute = {
+  id: number;
+  title: string;
+  route_number?: string | null;
+  description?: string | null;
+  schedule_text: string;
+  notes?: string | null;
+  settlement_id?: number | null;
+  settlement_name?: string | null;
+  is_published: boolean;
+  created_at: string;
+  updated_at: string;
 };
 
 export type AdminAlerts = {

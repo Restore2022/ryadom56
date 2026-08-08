@@ -16,10 +16,12 @@ from app.models import (
     AuditLog,
     BlacklistEntry,
     DirectoryItem,
+    Event,
     Listing,
     ListingReport,
     ListingStatus,
     Settlement,
+    TransportRoute,
     User,
     UserRole,
 )
@@ -122,6 +124,16 @@ def stats(
         moderation_conversion=conversion,
         listings_per_day=per_day,
         top_categories=top,
+        events_total=int(db.execute(select(func.count(Event.id))).scalar_one()),
+        events_upcoming=int(
+            db.execute(
+                select(func.count(Event.id)).where(
+                    Event.is_published.is_(True),
+                    Event.starts_at >= now,
+                )
+            ).scalar_one()
+        ),
+        transport_routes=int(db.execute(select(func.count(TransportRoute.id))).scalar_one()),
     )
 
 
