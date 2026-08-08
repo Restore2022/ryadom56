@@ -9,7 +9,9 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../api.dart';
 
 class AppState extends ChangeNotifier {
-  AppState(this.api);
+  AppState(this.api) {
+    api.onUnauthorized = _handleUnauthorized;
+  }
 
   final ApiClient api;
   bool booting = true;
@@ -28,6 +30,9 @@ class AppState extends ChangeNotifier {
   List<Map<String, dynamic>> viewHistory = [];
   String? error;
   bool listingsOffline = false;
+  bool directoryOffline = false;
+  String? sessionMessage;
+  bool _clearingSession = false;
 
   String? filterCategory;
   int? filterSettlementId;
@@ -42,10 +47,10 @@ class AppState extends ChangeNotifier {
   String directoryQuery = '';
   bool directoryLoading = false;
 
-  static const offlineMessage =
-      'Нет связи с сервером. Проверьте Wi‑Fi и что API запущен.';
+  static const offlineMessage = ApiClient.offlineMessage;
 
   static String userFriendlyError(Object e) {
+    if (e is ApiException) return e.message;
     final raw = e.toString();
     final lower = raw.toLowerCase();
     if (lower.contains('socketexception') ||
@@ -64,11 +69,35 @@ class AppState extends ChangeNotifier {
     if (raw.startsWith('Exception: ')) {
       return raw.substring('Exception: '.length);
     }
+    if (raw.startsWith('ApiException: ')) {
+      return raw.substring('ApiException: '.length);
+    }
     return raw;
   }
 
   bool get hasConnectionIssue =>
-      listingsOffline || (error != null && error == offlineMessage);
+      listingsOffline || directoryOffline || (error != null && error == offlineMessage);
+
+  Future<void> _handleUnauthorized() async {
+    if (_clearingSession || user == null) return;
+    _clearingSession = true;
+    try {
+      await api.setToken(null);
+      user = null;
+      favorites = [];
+      favoriteIds.clear();
+      directoryFavoriteIds.clear();
+      unreadNotifications = 0;
+      sessionMessage = 'Сессия истекла. Войдите снова';
+      notifyListeners();
+    } finally {
+      _clearingSession = false;
+    }
+  }
+
+  void clearSessionMessage() {
+    sessionMessage = null;
+  }
 
   void _syncFavoriteIdsFromListings() {
     for (final item in listings) {
@@ -106,15 +135,30 @@ class AppState extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       darkMode = prefs.getBool('dark_mode') ?? false;
       await _loadViewHistory(prefs);
-      settlements = await api.request('/settlements') as List<dynamic>;
+      try {
+        settlements = await api.request('/settlements') as List<dynamic>;
+      } catch (e) {
+        error = userFriendlyError(e);
+      }
       final token = await api.token;
       if (token != null) {
-        user = await api.request('/auth/me', auth: true) as Map<String, dynamic>;
-        await reportDeviceInfo();
+        try {
+          user = await api.request('/auth/me', auth: true) as Map<String, dynamic>;
+          await reportDeviceInfo();
+        } on ApiException catch (e) {
+          if (e.statusCode == 401 || e.statusCode == 403) {
+            await api.setToken(null);
+            user = null;
+            sessionMessage = 'Сессия истекла. Войдите снова';
+          }
+        } catch (_) {
+          await api.setToken(null);
+          user = null;
+        }
       }
       await Future.wait([loadListings(), loadDirectory()]);
       if (user != null) await refreshUnreadNotifications();
-      if (!listingsOffline) error = null;
+      if (!listingsOffline && !directoryOffline) error = null;
     } catch (e) {
       error = userFriendlyError(e);
     } finally {
@@ -261,6 +305,11 @@ class AppState extends ChangeNotifier {
           directoryFavoriteIds.add(item['id'] as int);
         }
       }
+      directoryOffline = false;
+      if (error == offlineMessage && !listingsOffline) error = null;
+    } catch (e) {
+      directoryOffline = true;
+      error = userFriendlyError(e);
     } finally {
       directoryLoading = false;
       notifyListeners();
@@ -327,7 +376,14 @@ class AppState extends ChangeNotifier {
   }
 
   Future<Map<String, dynamic>> getListing(int id) async {
-    return await api.request('/listings/$id', auth: true) as Map<String, dynamic>;
+    try {
+      return await api.request('/listings/$id', auth: true) as Map<String, dynamic>;
+    } on ApiException catch (e) {
+      if (e.statusCode == 404) {
+        throw ApiException('Объявление недоступно или удалено', statusCode: 404);
+      }
+      rethrow;
+    }
   }
 
   Future<List<dynamic>> loadMyListings() async {

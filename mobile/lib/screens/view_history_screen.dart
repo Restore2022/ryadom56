@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
+import '../ui_helpers.dart';
 import 'home_shell.dart';
 import 'listing_detail_screen.dart';
 
@@ -26,7 +27,12 @@ class ViewHistoryScreen extends StatelessWidget {
         ],
       ),
       body: items.isEmpty
-          ? const Center(child: Text('Пока пусто — откройте объявление в ленте'))
+          ? emptyState(
+              context: context,
+              title: 'История пуста',
+              subtitle: 'Откройте объявление в ленте — оно появится здесь',
+              icon: Icons.history,
+            )
           : ListView.separated(
               padding: const EdgeInsets.all(16),
               itemCount: items.length,

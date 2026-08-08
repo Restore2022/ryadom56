@@ -38,6 +38,29 @@ function canEditDirectory(role: User['role']) {
   return role === 'admin' || role === 'editor';
 }
 
+function isValidEmail(value: string) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value.trim());
+}
+
+async function confirmAction(message: string): Promise<boolean> {
+  return window.confirm(message);
+}
+
+function ToastHost({ message, onClose }: { message: string; onClose: () => void }) {
+  useEffect(() => {
+    const id = window.setTimeout(onClose, 4500);
+    return () => window.clearTimeout(id);
+  }, [message, onClose]);
+  return (
+    <div className="toast" role="status">
+      <span>{message}</span>
+      <button type="button" className="btn ghost" onClick={onClose}>
+        Закрыть
+      </button>
+    </div>
+  );
+}
+
 function PhotoGallery({ images }: { images: { id: number; url: string }[] }) {
   const [index, setIndex] = useState<number | null>(null);
   const urls = images.map((img) => mediaUrl(img.url)).filter(Boolean);
@@ -215,22 +238,31 @@ function LoginPage({ onLogin }: { onLogin: (u: User) => void }) {
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
+    if (!isValidEmail(email)) {
+      setError('Введите корректный email');
+      return;
+    }
+    if (!password.trim()) {
+      setError('Введите пароль');
+      return;
+    }
     setBusy(true);
     setError('');
     try {
       const token = await api<{ access_token: string }>('/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ email: email.trim(), password }),
       });
       setToken(token.access_token);
       const me = await api<User>('/auth/me');
       if (!['admin', 'moderator', 'editor'].includes(me.role)) {
         setToken(null);
-        throw new Error('Нет доступа в админку');
+        throw new Error('Нет доступа в админку для этой роли');
       }
       onLogin(me);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка входа');
+      const msg = err instanceof Error ? err.message : 'Ошибка входа';
+      setError(msg.includes('Сессия') || msg.includes('401') ? 'Неверный email или пароль' : msg);
     } finally {
       setBusy(false);
     }
@@ -272,6 +304,24 @@ function Shell({
 }) {
   const mod = canModerate(user.role);
   const directory = canEditDirectory(user.role);
+  const [toast, setToast] = useState('');
+
+  useEffect(() => {
+    function onUnauthorized() {
+      setToast('Сессия истекла. Войдите снова');
+      onLogout();
+    }
+    function onToast(e: Event) {
+      const detail = (e as CustomEvent<string>).detail;
+      if (detail) setToast(detail);
+    }
+    window.addEventListener('ryadom56:unauthorized', onUnauthorized);
+    window.addEventListener('ryadom56:toast', onToast as EventListener);
+    return () => {
+      window.removeEventListener('ryadom56:unauthorized', onUnauthorized);
+      window.removeEventListener('ryadom56:toast', onToast as EventListener);
+    };
+  }, [onLogout]);
 
   useEffect(() => {
     if (!mod) return;
@@ -358,8 +408,13 @@ function Shell({
         </div>
       </aside>
       <main className="content">{children}</main>
+      {toast && <ToastHost message={toast} onClose={() => setToast('')} />}
     </div>
   );
+}
+
+function pushToast(message: string) {
+  window.dispatchEvent(new CustomEvent('ryadom56:toast', { detail: message }));
 }
 
 function Dashboard() {
@@ -479,6 +534,7 @@ function ModerationPage() {
   const [moderationNote, setModerationNote] = useState('');
 
   function closeModal() {
+    if (busyId != null) return;
     setSelected(null);
     setModerationNote('');
   }
@@ -570,6 +626,7 @@ function ModerationPage() {
   }, [items, category, query]);
 
   async function moderate(id: number, status: 'approved' | 'rejected', noteOverride?: string | null) {
+    if (busyId != null) return;
     if (status === 'rejected') {
       if (!(noteOverride ?? moderationNote).trim()) {
         setError('Укажите причину отклонения');
@@ -577,6 +634,7 @@ function ModerationPage() {
       }
     }
     setBusyId(id);
+    setError('');
     try {
       const note =
         status === 'rejected'
@@ -589,6 +647,11 @@ function ModerationPage() {
       setSelected(null);
       setModerationNote('');
       await load();
+      pushToast(status === 'approved' ? 'Объявление одобрено' : 'Объявление отклонено');
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Ошибка';
+      setError(msg);
+      pushToast(msg);
     } finally {
       setBusyId(null);
     }
@@ -771,7 +834,12 @@ function ModerationPage() {
       </div>
 
       {selected && (
-        <div className="modal-backdrop" onClick={closeModal}>
+        <div
+          className="modal-backdrop"
+          onClick={() => {
+            if (busyId == null) closeModal();
+          }}
+        >
           <div className="modal modal-compact" onClick={(e) => e.stopPropagation()}>
             <div className="meta">
               <span className={STATUS_CHIP[selected.status] || 'chip'}>{STATUS_LABEL[selected.status]}</span>
@@ -1181,7 +1249,7 @@ function DirectoryPage() {
   }
 
   async function remove(id: number) {
-    if (!confirm('Удалить запись из справочника?')) return;
+    if (!(await confirmAction('Удалить запись из справочника? Это действие нельзя отменить.'))) return;
     await api(`/directory/${id}`, { method: 'DELETE' });
     if (editingId === id) closeModal();
     await load();
@@ -1388,8 +1456,14 @@ function BlacklistPage() {
   }
 
   async function remove(id: number) {
-    await api(`/admin/blacklist/${id}`, { method: 'DELETE' });
-    await load();
+    if (!(await confirmAction('Удалить запись из чёрного списка?'))) return;
+    try {
+      await api(`/admin/blacklist/${id}`, { method: 'DELETE' });
+      await load();
+      pushToast('Удалено из чёрного списка');
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : 'Ошибка');
+    }
   }
 
   return (
@@ -1504,7 +1578,14 @@ function UsersPage() {
 
   async function saveUser(e: React.FormEvent) {
     e.preventDefault();
-    if (!selected) return;
+    if (!selected || busy) return;
+    if (!form.full_name.trim() || !isValidEmail(form.email)) {
+      setError('Проверьте имя и email');
+      return;
+    }
+    if (selected.is_active && !form.is_active) {
+      if (!(await confirmAction(`Заблокировать пользователя ${selected.full_name}?`))) return;
+    }
     setBusy(true);
     setError('');
     try {
@@ -1521,6 +1602,7 @@ function UsersPage() {
       });
       setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)));
       setSelected(updated);
+      pushToast('Пользователь сохранён');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка');
     } finally {

@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../auth_prompt.dart';
 import '../state/app_state.dart';
+import '../ui_helpers.dart';
 import 'about_screen.dart';
 import 'create_listing_screen.dart';
 import 'directory_detail_screen.dart';
@@ -116,6 +117,11 @@ class _HomeShellState extends State<HomeShell> {
       final state = context.read<AppState>();
       _lastUnread = state.unreadNotifications;
       _pollNotifications();
+      final msg = state.sessionMessage;
+      if (msg != null && mounted) {
+        state.clearSessionMessage();
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
+      }
     });
   }
 
@@ -254,7 +260,7 @@ class _ListingsTabState extends State<_ListingsTab> {
                     ),
                   ),
                   TextButton(
-                    onPressed: () => state.loadListings(),
+                    onPressed: () => state.refreshPublic(),
                     child: const Text('Ещё раз'),
                   ),
                 ],
@@ -342,11 +348,33 @@ class _ListingsTabState extends State<_ListingsTab> {
             onRefresh: () => state.loadListings(),
             child: state.listingsLoading && items.isEmpty
                 ? const Center(child: CircularProgressIndicator())
+                : state.listingsOffline && items.isEmpty
+                    ? ListView(
+                        children: [
+                          SizedBox(
+                            height: 280,
+                            child: errorState(
+                              context: context,
+                              message: state.error ?? AppState.offlineMessage,
+                              onRetry: () => state.loadListings(),
+                            ),
+                          ),
+                        ],
+                      )
                 : items.isEmpty
                     ? ListView(
-                        children: const [
-                          SizedBox(height: 120),
-                          Center(child: Text('Ничего не найдено')),
+                        children: [
+                          SizedBox(
+                            height: 280,
+                            child: emptyState(
+                              context: context,
+                              title: 'Пока нет объявлений',
+                              subtitle: 'Измените фильтры или подайте своё объявление',
+                              icon: Icons.storefront_outlined,
+                              actionLabel: 'Обновить',
+                              onAction: () => state.loadListings(),
+                            ),
+                          ),
                         ],
                       )
                     : NotificationListener<ScrollNotification>(
@@ -739,11 +767,33 @@ class _DirectoryTabState extends State<_DirectoryTab> {
             onRefresh: () => state.loadDirectory(),
             child: state.directoryLoading && items.isEmpty
                 ? const Center(child: CircularProgressIndicator())
+                : state.directoryOffline && items.isEmpty
+                    ? ListView(
+                        children: [
+                          SizedBox(
+                            height: 280,
+                            child: errorState(
+                              context: context,
+                              message: state.error ?? AppState.offlineMessage,
+                              onRetry: () => state.loadDirectory(),
+                            ),
+                          ),
+                        ],
+                      )
                 : items.isEmpty
                     ? ListView(
-                        children: const [
-                          SizedBox(height: 120),
-                          Center(child: Text('Ничего не найдено')),
+                        children: [
+                          SizedBox(
+                            height: 280,
+                            child: emptyState(
+                              context: context,
+                              title: 'Справочник пуст',
+                              subtitle: 'Попробуйте другой населённый пункт или категорию',
+                              icon: Icons.map_outlined,
+                              actionLabel: 'Обновить',
+                              onAction: () => state.loadDirectory(),
+                            ),
+                          ),
                         ],
                       )
                     : ListView.separated(

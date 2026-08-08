@@ -1,14 +1,31 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 
 import 'package:http/http.dart' as http;
 import 'package:http_parser/http_parser.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+class ApiException implements Exception {
+  ApiException(this.message, {this.statusCode, this.raw});
+
+  final String message;
+  final int? statusCode;
+  final String? raw;
+
+  @override
+  String toString() => message;
+}
 
 class ApiClient {
   ApiClient({this.baseUrl = 'http://192.168.0.110:8000/api'});
 
   /// На телефоне: IP ПК в Wi‑Fi. В эмуляторе: http://10.0.2.2:8000/api
   final String baseUrl;
+  void Function()? onUnauthorized;
+
+  static const offlineMessage =
+      'Нет связи с сервером. Проверьте Wi‑Fi и что API запущен.';
 
   String get mediaBase {
     final uri = Uri.parse(baseUrl);
@@ -42,9 +59,10 @@ class ApiClient {
     if (detail is List) {
       return detail.map((e) {
         if (e is Map) {
-          final loc = (e['loc'] is List) ? (e['loc'] as List).join('.') : '';
+          final loc = (e['loc'] is List) ? (e['loc'] as List).skip(1).join('.') : '';
           final msg = e['msg']?.toString() ?? e.toString();
-          return loc.isEmpty ? msg : '$loc: $msg';
+          final clean = msg.replaceFirst(RegExp(r'^Value error,\s*'), '');
+          return loc.isEmpty ? clean : '$loc: $clean';
         }
         return e.toString();
       }).join('\n');
@@ -52,11 +70,72 @@ class ApiClient {
     return detail?.toString() ?? 'Ошибка запроса';
   }
 
+  String _messageForStatus(int code, String detail) {
+    final d = detail.trim();
+    switch (code) {
+      case 401:
+        if (d.contains('Неверный') || d.toLowerCase().contains('password') || d.contains('email')) {
+          return d.isNotEmpty ? d : 'Неверный email или пароль';
+        }
+        return d.isNotEmpty && d.length < 120 ? d : 'Сессия истекла. Войдите снова';
+      case 403:
+        return d.isNotEmpty && d.length < 160 ? d : 'Нет доступа';
+      case 404:
+        return d.isNotEmpty && d.length < 160 ? d : 'Не найдено';
+      case 408:
+      case 504:
+        return 'Сервер долго не отвечает. Попробуйте ещё раз';
+      case 413:
+        return 'Файл слишком большой';
+      case 422:
+        return d.isNotEmpty ? d : 'Проверьте правильность заполнения полей';
+      case 429:
+        return 'Слишком много запросов. Подождите немного';
+      case 500:
+      case 502:
+      case 503:
+        return 'Ошибка сервера. Попробуйте позже';
+      default:
+        return d.isNotEmpty && !d.startsWith('<') && d.length < 240 ? d : 'Не удалось выполнить запрос';
+    }
+  }
+
+  ApiException _fromResponse(http.Response res) {
+    String detail = '';
+    try {
+      final data = jsonDecode(res.body);
+      if (data is Map) detail = _formatDetail(data['detail']);
+    } catch (_) {
+      detail = '';
+    }
+    return ApiException(_messageForStatus(res.statusCode, detail), statusCode: res.statusCode, raw: detail);
+  }
+
+  ApiException _fromNetwork(Object e) {
+    final raw = e.toString().toLowerCase();
+    if (e is TimeoutException || raw.contains('timeout') || raw.contains('timed out')) {
+      return ApiException('Сервер долго не отвечает. Попробуйте ещё раз', statusCode: 408);
+    }
+    if (e is SocketException ||
+        raw.contains('socketexception') ||
+        raw.contains('failed host lookup') ||
+        raw.contains('connection refused') ||
+        raw.contains('connection reset') ||
+        raw.contains('network is unreachable') ||
+        raw.contains('clientexception') ||
+        raw.contains('handshakeexception') ||
+        raw.contains('connection errored')) {
+      return ApiException(offlineMessage);
+    }
+    return ApiException(offlineMessage);
+  }
+
   Future<dynamic> request(
     String path, {
     String method = 'GET',
     Map<String, dynamic>? body,
     bool auth = false,
+    Duration timeout = const Duration(seconds: 25),
   }) async {
     final uri = Uri.parse('$baseUrl$path');
     final headers = <String, String>{'Content-Type': 'application/json'};
@@ -70,30 +149,34 @@ class ApiClient {
       cleanBody = Map.fromEntries(body.entries.where((e) => e.value != null));
     }
 
-    late http.Response res;
-    switch (method) {
-      case 'POST':
-        res = await http.post(uri, headers: headers, body: jsonEncode(cleanBody));
-        break;
-      case 'PATCH':
-        res = await http.patch(uri, headers: headers, body: jsonEncode(cleanBody));
-        break;
-      case 'DELETE':
-        res = await http.delete(uri, headers: headers);
-        break;
-      default:
-        res = await http.get(uri, headers: headers);
+    try {
+      late http.Response res;
+      switch (method) {
+        case 'POST':
+          res = await http.post(uri, headers: headers, body: jsonEncode(cleanBody)).timeout(timeout);
+          break;
+        case 'PATCH':
+          res = await http.patch(uri, headers: headers, body: jsonEncode(cleanBody)).timeout(timeout);
+          break;
+        case 'DELETE':
+          res = await http.delete(uri, headers: headers).timeout(timeout);
+          break;
+        default:
+          res = await http.get(uri, headers: headers).timeout(timeout);
+      }
+      if (res.statusCode == 401 && auth) {
+        onUnauthorized?.call();
+      }
+      if (res.statusCode >= 400) {
+        throw _fromResponse(res);
+      }
+      if (res.body.isEmpty) return null;
+      return jsonDecode(res.body);
+    } on ApiException {
+      rethrow;
+    } catch (e) {
+      throw _fromNetwork(e);
     }
-    if (res.statusCode >= 400) {
-      String detail = res.body;
-      try {
-        final data = jsonDecode(res.body);
-        detail = _formatDetail(data['detail']);
-      } catch (_) {}
-      throw Exception(detail);
-    }
-    if (res.body.isEmpty) return null;
-    return jsonDecode(res.body);
   }
 
   Future<Map<String, dynamic>> uploadListingImages(int listingId, List<String> filePaths) async {
@@ -103,7 +186,21 @@ class ApiClient {
     if (t != null) req.headers['Authorization'] = 'Bearer $t';
 
     for (final path in filePaths) {
+      final file = File(path);
+      if (!await file.exists()) {
+        throw ApiException('Файл фото не найден');
+      }
+      final size = await file.length();
+      if (size > 6 * 1024 * 1024) {
+        throw ApiException('Фото больше 6 МБ. Выберите другое или сожмите изображение');
+      }
       final lower = path.toLowerCase();
+      if (!(lower.endsWith('.jpg') ||
+          lower.endsWith('.jpeg') ||
+          lower.endsWith('.png') ||
+          lower.endsWith('.webp'))) {
+        throw ApiException('Допустимы только JPG, PNG или WEBP');
+      }
       MediaType type;
       if (lower.endsWith('.png')) {
         type = MediaType('image', 'png');
@@ -115,16 +212,20 @@ class ApiClient {
       req.files.add(await http.MultipartFile.fromPath('files', path, contentType: type));
     }
 
-    final streamed = await req.send();
-    final res = await http.Response.fromStream(streamed);
-    if (res.statusCode >= 400) {
-      String detail = res.body;
-      try {
-        final data = jsonDecode(res.body);
-        detail = _formatDetail(data['detail']);
-      } catch (_) {}
-      throw Exception(detail);
+    try {
+      final streamed = await req.send().timeout(const Duration(seconds: 60));
+      final res = await http.Response.fromStream(streamed);
+      if (res.statusCode == 401) {
+        onUnauthorized?.call();
+      }
+      if (res.statusCode >= 400) {
+        throw _fromResponse(res);
+      }
+      return jsonDecode(res.body) as Map<String, dynamic>;
+    } on ApiException {
+      rethrow;
+    } catch (e) {
+      throw _fromNetwork(e);
     }
-    return jsonDecode(res.body) as Map<String, dynamic>;
   }
 }

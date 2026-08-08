@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
+import '../ui_helpers.dart';
 import 'directory_detail_screen.dart';
 import 'home_shell.dart';
 
@@ -55,9 +56,14 @@ class _DirectoryFavoritesScreenState extends State<DirectoryFavoritesScreen> {
       body: loading
           ? const Center(child: CircularProgressIndicator())
           : error != null
-              ? Center(child: Text(error!))
+              ? errorState(context: context, message: error!, onRetry: _load)
               : items.isEmpty
-                  ? const Center(child: Text('Пока нет избранных организаций'))
+                  ? emptyState(
+                      context: context,
+                      title: 'Нет избранных организаций',
+                      subtitle: 'Добавляйте организации из справочника',
+                      icon: Icons.bookmark_border,
+                    )
                   : RefreshIndicator(
                       onRefresh: _load,
                       child: ListView.separated(

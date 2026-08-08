@@ -643,6 +643,18 @@ def moderate_listing(
     if not item:
         raise HTTPException(status_code=404, detail="Объявление не найдено")
     old = item.status.value
+    if payload.status in (ListingStatus.approved, ListingStatus.rejected) and item.status != ListingStatus.pending:
+        labels = {
+            ListingStatus.approved: "уже опубликовано",
+            ListingStatus.rejected: "уже отклонено",
+            ListingStatus.archived: "уже снято",
+            ListingStatus.draft: "черновик",
+            ListingStatus.pending: "на проверке",
+        }
+        raise HTTPException(
+            status_code=400,
+            detail=f"Объявление уже обработано ({labels.get(item.status, item.status.value)})",
+        )
     item.status = payload.status
     item.moderation_note = payload.moderation_note
     if payload.status == ListingStatus.approved:

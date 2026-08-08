@@ -737,6 +737,41 @@ main.content {
   color: var(--ink-soft);
 }
 
+.toast {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(420px, calc(100vw - 32px));
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  box-shadow: var(--shadow);
+  color: var(--ink);
+  font-size: 14px;
+}
+
+.toast .btn.ghost {
+  padding: 4px 8px;
+  font-size: 12px;
+}
+
+.empty {
+  display: grid;
+  place-items: center;
+  gap: 6px;
+  background: var(--surface);
+  border: 1px dashed var(--line-strong);
+  border-radius: var(--radius);
+  padding: 36px 20px;
+  text-align: center;
+  color: var(--ink-soft);
+}
+
 @media (max-width: 900px) {
   .analytics-grid {
     grid-template-columns: 1fr;
@@ -745,15 +780,6 @@ main.content {
   .diff-row {
     grid-template-columns: 1fr;
   }
-}
-
-.empty {
-  background: var(--surface);
-  border: 1px dashed var(--line-strong);
-  border-radius: var(--radius);
-  padding: 36px 20px;
-  text-align: center;
-  color: var(--ink-soft);
 }
 
 .panel {

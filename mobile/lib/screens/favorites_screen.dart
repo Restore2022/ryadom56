@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
+import '../ui_helpers.dart';
 import 'home_shell.dart';
 import 'listing_detail_screen.dart';
 
@@ -71,7 +72,12 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
                   ),
                 )
               : items.isEmpty
-                  ? const Center(child: Text('Пока нет избранных объявлений'))
+                  ? emptyState(
+                      context: context,
+                      title: 'Избранное пусто',
+                      subtitle: 'Нажмите ♡ на объявлении, чтобы сохранить его здесь',
+                      icon: Icons.favorite_border,
+                    )
                   : RefreshIndicator(
                       onRefresh: _load,
                       child: ListView.separated(

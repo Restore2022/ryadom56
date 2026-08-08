@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
+import '../ui_helpers.dart';
 import 'create_listing_screen.dart';
 import 'home_shell.dart';
 import 'listing_detail_screen.dart';
@@ -158,9 +159,19 @@ class _MyListingsScreenState extends State<MyListingsScreen> {
       body: loading
           ? const Center(child: CircularProgressIndicator())
           : error != null
-              ? Center(child: Text(error!))
+              ? errorState(context: context, message: error!, onRetry: _load)
               : items.isEmpty
-                  ? const Center(child: Text('Пока нет объявлений'))
+                  ? emptyState(
+                      context: context,
+                      title: 'Пока нет объявлений',
+                      subtitle: 'Подайте первое — оно появится здесь со статусом проверки',
+                      icon: Icons.post_add_outlined,
+                      actionLabel: 'Подать объявление',
+                      onAction: () async {
+                        final ok = await Navigator.push<bool>(context, fastRoute(const CreateListingScreen()));
+                        if (ok == true) await _load();
+                      },
+                    )
                   : RefreshIndicator(
                       onRefresh: _load,
                       child: ListView.separated(
@@ -218,17 +229,37 @@ class _MyListingsScreenState extends State<MyListingsScreen> {
                                       child: Column(
                                         crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
-                                          Text(item['title'] as String, style: GoogleFonts.manrope(fontWeight: FontWeight.w700)),
+                                          Text(
+                                            item['title'] as String,
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                            style: GoogleFonts.manrope(fontWeight: FontWeight.w700),
+                                          ),
                                           const SizedBox(height: 4),
                                           Text(
                                             statusLabels[status] ?? status,
-                                            style: TextStyle(color: scheme.primary, fontSize: 12, fontWeight: FontWeight.w600),
+                                            style: TextStyle(
+                                              color: status == 'rejected'
+                                                  ? scheme.error
+                                                  : status == 'approved'
+                                                      ? scheme.primary
+                                                      : scheme.onSurfaceVariant,
+                                              fontSize: 12,
+                                              fontWeight: FontWeight.w700,
+                                            ),
                                           ),
+                                          if (status == 'pending') ...[
+                                            const SizedBox(height: 4),
+                                            Text(
+                                              'Ожидает проверки модератором',
+                                              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+                                            ),
+                                          ],
                                           if (status == 'rejected' && item['moderation_note'] != null) ...[
                                             const SizedBox(height: 4),
                                             Text(
                                               'Причина: ${item['moderation_note']}',
-                                              style: TextStyle(color: scheme.error, fontSize: 12),
+                                              style: TextStyle(color: scheme.error, fontSize: 12, height: 1.3),
                                             ),
                                           ],
                                           if (item['close_reason'] != null) ...[

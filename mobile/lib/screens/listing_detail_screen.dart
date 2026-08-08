@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../auth_prompt.dart';
 import '../state/app_state.dart';
+import '../ui_helpers.dart';
 import 'author_listings_screen.dart';
 import 'create_listing_screen.dart';
 import 'home_shell.dart';
@@ -33,6 +34,7 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
   bool loading = true;
   int photoIndex = 0;
   bool favBusy = false;
+  bool reportBusy = false;
   bool phoneRevealed = false;
 
   @override
@@ -64,11 +66,25 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
     }
   }
 
-  Future<void> _call(String phone) async {
+  Future<void> _call(String? phone) async {
+    final cleaned = (phone ?? '').replaceAll(RegExp(r'[\s\-()]'), '');
+    if (cleaned.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Номер телефона не указан')),
+        );
+      }
+      return;
+    }
     final loggedIn = await ensureLoggedIn(context, message: 'Войдите, чтобы позвонить автору');
     if (!loggedIn || !context.mounted) return;
-    final uri = Uri(scheme: 'tel', path: phone.replaceAll(' ', ''));
-    await launchUrl(uri);
+    final uri = Uri(scheme: 'tel', path: cleaned);
+    final ok = await launchUrl(uri);
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Не удалось открыть звонок')),
+      );
+    }
   }
 
   Future<void> _toggleFavorite() async {
@@ -94,6 +110,7 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
   }
 
   Future<void> _report() async {
+    if (reportBusy) return;
     final loggedIn = await ensureLoggedIn(context, message: 'Войдите, чтобы пожаловаться');
     if (!loggedIn || !context.mounted) return;
     String reason = 'spam';
@@ -137,6 +154,7 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
       },
     );
     if (ok != true || !mounted) return;
+    setState(() => reportBusy = true);
     try {
       await context.read<AppState>().reportListing(
             widget.listingId,
@@ -154,6 +172,8 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
           SnackBar(content: Text(AppState.userFriendlyError(e))),
         );
       }
+    } finally {
+      if (mounted) setState(() => reportBusy = false);
     }
   }
 
@@ -254,7 +274,7 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
           if (!isOwner && data != null)
             IconButton(
               tooltip: 'Пожаловаться',
-              onPressed: _report,
+              onPressed: reportBusy ? null : _report,
               icon: const Icon(Icons.flag_outlined),
             ),
           if (canClose)
@@ -264,7 +284,11 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
       body: data == null && loading
           ? const Center(child: CircularProgressIndicator())
           : data == null
-              ? Center(child: Text(error ?? 'Не найдено'))
+              ? errorState(
+                  context: context,
+                  message: error ?? 'Объявление недоступно',
+                  onRetry: _load,
+                )
               : ListView(
                   padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
                   children: [
@@ -400,9 +424,9 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                     if (!isOwner) ...[
                       const SizedBox(height: 12),
                       OutlinedButton.icon(
-                        onPressed: _report,
+                        onPressed: reportBusy ? null : _report,
                         icon: const Icon(Icons.flag_outlined),
-                        label: const Text('Пожаловаться'),
+                        label: Text(reportBusy ? 'Отправка…' : 'Пожаловаться'),
                       ),
                     ],
                     if (isOwner) ...[

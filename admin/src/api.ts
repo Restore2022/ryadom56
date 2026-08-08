@@ -16,32 +16,80 @@ export function setToken(token: string | null) {
   else localStorage.removeItem('ryadom56_token');
 }
 
+function friendlyDetail(detail: unknown, status: number): string {
+  if (typeof detail === 'string' && detail.trim()) {
+    if (detail.length < 240 && !detail.startsWith('<')) return detail;
+  }
+  if (Array.isArray(detail)) {
+    return detail
+      .map((e) => {
+        if (e && typeof e === 'object' && 'msg' in e) return String((e as { msg: string }).msg);
+        return String(e);
+      })
+      .join('; ');
+  }
+  if (status === 401) return 'Сессия истекла. Войдите снова';
+  if (status === 403) return 'Нет доступа';
+  if (status === 404) return 'Не найдено';
+  if (status >= 500) return 'Ошибка сервера. Попробуйте позже';
+  return 'Не удалось выполнить запрос';
+}
+
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const headers = new Headers(options.headers || {});
-  headers.set('Content-Type', 'application/json');
+  if (!(options.body instanceof FormData)) {
+    headers.set('Content-Type', 'application/json');
+  }
   const token = getToken();
   if (token) headers.set('Authorization', `Bearer ${token}`);
 
-  const res = await fetch(`${API_URL}${path}`, { ...options, headers });
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, { ...options, headers });
+  } catch {
+    throw new Error('Нет связи с сервером. Проверьте, что API запущен.');
+  }
+
   if (!res.ok) {
-    let detail = 'Ошибка запроса';
+    let detail: unknown = 'Ошибка запроса';
     try {
       const data = await res.json();
-      detail = data.detail || JSON.stringify(data);
+      detail = data.detail ?? data;
     } catch {
       /* ignore */
     }
-    throw new Error(typeof detail === 'string' ? detail : JSON.stringify(detail));
+    const authCall = path.startsWith('/auth/login') || path.startsWith('/auth/register');
+    if (res.status === 401 && !authCall) {
+      setToken(null);
+      window.dispatchEvent(new CustomEvent('ryadom56:unauthorized'));
+      throw new Error('Сессия истекла. Войдите снова');
+    }
+    if (res.status === 401 && authCall) {
+      throw new Error(typeof detail === 'string' && detail.trim() ? detail : 'Неверный email или пароль');
+    }
+    throw new Error(friendlyDetail(detail, res.status));
   }
   if (res.status === 204) return undefined as T;
-  return res.json();
+  const text = await res.text();
+  if (!text) return undefined as T;
+  return JSON.parse(text) as T;
 }
 
 export async function apiText(path: string): Promise<string> {
   const headers = new Headers();
   const token = getToken();
   if (token) headers.set('Authorization', `Bearer ${token}`);
-  const res = await fetch(`${API_URL}${path}`, { headers });
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, { headers });
+  } catch {
+    throw new Error('Нет связи с сервером. Проверьте, что API запущен.');
+  }
+  if (res.status === 401) {
+    setToken(null);
+    window.dispatchEvent(new CustomEvent('ryadom56:unauthorized'));
+    throw new Error('Сессия истекла. Войдите снова');
+  }
   if (!res.ok) throw new Error('Ошибка экспорта');
   return res.text();
 }
