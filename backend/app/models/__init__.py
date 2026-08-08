@@ -299,3 +299,19 @@ class BlacklistEntry(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     created_by: Mapped["User | None"] = relationship()
+
+
+class AppUpdate(Base):
+    """Единственная строка (id=1): актуальная версия Android APK."""
+
+    __tablename__ = "app_updates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    version_name: Mapped[str] = mapped_column(String(40), nullable=False, default="0.11.0")
+    version_code: Mapped[int] = mapped_column(Integer, nullable=False, default=12)
+    force_update: Mapped[bool] = mapped_column(Boolean, default=False)
+    notes: Mapped[str | None] = mapped_column(Text, nullable=True)
+    apk_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

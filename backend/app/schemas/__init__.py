@@ -469,3 +469,25 @@ class NotificationOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class AppUpdateOut(BaseModel):
+    version: str
+    build: int
+    force: bool = False
+    notes: str | None = None
+    has_apk: bool = False
+    download_url: str | None = None
+    published_at: datetime | None = None
+
+
+class AppUpdateAdminOut(AppUpdateOut):
+    apk_filename: str | None = None
+    apk_size: int | None = None
+
+
+class AppUpdatePatch(BaseModel):
+    version_name: str | None = Field(default=None, min_length=1, max_length=40)
+    version_code: int | None = Field(default=None, ge=1)
+    force_update: bool | None = None
+    notes: str | None = Field(default=None, max_length=4000)

@@ -295,3 +295,15 @@ export type LegalDocument = {
   version: string;
   updated_at: string;
 };
+
+export type AppUpdateInfo = {
+  version: string;
+  build: number;
+  force: boolean;
+  notes?: string | null;
+  has_apk: boolean;
+  download_url?: string | null;
+  published_at?: string | null;
+  apk_filename?: string | null;
+  apk_size?: number | null;
+};

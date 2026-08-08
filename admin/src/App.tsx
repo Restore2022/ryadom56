@@ -5,6 +5,7 @@ import type {
   AuditLog,
   BlacklistEntry,
   DirectoryItem,
+  AppUpdateInfo,
   EventItem,
   LegalDocument,
   Listing,
@@ -429,6 +430,11 @@ function Shell({
           {user.role === 'admin' && (
             <NavLink to="/legal">
               <span className="nav-ico">§</span> Правовое
+            </NavLink>
+          )}
+          {user.role === 'admin' && (
+            <NavLink to="/app-update">
+              <span className="nav-ico">↑</span> Обновления APK
             </NavLink>
           )}
         </nav>
@@ -2732,6 +2738,160 @@ function LegalPage() {
   );
 }
 
+function formatBytes(n?: number | null) {
+  if (n == null || n <= 0) return '—';
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} КБ`;
+  return `${(n / (1024 * 1024)).toFixed(1)} МБ`;
+}
+
+function AppUpdatePage() {
+  const [info, setInfo] = useState<AppUpdateInfo | null>(null);
+  const [version, setVersion] = useState('');
+  const [build, setBuild] = useState('');
+  const [notes, setNotes] = useState('');
+  const [force, setForce] = useState(false);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [uploadBusy, setUploadBusy] = useState(false);
+
+  async function load() {
+    const data = await api<AppUpdateInfo>('/app/update/admin');
+    setInfo(data);
+    setVersion(data.version);
+    setBuild(String(data.build));
+    setNotes(data.notes || '');
+    setForce(!!data.force);
+  }
+
+  useEffect(() => {
+    load().catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+  }, []);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    const code = Number(build);
+    if (!version.trim() || !Number.isFinite(code) || code < 1) {
+      setError('Укажите версию и номер сборки (build ≥ 1)');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      const updated = await api<AppUpdateInfo>('/app/update', {
+        method: 'PATCH',
+        body: JSON.stringify({
+          version_name: version.trim(),
+          version_code: code,
+          force_update: force,
+          notes: notes.trim() || null,
+        }),
+      });
+      setInfo(updated);
+      pushToast('Настройки обновления сохранены');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function uploadApk(file: File | null) {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.apk')) {
+      setError('Нужен файл .apk');
+      return;
+    }
+    setUploadBusy(true);
+    setError('');
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const updated = await api<AppUpdateInfo>('/app/apk', { method: 'POST', body: fd });
+      setInfo(updated);
+      pushToast('APK загружен на сервер');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка загрузки');
+    } finally {
+      setUploadBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className="page-head">
+        <div>
+          <h1>Обновления приложения</h1>
+          <p>
+            Приложение при запуске сравнивает свой build с этим номером. Если на сервере выше — предложит
+            скачать и установить APK.
+          </p>
+        </div>
+      </div>
+
+      <div className="panel" style={{ marginBottom: 16 }}>
+        <h3 style={{ marginTop: 0 }}>Сейчас на сервере</h3>
+        {!info ? (
+          <p className="muted">Загрузка…</p>
+        ) : (
+          <>
+            <p className="muted" style={{ margin: '0 0 6px' }}>
+              Версия: <strong>{info.version}+{info.build}</strong>
+              {info.force ? ' · принудительное' : ''}
+            </p>
+            <p className="muted" style={{ margin: '0 0 6px' }}>
+              APK: <strong>{info.has_apk ? `${info.apk_filename || 'есть'} (${formatBytes(info.apk_size)})` : 'не загружен'}</strong>
+            </p>
+            <p className="muted" style={{ margin: 0 }}>
+              Обновлено: <strong>{formatDate(info.published_at)}</strong>
+            </p>
+          </>
+        )}
+      </div>
+
+      <form onSubmit={save} className="panel" style={{ marginBottom: 16 }}>
+        <h3 style={{ marginTop: 0 }}>Параметры версии</h3>
+        <div className="grid2">
+          <label className="field">
+            Версия (например 0.12.0)
+            <input required value={version} onChange={(e) => setVersion(e.target.value)} />
+          </label>
+          <label className="field">
+            Build number (versionCode)
+            <input required type="number" min={1} value={build} onChange={(e) => setBuild(e.target.value)} />
+          </label>
+          <label className="field full">
+            Что нового
+            <textarea rows={4} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Кратко для пользователей" />
+          </label>
+        </div>
+        <label className="check-inline" style={{ marginTop: 12 }}>
+          <input type="checkbox" checked={force} onChange={(e) => setForce(e.target.checked)} />
+          Принудительное обновление (нельзя закрыть «Позже»)
+        </label>
+        {error && <p className="error">{error}</p>}
+        <div className="modal-actions" style={{ marginTop: 16 }}>
+          <button className="btn" type="submit" disabled={busy}>
+            {busy ? 'Сохранение…' : 'Сохранить'}
+          </button>
+        </div>
+      </form>
+
+      <div className="panel">
+        <h3 style={{ marginTop: 0 }}>Загрузить APK</h3>
+        <p className="muted">После сборки APK загрузите файл сюда. Телефоны скачают его с вашего API.</p>
+        <input
+          type="file"
+          accept=".apk,application/vnd.android.package-archive"
+          disabled={uploadBusy}
+          onChange={(e) => uploadApk(e.target.files?.[0] || null)}
+        />
+        {uploadBusy && <p className="muted">Загрузка APK…</p>}
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const { user, setUser, loading } = useAuth();
   const navigate = useNavigate();
@@ -2782,6 +2942,7 @@ export default function App() {
         {canModerate(user!.role) && <Route path="/blacklist" element={<BlacklistPage />} />}
         {user!.role === 'admin' && <Route path="/users" element={<UsersPage />} />}
         {user!.role === 'admin' && <Route path="/legal" element={<LegalPage />} />}
+        {user!.role === 'admin' && <Route path="/app-update" element={<AppUpdatePage />} />}
         <Route
           path="*"
           element={

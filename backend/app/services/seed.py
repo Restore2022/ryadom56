@@ -8,7 +8,7 @@ from app.core.config import settings
 from app.core.database import Base, engine
 from app.core.security import hash_password
 from app.core.seed_data import LEGAL_DOCS, SETTLEMENTS
-from app.models import Event, LegalDocument, Settlement, TransportRoute, User, UserRole
+from app.models import AppUpdate, Event, LegalDocument, Settlement, TransportRoute, User, UserRole
 
 USER_COLUMNS = {
     "last_ip": "VARCHAR(64)",
@@ -42,6 +42,7 @@ DIRECTORY_COLUMNS = {
 def init_db() -> None:
     Path("data").mkdir(exist_ok=True)
     Path("data/uploads").mkdir(parents=True, exist_ok=True)
+    Path("data/releases").mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)
     _migrate_user_columns()
     _migrate_listing_columns()
@@ -117,6 +118,17 @@ def seed_db(session: Session) -> None:
             found.title = doc["title"]
             found.version = doc["version"]
             found.body = doc["body"]
+
+    if session.execute(select(AppUpdate).where(AppUpdate.id == 1)).scalar_one_or_none() is None:
+        session.add(
+            AppUpdate(
+                id=1,
+                version_name="0.11.0",
+                version_code=12,
+                force_update=False,
+                notes="Установите обновление, чтобы получить новые функции Рядом56.",
+            )
+        )
 
     admin = session.execute(select(User).where(User.email == settings.admin_email)).scalar_one_or_none()
     if admin is None:
