@@ -1,7 +1,7 @@
 from pathlib import Path
 import json
 import uuid
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
@@ -33,6 +33,7 @@ from app.schemas import (
 from app.services.audit import log_action
 from app.services.blacklist import match_blacklist
 from app.services.notify import notify_user
+from app.services.rate_limit import limiter
 
 router = APIRouter(prefix="/listings", tags=["listings"])
 
@@ -44,6 +45,11 @@ ALLOWED_TYPES = {
     "image/jpg": ".jpg",
     "image/png": ".png",
     "image/webp": ".webp",
+}
+IMAGE_MAGIC = {
+    b"\xff\xd8\xff": ".jpg",
+    b"\x89PNG\r\n\x1a\n": ".png",
+    b"RIFF": ".webp",  # checked further below
 }
 
 CLOSE_REASON_LABELS = {
@@ -175,6 +181,9 @@ def admin_list_listings(
     status_filter: ListingStatus | None = Query(default=None, alias="status"),
     q: str | None = None,
     closed_by_user: bool = False,
+    auto_flagged: bool | None = None,
+    settlement_id: int | None = None,
+    author_id: int | None = None,
     sort: str = Query(default="newest", pattern="^(newest|sla)$"),
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(UserRole.moderator, UserRole.admin)),
@@ -188,6 +197,12 @@ def admin_list_listings(
         stmt = stmt.where(Listing.status == status_filter)
     if closed_by_user:
         stmt = stmt.where(Listing.status == ListingStatus.archived, Listing.close_reason.is_not(None))
+    if auto_flagged is not None:
+        stmt = stmt.where(Listing.auto_flagged.is_(auto_flagged))
+    if settlement_id is not None:
+        stmt = stmt.where(Listing.settlement_id == settlement_id)
+    if author_id is not None:
+        stmt = stmt.where(Listing.author_id == author_id)
     if q and q.strip():
         like = f"%{q.strip()}%"
         stmt = stmt.join(Listing.author).where(
@@ -205,6 +220,30 @@ def admin_list_listings(
     else:
         stmt = stmt.order_by(Listing.created_at.desc())
     return [to_out(r) for r in db.execute(stmt).scalars().unique().all()]
+
+
+@router.get("/mine/stats")
+def my_listing_stats(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    active = count_active_listings(db, user.id)
+    by_status = dict(
+        db.execute(
+            select(Listing.status, func.count())
+            .where(Listing.author_id == user.id)
+            .group_by(Listing.status)
+        ).all()
+    )
+    return {
+        "active": active,
+        "max_active": MAX_ACTIVE_LISTINGS,
+        "draft": int(by_status.get(ListingStatus.draft, 0)),
+        "pending": int(by_status.get(ListingStatus.pending, 0)),
+        "approved": int(by_status.get(ListingStatus.approved, 0)),
+        "rejected": int(by_status.get(ListingStatus.rejected, 0)),
+        "archived": int(by_status.get(ListingStatus.archived, 0)),
+    }
 
 
 @router.get("/favorites", response_model=list[ListingOut])
@@ -318,11 +357,17 @@ def get_listing(
 @router.post("", response_model=ListingOut)
 def create_listing(
     payload: ListingCreate,
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    ip = (request.client.host if request.client else "unknown") or "unknown"
+    if not limiter.allow(f"listing-create:{user.id}:{ip}", limit=20, window_sec=3600):
+        raise HTTPException(status_code=429, detail="Слишком много объявлений за час. Попробуйте позже")
     data = payload.model_dump()
     as_draft = bool(data.pop("as_draft", False))
+    if data.get("price") is not None and data["price"] < 0:
+        raise HTTPException(status_code=400, detail="Цена не может быть отрицательной")
     if not as_draft:
         ensure_active_slot(db, user.id)
     item = Listing(
@@ -462,13 +507,60 @@ def remove_favorite(
     return to_out(item, favorite_ids_for(db, user))
 
 
+@router.delete("/{listing_id}")
+def delete_listing(
+    listing_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    item = load_listing(db, listing_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Объявление не найдено")
+    is_staff = user.role in (UserRole.admin, UserRole.moderator)
+    if item.author_id != user.id and not is_staff:
+        raise HTTPException(status_code=403, detail="Нет доступа")
+    if item.author_id == user.id and not is_staff:
+        if item.status not in (ListingStatus.draft, ListingStatus.rejected, ListingStatus.archived):
+            raise HTTPException(
+                status_code=400,
+                detail="Можно удалить черновик, отклонённое или снятое. Опубликованное сначала снимите",
+            )
+    for img in list(item.images or []):
+        path = UPLOAD_ROOT / img.path
+        if path.exists():
+            try:
+                path.unlink()
+            except OSError:
+                pass
+        db.delete(img)
+    for fav in db.execute(select(Favorite).where(Favorite.listing_id == listing_id)).scalars().all():
+        db.delete(fav)
+    for report in db.execute(select(ListingReport).where(ListingReport.listing_id == listing_id)).scalars().all():
+        db.delete(report)
+    log_action(
+        db,
+        actor=user,
+        action="listing.delete",
+        entity_type="listing",
+        entity_id=item.id,
+        details=item.title,
+    )
+    db.delete(item)
+    db.commit()
+    return {"ok": True}
+
+
 @router.post("/{listing_id}/report")
 def report_listing(
     listing_id: int,
     payload: ListingReportIn,
+    request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
+    ip = (request.client.host if request.client else "unknown") or "unknown"
+    if not limiter.allow(f"report:{user.id}:{ip}", limit=15, window_sec=3600):
+        raise HTTPException(status_code=429, detail="Слишком много жалоб. Попробуйте позже")
     item = load_listing(db, listing_id)
     if not item:
         raise HTTPException(status_code=404, detail="Объявление не найдено")
@@ -524,13 +616,20 @@ async def upload_listing_images(
             break
         content_type = (upload.content_type or "").lower()
         ext = ALLOWED_TYPES.get(content_type)
-        if not ext:
-            raise HTTPException(status_code=400, detail="Допустимы JPG, PNG, WEBP")
         data = await upload.read()
         if not data:
             continue
         if len(data) > MAX_IMAGE_BYTES:
             raise HTTPException(status_code=400, detail="Фото больше 6 МБ")
+        # magic bytes — не доверяем только Content-Type
+        if data[:3] == b"\xff\xd8\xff":
+            ext = ".jpg"
+        elif data[:8] == b"\x89PNG\r\n\x1a\n":
+            ext = ".png"
+        elif len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+            ext = ".webp"
+        elif not ext:
+            raise HTTPException(status_code=400, detail="Допустимы JPG, PNG, WEBP")
         filename = f"{uuid.uuid4().hex}{ext}"
         rel = f"listings/{listing_id}/{filename}"
         (UPLOAD_ROOT / rel).write_bytes(data)

@@ -32,8 +32,10 @@ class MyListingsScreen extends StatefulWidget {
 
 class _MyListingsScreenState extends State<MyListingsScreen> {
   List<dynamic> items = [];
+  Map<String, dynamic>? stats;
   bool loading = true;
   String? error;
+  String filter = 'all';
 
   @override
   void initState() {
@@ -47,10 +49,13 @@ class _MyListingsScreenState extends State<MyListingsScreen> {
       error = null;
     });
     try {
-      final data = await context.read<AppState>().loadMyListings();
+      final app = context.read<AppState>();
+      final data = await app.loadMyListings();
+      final st = await app.loadMyListingStats();
       if (mounted) {
         setState(() {
           items = data;
+          stats = st;
           loading = false;
         });
       }
@@ -62,6 +67,11 @@ class _MyListingsScreenState extends State<MyListingsScreen> {
         });
       }
     }
+  }
+
+  List<dynamic> get visible {
+    if (filter == 'all') return items;
+    return items.where((e) => e is Map && '${e['status']}' == filter).toList();
   }
 
   Future<void> _edit(Map<String, dynamic> item) async {
@@ -76,17 +86,31 @@ class _MyListingsScreenState extends State<MyListingsScreen> {
     try {
       await context.read<AppState>().republishListing(item['id'] as int);
       await _load();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Отправлено на модерацию')),
-        );
-      }
+      if (mounted) showAppSnack(context, 'Отправлено на модерацию');
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text(AppState.userFriendlyError(e))),
-        );
-      }
+      if (mounted) showAppSnack(context, AppState.userFriendlyError(e), error: true);
+    }
+  }
+
+  Future<void> _delete(Map<String, dynamic> item) async {
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Удалить объявление?'),
+        content: Text('«${item['title']}» будет удалено без возможности восстановления.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Удалить')),
+        ],
+      ),
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await context.read<AppState>().deleteListing(item['id'] as int);
+      await _load();
+      if (mounted) showAppSnack(context, 'Объявление удалено');
+    } catch (e) {
+      if (mounted) showAppSnack(context, AppState.userFriendlyError(e), error: true);
     }
   }
 
@@ -139,13 +163,9 @@ class _MyListingsScreenState extends State<MyListingsScreen> {
             note: note.text.trim().isEmpty ? null : note.text.trim(),
           );
       await _load();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Объявление снято')));
-      }
+      if (mounted) showAppSnack(context, 'Объявление снято');
     } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(AppState.userFriendlyError(e))));
-      }
+      if (mounted) showAppSnack(context, AppState.userFriendlyError(e), error: true);
     }
   }
 
@@ -153,153 +173,206 @@ class _MyListingsScreenState extends State<MyListingsScreen> {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final scheme = Theme.of(context).colorScheme;
+    final active = (stats?['active'] as num?)?.toInt() ?? 0;
+    final maxActive = (stats?['max_active'] as num?)?.toInt() ?? 5;
+    final list = visible;
 
     return Scaffold(
-      appBar: AppBar(title: const Text('Мои объявления')),
+      appBar: AppBar(
+        title: const Text('Мои объявления'),
+        actions: [
+          if (stats != null)
+            Padding(
+              padding: const EdgeInsets.only(right: 12),
+              child: Center(
+                child: Text(
+                  '$active/$maxActive активных',
+                  style: TextStyle(fontWeight: FontWeight.w700, color: scheme.primary, fontSize: 13),
+                ),
+              ),
+            ),
+        ],
+      ),
       body: loading
           ? const Center(child: CircularProgressIndicator())
           : error != null
               ? errorState(context: context, message: error!, onRetry: _load)
-              : items.isEmpty
-                  ? emptyState(
-                      context: context,
-                      title: 'Пока нет объявлений',
-                      subtitle: 'Подайте первое — оно появится здесь со статусом проверки',
-                      icon: Icons.post_add_outlined,
-                      actionLabel: 'Подать объявление',
-                      onAction: () async {
-                        final ok = await Navigator.push<bool>(context, fastRoute(const CreateListingScreen()));
-                        if (ok == true) await _load();
-                      },
-                    )
-                  : RefreshIndicator(
-                      onRefresh: _load,
-                      child: ListView.separated(
-                        padding: const EdgeInsets.all(16),
-                        itemCount: items.length,
-                        separatorBuilder: (_, __) => const SizedBox(height: 10),
-                        itemBuilder: (context, i) {
-                          final item = items[i] as Map<String, dynamic>;
-                          final images = (item['images'] as List?) ?? [];
-                          final thumb = images.isNotEmpty ? (images.first as Map)['url'] as String? : null;
-                          final status = '${item['status']}';
-                          final canClose = status == 'approved' || status == 'pending';
-                          final canRepublish = status == 'archived' || status == 'rejected' || status == 'draft';
-                          return Material(
-                            color: Theme.of(context).cardTheme.color,
-                            borderRadius: BorderRadius.circular(16),
-                            child: InkWell(
-                              borderRadius: BorderRadius.circular(16),
-                              onTap: () async {
-                                await Navigator.push(
-                                  context,
-                                  fastRoute(ListingDetailScreen(listingId: item['id'] as int, preview: item)),
-                                );
-                                await _load();
-                              },
-                              child: Padding(
-                                padding: const EdgeInsets.all(12),
-                                child: Row(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    ClipRRect(
-                                      borderRadius: BorderRadius.circular(12),
-                                      child: thumb == null
-                                          ? Container(
-                                              width: 72,
-                                              height: 72,
-                                              color: scheme.surfaceContainerHighest,
-                                              child: const Icon(Icons.image_outlined),
-                                            )
-                                          : Image.network(
-                                              state.mediaUrl(thumb),
-                                              width: 72,
-                                              height: 72,
-                                              fit: BoxFit.cover,
-                                              errorBuilder: (_, __, ___) => Container(
-                                                width: 72,
-                                                height: 72,
-                                                color: scheme.surfaceContainerHighest,
-                                                child: const Icon(Icons.broken_image_outlined),
-                                              ),
-                                            ),
-                                    ),
-                                    const SizedBox(width: 12),
-                                    Expanded(
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            item['title'] as String,
-                                            maxLines: 2,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: GoogleFonts.manrope(fontWeight: FontWeight.w700),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            statusLabels[status] ?? status,
-                                            style: TextStyle(
-                                              color: status == 'rejected'
-                                                  ? scheme.error
-                                                  : status == 'approved'
-                                                      ? scheme.primary
-                                                      : scheme.onSurfaceVariant,
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w700,
-                                            ),
-                                          ),
-                                          if (status == 'pending') ...[
-                                            const SizedBox(height: 4),
-                                            Text(
-                                              'Ожидает проверки модератором',
-                                              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
-                                            ),
-                                          ],
-                                          if (status == 'rejected' && item['moderation_note'] != null) ...[
-                                            const SizedBox(height: 4),
-                                            Text(
-                                              'Причина: ${item['moderation_note']}',
-                                              style: TextStyle(color: scheme.error, fontSize: 12, height: 1.3),
-                                            ),
-                                          ],
-                                          if (item['close_reason'] != null) ...[
-                                            const SizedBox(height: 2),
-                                            Text(
-                                              closeReasons['${item['close_reason']}'] ?? '${item['close_reason']}',
-                                              style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
-                                            ),
-                                          ],
-                                          const SizedBox(height: 8),
-                                          Wrap(
-                                            spacing: 4,
-                                            children: [
-                                              TextButton(
-                                                onPressed: () => _edit(item),
-                                                child: const Text('Изменить'),
-                                              ),
-                                              if (canRepublish)
-                                                TextButton(
-                                                  onPressed: () => _republish(item),
-                                                  child: Text(status == 'draft' ? 'Отправить' : 'Снова'),
-                                                ),
-                                              if (canClose)
-                                                TextButton(
-                                                  onPressed: () => _close(item),
-                                                  child: const Text('Снять'),
-                                                ),
-                                            ],
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                            ),
-                          );
-                        },
+              : Column(
+                  children: [
+                    SizedBox(
+                      height: 48,
+                      child: ListView(
+                        scrollDirection: Axis.horizontal,
+                        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        children: [
+                          _chip('all', 'Все', items.length),
+                          _chip('pending', 'На проверке', stats?['pending']),
+                          _chip('approved', 'Опубликовано', stats?['approved']),
+                          _chip('draft', 'Черновики', stats?['draft']),
+                          _chip('rejected', 'Отклонённые', stats?['rejected']),
+                          _chip('archived', 'Снятые', stats?['archived']),
+                        ],
                       ),
                     ),
+                    Expanded(
+                      child: items.isEmpty
+                          ? emptyState(
+                              context: context,
+                              title: 'Пока нет объявлений',
+                              subtitle: 'Подайте первое — оно появится здесь со статусом проверки',
+                              icon: Icons.post_add_outlined,
+                              actionLabel: 'Подать объявление',
+                              onAction: () async {
+                                final ok = await Navigator.push<bool>(context, fastRoute(const CreateListingScreen()));
+                                if (ok == true) await _load();
+                              },
+                            )
+                          : list.isEmpty
+                              ? emptyState(
+                                  context: context,
+                                  title: 'В этом статусе пусто',
+                                  subtitle: 'Выберите другой фильтр сверху',
+                                  icon: Icons.filter_alt_outlined,
+                                )
+                              : RefreshIndicator(
+                                  onRefresh: _load,
+                                  child: ListView.separated(
+                                    padding: const EdgeInsets.all(16),
+                                    itemCount: list.length,
+                                    separatorBuilder: (_, __) => const SizedBox(height: 10),
+                                    itemBuilder: (context, i) {
+                                      final item = list[i] as Map<String, dynamic>;
+                                      final images = (item['images'] as List?) ?? [];
+                                      final thumb = images.isNotEmpty ? (images.first as Map)['url'] as String? : null;
+                                      final status = '${item['status']}';
+                                      final canClose = status == 'approved' || status == 'pending';
+                                      final canRepublish =
+                                          status == 'archived' || status == 'rejected' || status == 'draft';
+                                      final canDelete =
+                                          status == 'draft' || status == 'rejected' || status == 'archived';
+                                      return Material(
+                                        color: Theme.of(context).cardTheme.color,
+                                        borderRadius: BorderRadius.circular(16),
+                                        child: InkWell(
+                                          borderRadius: BorderRadius.circular(16),
+                                          onTap: () async {
+                                            await Navigator.push(
+                                              context,
+                                              fastRoute(ListingDetailScreen(listingId: item['id'] as int, preview: item)),
+                                            );
+                                            await _load();
+                                          },
+                                          child: Padding(
+                                            padding: const EdgeInsets.all(12),
+                                            child: Row(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                ClipRRect(
+                                                  borderRadius: BorderRadius.circular(12),
+                                                  child: thumb == null
+                                                      ? Container(
+                                                          width: 72,
+                                                          height: 72,
+                                                          color: scheme.surfaceContainerHighest,
+                                                          child: const Icon(Icons.image_outlined),
+                                                        )
+                                                      : Image.network(
+                                                          state.mediaUrl(thumb),
+                                                          width: 72,
+                                                          height: 72,
+                                                          fit: BoxFit.cover,
+                                                          errorBuilder: (_, __, ___) => Container(
+                                                            width: 72,
+                                                            height: 72,
+                                                            color: scheme.surfaceContainerHighest,
+                                                            child: const Icon(Icons.broken_image_outlined),
+                                                          ),
+                                                        ),
+                                                ),
+                                                const SizedBox(width: 12),
+                                                Expanded(
+                                                  child: Column(
+                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                    children: [
+                                                      Text(
+                                                        item['title'] as String,
+                                                        maxLines: 2,
+                                                        overflow: TextOverflow.ellipsis,
+                                                        style: GoogleFonts.manrope(fontWeight: FontWeight.w700),
+                                                      ),
+                                                      const SizedBox(height: 4),
+                                                      Text(
+                                                        statusLabels[status] ?? status,
+                                                        style: TextStyle(
+                                                          color: status == 'rejected'
+                                                              ? scheme.error
+                                                              : status == 'approved'
+                                                                  ? scheme.primary
+                                                                  : scheme.onSurfaceVariant,
+                                                          fontSize: 12,
+                                                          fontWeight: FontWeight.w700,
+                                                        ),
+                                                      ),
+                                                      if (status == 'pending') ...[
+                                                        const SizedBox(height: 4),
+                                                        Text(
+                                                          'Ожидает проверки модератором',
+                                                          style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+                                                        ),
+                                                      ],
+                                                      if (status == 'rejected' && item['moderation_note'] != null) ...[
+                                                        const SizedBox(height: 4),
+                                                        Text(
+                                                          'Причина: ${item['moderation_note']}',
+                                                          style: TextStyle(color: scheme.error, fontSize: 12, height: 1.3),
+                                                        ),
+                                                      ],
+                                                      const SizedBox(height: 8),
+                                                      Wrap(
+                                                        spacing: 4,
+                                                        children: [
+                                                          TextButton(onPressed: () => _edit(item), child: const Text('Изменить')),
+                                                          if (canRepublish)
+                                                            TextButton(
+                                                              onPressed: () => _republish(item),
+                                                              child: Text(status == 'draft' ? 'Отправить' : 'Снова'),
+                                                            ),
+                                                          if (canClose)
+                                                            TextButton(onPressed: () => _close(item), child: const Text('Снять')),
+                                                          if (canDelete)
+                                                            TextButton(
+                                                              onPressed: () => _delete(item),
+                                                              child: Text('Удалить', style: TextStyle(color: scheme.error)),
+                                                            ),
+                                                        ],
+                                                      ),
+                                                    ],
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                                ),
+                    ),
+                  ],
+                ),
+    );
+  }
+
+  Widget _chip(String key, String label, dynamic count) {
+    final n = count is num ? count.toInt() : (count is int ? count : null);
+    final selected = filter == key;
+    return Padding(
+      padding: const EdgeInsets.only(right: 8),
+      child: FilterChip(
+        selected: selected,
+        label: Text(n == null ? label : '$label ($n)'),
+        onSelected: (_) => setState(() => filter = key),
+      ),
     );
   }
 }

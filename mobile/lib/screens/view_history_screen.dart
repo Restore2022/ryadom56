@@ -21,7 +21,20 @@ class ViewHistoryScreen extends StatelessWidget {
         actions: [
           if (items.isNotEmpty)
             TextButton(
-              onPressed: () => state.clearViewHistory(),
+              onPressed: () async {
+                final ok = await showDialog<bool>(
+                  context: context,
+                  builder: (ctx) => AlertDialog(
+                    title: const Text('Очистить историю?'),
+                    content: const Text('Список недавно просмотренных объявлений будет удалён.'),
+                    actions: [
+                      TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+                      FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Очистить')),
+                    ],
+                  ),
+                );
+                if (ok == true) await state.clearViewHistory();
+              },
               child: const Text('Очистить'),
             ),
         ],

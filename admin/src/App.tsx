@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Navigate, NavLink, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom';
-import { api, apiText, mediaUrl, setToken } from './api';
+import { api, apiDownload, apiText, mediaUrl, setToken } from './api';
 import type {
   AuditLog,
   BlacklistEntry,
   DirectoryItem,
+  LegalDocument,
   Listing,
   ListingReport,
   Settlement,
@@ -187,6 +188,12 @@ const REPORT_REASON_LABEL: Record<string, string> = {
   fraud: 'Мошенничество',
   prohibited: 'Запрещённый контент',
   other: 'Другое',
+};
+
+const REPORT_STATUS_LABEL: Record<string, string> = {
+  open: 'Открыта',
+  reviewed: 'Просмотрена',
+  dismissed: 'Отклонена',
 };
 
 function formatDate(value?: string | null) {
@@ -395,6 +402,11 @@ function Shell({
               <span className="nav-ico">☺</span> Пользователи
             </NavLink>
           )}
+          {user.role === 'admin' && (
+            <NavLink to="/legal">
+              <span className="nav-ico">§</span> Правовое
+            </NavLink>
+          )}
         </nav>
         <div className="aside-user">
           <div className="name">{user.full_name}</div>
@@ -417,11 +429,26 @@ function pushToast(message: string) {
   window.dispatchEvent(new CustomEvent('ryadom56:toast', { detail: message }));
 }
 
-function Dashboard() {
+function Dashboard({ isAdmin }: { isAdmin?: boolean }) {
   const [stats, setStats] = useState<Stats | null>(null);
+  const [backupBusy, setBackupBusy] = useState(false);
+
   useEffect(() => {
     api<Stats>('/admin/stats').then(setStats).catch(console.error);
   }, []);
+
+  async function downloadBackup() {
+    if (backupBusy) return;
+    setBackupBusy(true);
+    try {
+      await apiDownload('/admin/backup', 'ryadom56-backup.db');
+      pushToast('Бэкап скачан');
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : 'Ошибка скачивания');
+    } finally {
+      setBackupBusy(false);
+    }
+  }
 
   if (!stats) {
     return (
@@ -444,6 +471,11 @@ function Dashboard() {
           <h1>Сводка</h1>
           <p>Состояние сервиса Рядом56 прямо сейчас</p>
         </div>
+        {isAdmin && (
+          <button className="btn secondary" type="button" disabled={backupBusy} onClick={() => downloadBackup()}>
+            {backupBusy ? 'Скачивание…' : 'Скачать бэкап БД'}
+          </button>
+        )}
       </div>
       <div className="cards">
         <div className="stat warn">
@@ -520,17 +552,23 @@ function Dashboard() {
 function ModerationPage() {
   const [searchParams] = useSearchParams();
   const listingIdParam = searchParams.get('listingId');
+  const authorIdParam = searchParams.get('authorId');
+  const qParam = searchParams.get('q');
   const [items, setItems] = useState<Listing[]>([]);
-  const [filter, setFilter] = useState(() => (listingIdParam ? '' : 'pending'));
+  const [settlements, setSettlements] = useState<Settlement[]>([]);
+  const [filter, setFilter] = useState(() => (listingIdParam || authorIdParam ? '' : 'pending'));
   const [closedOnly, setClosedOnly] = useState(false);
   const [category, setCategory] = useState('');
   const [query, setQuery] = useState('');
-  const [serverQuery, setServerQuery] = useState('');
+  const [serverQuery, setServerQuery] = useState(() => qParam || '');
+  const [autoFlaggedOnly, setAutoFlaggedOnly] = useState(false);
+  const [settlementId, setSettlementId] = useState<number | ''>('');
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState<number | null>(null);
   const [selected, setSelected] = useState<Listing | null>(null);
   const [checked, setChecked] = useState<number[]>([]);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkRejectNote, setBulkRejectNote] = useState('');
   const [moderationNote, setModerationNote] = useState('');
 
   function closeModal() {
@@ -548,6 +586,9 @@ function ModerationPage() {
         params.set('status', filter);
       }
       if (serverQuery.trim()) params.set('q', serverQuery.trim());
+      if (autoFlaggedOnly) params.set('auto_flagged', '1');
+      if (settlementId !== '') params.set('settlement_id', String(settlementId));
+      if (authorIdParam) params.set('author_id', authorIdParam);
       if (filter === 'pending' || !filter) params.set('sort', 'sla');
       const qs = params.toString();
       setItems(await api<Listing[]>(`/listings/admin/all${qs ? `?${qs}` : ''}`));
@@ -558,8 +599,22 @@ function ModerationPage() {
   }
 
   useEffect(() => {
+    api<Settlement[]>('/settlements').then(setSettlements).catch(console.error);
+  }, []);
+
+  useEffect(() => {
+    if (qParam != null) setServerQuery(qParam);
+  }, [qParam]);
+
+  useEffect(() => {
+    if (!authorIdParam) return;
+    setFilter('');
+    setClosedOnly(false);
+  }, [authorIdParam]);
+
+  useEffect(() => {
     load();
-  }, [filter, closedOnly, serverQuery]);
+  }, [filter, closedOnly, serverQuery, autoFlaggedOnly, settlementId, authorIdParam]);
 
   async function togglePin(item: Listing) {
     setBusyId(item.id);
@@ -661,24 +716,31 @@ function ModerationPage() {
     const ids = checked.filter((id) => items.some((x) => x.id === id && needsModeration(x)));
     if (!ids.length) return;
     let moderation_note: string | null = null;
-    if (status === 'rejected') {
-      const note = window.prompt('Причина отклонения для автора');
-      if (note === null) return;
-      if (!note.trim()) {
-        alert('Укажите причину отклонения');
+    if (status === 'approved') {
+      if (!(await confirmAction(`Одобрить выбранные объявления (${ids.length})?`))) return;
+    } else {
+      const note = bulkRejectNote.trim() || window.prompt('Причина отклонения для автора')?.trim() || '';
+      if (!note) {
+        pushToast('Укажите причину отклонения');
         return;
       }
-      moderation_note = note.trim();
+      if (!(await confirmAction(`Отклонить выбранные объявления (${ids.length})?`))) return;
+      moderation_note = note;
     }
     setBulkBusy(true);
+    setError('');
     try {
       await api('/admin/listings/bulk-moderate', {
         method: 'POST',
         body: JSON.stringify({ ids, status, moderation_note }),
       });
+      setBulkRejectNote('');
       await load();
+      pushToast(status === 'approved' ? `Одобрено: ${ids.length}` : `Отклонено: ${ids.length}`);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Ошибка');
+      const msg = err instanceof Error ? err.message : 'Ошибка';
+      setError(msg);
+      pushToast(msg);
     } finally {
       setBulkBusy(false);
     }
@@ -749,11 +811,37 @@ function ModerationPage() {
           onChange={(e) => setQuery(e.target.value)}
           style={{ maxWidth: 200 }}
         />
+        <select
+          value={settlementId === '' ? '' : String(settlementId)}
+          onChange={(e) => setSettlementId(e.target.value ? Number(e.target.value) : '')}
+        >
+          <option value="">Все населённые пункты</option>
+          {settlements.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.display_name}
+            </option>
+          ))}
+        </select>
+        <label className="check-inline">
+          <input
+            type="checkbox"
+            checked={autoFlaggedOnly}
+            onChange={(e) => setAutoFlaggedOnly(e.target.checked)}
+          />
+          Только автофлаг
+        </label>
+        {authorIdParam && <span className="chip warn">Автор #{authorIdParam}</span>}
       </div>
 
       {pendingChecked.length > 0 && (
         <div className="toolbar compact">
           <span className="muted">Выбрано: {pendingChecked.length}</span>
+          <input
+            placeholder="Причина отклонения (для массового)"
+            value={bulkRejectNote}
+            onChange={(e) => setBulkRejectNote(e.target.value)}
+            style={{ maxWidth: 280 }}
+          />
           <button className="btn" type="button" disabled={bulkBusy} onClick={() => bulkModerate('approved')}>
             Одобрить выбранные
           </button>
@@ -979,6 +1067,13 @@ function ReportsPage() {
   const [items, setItems] = useState<ListingReport[]>([]);
   const [status, setStatus] = useState('open');
   const [error, setError] = useState('');
+  const [replyModal, setReplyModal] = useState<{
+    report: ListingReport;
+    next: 'reviewed' | 'dismissed';
+  } | null>(null);
+  const [moderatorReply, setModeratorReply] = useState('');
+  const [openListingAfter, setOpenListingAfter] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   async function load() {
     try {
@@ -993,13 +1088,51 @@ function ReportsPage() {
     load().catch(console.error);
   }, [status]);
 
-  async function setReportStatus(id: number, next: 'reviewed' | 'dismissed') {
-    const reply = window.prompt('Короткий ответ автору жалобы (необязательно)');
-    await api(`/admin/reports/${id}`, {
-      method: 'PATCH',
-      body: JSON.stringify({ status: next, moderator_reply: reply?.trim() || null }),
-    });
-    await load();
+  function openReplyModal(report: ListingReport, next: 'reviewed' | 'dismissed') {
+    setReplyModal({ report, next });
+    setModeratorReply('');
+    setOpenListingAfter(false);
+    setError('');
+  }
+
+  function closeReplyModal() {
+    if (busy) return;
+    setReplyModal(null);
+    setModeratorReply('');
+    setOpenListingAfter(false);
+  }
+
+  async function submitReportStatus() {
+    if (!replyModal || busy) return;
+    if (replyModal.next === 'dismissed') {
+      if (!(await confirmAction('Отклонить эту жалобу?'))) return;
+    }
+    const next = replyModal.next;
+    const listingId = replyModal.report.listing_id;
+    const shouldOpen = openListingAfter;
+    setBusy(true);
+    setError('');
+    try {
+      await api(`/admin/reports/${replyModal.report.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status: next,
+          moderator_reply: moderatorReply.trim() || null,
+        }),
+      });
+      setReplyModal(null);
+      setModeratorReply('');
+      setOpenListingAfter(false);
+      await load();
+      pushToast(next === 'reviewed' ? 'Жалоба просмотрена' : 'Жалоба отклонена');
+      if (shouldOpen) navigate(`/moderation?listingId=${listingId}`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Ошибка';
+      setError(msg);
+      pushToast(msg);
+    } finally {
+      setBusy(false);
+    }
   }
 
   function goToListing(listingId: number) {
@@ -1022,7 +1155,7 @@ function ReportsPage() {
           <option value="">Все</option>
         </select>
       </div>
-      {error && <p className="error">{error}</p>}
+      {error && !replyModal && <p className="error">{error}</p>}
       <div className="list">
         {items.map((r) => (
           <article key={r.id} className="row-card">
@@ -1037,7 +1170,7 @@ function ReportsPage() {
               <div className="meta">
                 <span className="chip warn">{REPORT_REASON_LABEL[r.reason] || r.reason}</span>
                 <span className="chip neutral">{r.reporter_name}</span>
-                <span className="chip">{r.status}</span>
+                <span className="chip">{REPORT_STATUS_LABEL[r.status] || r.status}</span>
               </div>
               {r.note && <p className="row-body">{r.note}</p>}
               {r.moderator_reply && <p className="muted">Ответ: {r.moderator_reply}</p>}
@@ -1049,10 +1182,10 @@ function ReportsPage() {
               </button>
               {r.status === 'open' && (
                 <>
-                  <button className="btn" type="button" onClick={() => setReportStatus(r.id, 'reviewed')}>
+                  <button className="btn" type="button" onClick={() => openReplyModal(r, 'reviewed')}>
                     Просмотрено
                   </button>
-                  <button className="btn secondary" type="button" onClick={() => setReportStatus(r.id, 'dismissed')}>
+                  <button className="btn secondary" type="button" onClick={() => openReplyModal(r, 'dismissed')}>
                     Отклонить
                   </button>
                 </>
@@ -1062,6 +1195,48 @@ function ReportsPage() {
         ))}
         {!items.length && <div className="empty">Жалоб нет</div>}
       </div>
+
+      {replyModal && (
+        <div className="modal-backdrop" onClick={closeReplyModal}>
+          <div className="modal modal-compact" onClick={(e) => e.stopPropagation()}>
+            <h2>{replyModal.next === 'reviewed' ? 'Просмотреть жалобу' : 'Отклонить жалобу'}</h2>
+            <p className="muted" style={{ marginTop: 0 }}>
+              {replyModal.report.listing_title || `Объявление #${replyModal.report.listing_id}`}
+            </p>
+            <label className="field" style={{ display: 'block', marginTop: 12 }}>
+              Ответ автору жалобы (необязательно)
+              <textarea
+                value={moderatorReply}
+                onChange={(e) => setModeratorReply(e.target.value)}
+                placeholder="Короткий ответ"
+                rows={3}
+              />
+            </label>
+            <label className="check-inline" style={{ marginTop: 12 }}>
+              <input
+                type="checkbox"
+                checked={openListingAfter}
+                onChange={(e) => setOpenListingAfter(e.target.checked)}
+              />
+              Перейти к объявлению после
+            </label>
+            {error && <p className="error">{error}</p>}
+            <div className="modal-actions">
+              <button
+                className={replyModal.next === 'dismissed' ? 'btn secondary' : 'btn'}
+                type="button"
+                disabled={busy}
+                onClick={() => submitReportStatus()}
+              >
+                {busy ? 'Сохранение…' : replyModal.next === 'reviewed' ? 'Просмотрено' : 'Отклонить'}
+              </button>
+              <button className="btn ghost" type="button" disabled={busy} onClick={closeReplyModal}>
+                Отмена
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1180,6 +1355,8 @@ function DirectoryPage() {
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
+  const [publishedFilter, setPublishedFilter] = useState<'all' | 'published' | 'hidden'>('all');
+  const [settlementFilter, setSettlementFilter] = useState<number | ''>('');
 
   async function load() {
     setItems(await api<DirectoryItem[]>('/directory'));
@@ -1279,12 +1456,34 @@ function DirectoryPage() {
             ),
           )}
         </select>
+        <select
+          value={publishedFilter}
+          onChange={(e) => setPublishedFilter(e.target.value as 'all' | 'published' | 'hidden')}
+        >
+          <option value="all">Все статусы</option>
+          <option value="published">Опубликованные</option>
+          <option value="hidden">Скрытые</option>
+        </select>
+        <select
+          value={settlementFilter === '' ? '' : String(settlementFilter)}
+          onChange={(e) => setSettlementFilter(e.target.value ? Number(e.target.value) : '')}
+        >
+          <option value="">Все населённые пункты</option>
+          {settlements.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.display_name}
+            </option>
+          ))}
+        </select>
       </div>
 
       <div className="list">
         {items
           .filter((item) => {
             if (categoryFilter && item.category !== categoryFilter) return false;
+            if (publishedFilter === 'published' && !item.is_published) return false;
+            if (publishedFilter === 'hidden' && item.is_published) return false;
+            if (settlementFilter !== '' && item.settlement_id !== settlementFilter) return false;
             if (!query.trim()) return true;
             const q = query.trim().toLowerCase();
             return (
@@ -1515,6 +1714,7 @@ function BlacklistPage() {
 }
 
 function UsersPage() {
+  const navigate = useNavigate();
   const [users, setUsers] = useState<User[]>([]);
   const [settlements, setSettlements] = useState<Settlement[]>([]);
   const [selected, setSelected] = useState<User | null>(null);
@@ -1585,6 +1785,18 @@ function UsersPage() {
     }
     if (selected.is_active && !form.is_active) {
       if (!(await confirmAction(`Заблокировать пользователя ${selected.full_name}?`))) return;
+    }
+    if (
+      form.role !== selected.role &&
+      (form.role === 'moderator' || form.role === 'editor' || form.role === 'admin')
+    ) {
+      if (
+        !(await confirmAction(
+          `Назначить роль «${ROLE_LABELS[form.role]}» пользователю ${selected.full_name}? Это даст доступ к админке.`,
+        ))
+      ) {
+        return;
+      }
     }
     setBusy(true);
     setError('');
@@ -1679,6 +1891,13 @@ function UsersPage() {
               </div>
             </div>
             <div className="actions" onClick={(e) => e.stopPropagation()}>
+              <button
+                className="btn ghost"
+                type="button"
+                onClick={() => navigate(`/moderation?authorId=${u.id}`)}
+              >
+                Объявления
+              </button>
               <button className="btn" type="button" onClick={() => openEdit(u)}>
                 Изменить
               </button>
@@ -1787,8 +2006,156 @@ function UsersPage() {
                 <button className="btn" type="submit" disabled={busy}>
                   {busy ? 'Сохранение…' : 'Сохранить'}
                 </button>
+                <button
+                  className="btn ghost"
+                  type="button"
+                  onClick={() => {
+                    const id = selected.id;
+                    setSelected(null);
+                    navigate(`/moderation?authorId=${id}`);
+                  }}
+                >
+                  Объявления
+                </button>
                 <button className="btn secondary" type="button" onClick={() => setSelected(null)}>
                   Закрыть
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function LegalPage() {
+  const [items, setItems] = useState<LegalDocument[]>([]);
+  const [selected, setSelected] = useState<LegalDocument | null>(null);
+  const [form, setForm] = useState({ title: '', body: '', version: '' });
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function load() {
+    setItems(await api<LegalDocument[]>('/legal'));
+  }
+
+  useEffect(() => {
+    load().catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+  }, []);
+
+  function openEdit(doc: LegalDocument) {
+    setSelected(doc);
+    setForm({ title: doc.title, body: doc.body, version: doc.version });
+    setError('');
+  }
+
+  function closeModal() {
+    if (busy) return;
+    setSelected(null);
+    setError('');
+  }
+
+  async function saveDoc(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selected || busy) return;
+    if (!form.title.trim() || form.body.trim().length < 10 || !form.version.trim()) {
+      setError('Заполните название, текст (от 10 символов) и версию');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      const updated = await api<LegalDocument>(`/legal/${selected.slug}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          title: form.title.trim(),
+          body: form.body.trim(),
+          version: form.version.trim(),
+        }),
+      });
+      setItems((prev) => prev.map((d) => (d.slug === updated.slug ? updated : d)));
+      setSelected(null);
+      pushToast('Документ сохранён');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className="page-head compact">
+        <div>
+          <h1>Правовые документы</h1>
+          <p>Политика, условия и другие тексты сервиса</p>
+        </div>
+      </div>
+      {error && !selected && <p className="error">{error}</p>}
+      <div className="list compact">
+        {items.map((doc) => (
+          <article key={doc.slug} className="row-card compact">
+            <div className="row-main">
+              <h3 className="row-title">{doc.title}</h3>
+              <div className="meta">
+                <span className="chip neutral">{doc.slug}</span>
+                <span className="chip">v{doc.version}</span>
+                <span className="chip neutral">{formatDate(doc.updated_at)}</span>
+              </div>
+              <p className="row-body">
+                {doc.body.length > 140 ? `${doc.body.slice(0, 140)}…` : doc.body}
+              </p>
+            </div>
+            <div className="actions inline">
+              <button className="btn" type="button" onClick={() => openEdit(doc)}>
+                Изменить
+              </button>
+            </div>
+          </article>
+        ))}
+        {!items.length && <div className="empty">Документов пока нет</div>}
+      </div>
+
+      {selected && (
+        <div className="modal-backdrop" onClick={closeModal}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 'min(720px, 100%)' }}>
+            <h2>Редактировать: {selected.slug}</h2>
+            <form onSubmit={saveDoc}>
+              <div className="grid2">
+                <label className="field">
+                  Название
+                  <input
+                    required
+                    value={form.title}
+                    onChange={(e) => setForm({ ...form, title: e.target.value })}
+                  />
+                </label>
+                <label className="field">
+                  Версия
+                  <input
+                    required
+                    value={form.version}
+                    onChange={(e) => setForm({ ...form, version: e.target.value })}
+                  />
+                </label>
+                <label className="field full">
+                  Текст
+                  <textarea
+                    required
+                    rows={12}
+                    value={form.body}
+                    onChange={(e) => setForm({ ...form, body: e.target.value })}
+                  />
+                </label>
+              </div>
+              {error && <p className="error">{error}</p>}
+              <div className="modal-actions">
+                <button className="btn" type="submit" disabled={busy}>
+                  {busy ? 'Сохранение…' : 'Сохранить'}
+                </button>
+                <button className="btn secondary" type="button" disabled={busy} onClick={closeModal}>
+                  Отмена
                 </button>
               </div>
             </form>
@@ -1839,13 +2206,14 @@ export default function App() {
       }}
     >
       <Routes>
-        <Route path="/" element={<Dashboard />} />
+        <Route path="/" element={<Dashboard isAdmin={user!.role === 'admin'} />} />
         {canModerate(user!.role) && <Route path="/moderation" element={<ModerationPage />} />}
         {canModerate(user!.role) && <Route path="/reports" element={<ReportsPage />} />}
         <Route path="/audit" element={<AuditPage />} />
         {canEditDirectory(user!.role) && <Route path="/directory" element={<DirectoryPage />} />}
         {canModerate(user!.role) && <Route path="/blacklist" element={<BlacklistPage />} />}
         {user!.role === 'admin' && <Route path="/users" element={<UsersPage />} />}
+        {user!.role === 'admin' && <Route path="/legal" element={<LegalPage />} />}
         <Route
           path="*"
           element={

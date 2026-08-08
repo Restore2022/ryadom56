@@ -1,13 +1,16 @@
 from datetime import datetime, timedelta, timezone
 from collections import Counter
 
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Query
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import require_roles
 from app.api.listings import load_listing, to_out
+from app.core.config import settings
 from app.core.database import get_db
 from app.models import (
     AuditLog,
@@ -119,6 +122,24 @@ def stats(
         moderation_conversion=conversion,
         listings_per_day=per_day,
         top_categories=top,
+    )
+
+
+@router.get("/backup")
+def download_backup(
+    user: User = Depends(require_roles(UserRole.admin)),
+):
+    # sqlite:///./data/ryadom56.db → data/ryadom56.db
+    raw = settings.database_url.replace("sqlite:///", "")
+    path = Path(raw)
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Файл базы не найден")
+    return FileResponse(
+        path,
+        filename="ryadom56-backup.db",
+        media_type="application/octet-stream",
     )
 
 

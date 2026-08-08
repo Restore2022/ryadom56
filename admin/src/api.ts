@@ -94,6 +94,40 @@ export async function apiText(path: string): Promise<string> {
   return res.text();
 }
 
+export async function apiDownload(path: string, filename: string): Promise<void> {
+  const headers = new Headers();
+  const token = getToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  let res: Response;
+  try {
+    res = await fetch(`${API_URL}${path}`, { headers });
+  } catch {
+    throw new Error('Нет связи с сервером. Проверьте, что API запущен.');
+  }
+  if (res.status === 401) {
+    setToken(null);
+    window.dispatchEvent(new CustomEvent('ryadom56:unauthorized'));
+    throw new Error('Сессия истекла. Войдите снова');
+  }
+  if (!res.ok) {
+    let detail = 'Ошибка скачивания';
+    try {
+      const data = await res.json();
+      if (typeof data?.detail === 'string') detail = data.detail;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export type User = {
   id: number;
   email: string;
@@ -218,4 +252,12 @@ export type BlacklistEntry = {
   value: string;
   note?: string | null;
   created_at: string;
+};
+
+export type LegalDocument = {
+  slug: string;
+  title: string;
+  body: string;
+  version: string;
+  updated_at: string;
 };

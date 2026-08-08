@@ -394,6 +394,16 @@ class AppState extends ChangeNotifier {
     return data as List<dynamic>;
   }
 
+  Future<Map<String, dynamic>> loadMyListingStats() async {
+    return await api.request('/listings/mine/stats', auth: true) as Map<String, dynamic>;
+  }
+
+  Future<void> deleteListing(int id) async {
+    await api.request('/listings/$id', method: 'DELETE', auth: true);
+    await loadListings();
+    notifyListeners();
+  }
+
   Future<Map<String, dynamic>> getLegalDoc(String slug) async {
     return await api.request('/legal/$slug') as Map<String, dynamic>;
   }

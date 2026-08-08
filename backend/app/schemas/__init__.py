@@ -102,7 +102,7 @@ class ListingCreate(BaseModel):
     description: str = Field(min_length=3, max_length=5000)
     category: ListingCategory
     settlement_id: int
-    price: float | None = None
+    price: float | None = Field(default=None, ge=0)
     contact_phone: str | None = Field(default=None, max_length=32)
     is_urgent: bool = False
     as_draft: bool = False
@@ -113,10 +113,16 @@ class ListingUpdate(BaseModel):
     description: str | None = Field(default=None, min_length=3, max_length=5000)
     category: ListingCategory | None = None
     settlement_id: int | None = None
-    price: float | None = None
+    price: float | None = Field(default=None, ge=0)
     contact_phone: str | None = None
     is_urgent: bool | None = None
     as_draft: bool | None = None
+
+
+class LegalUpdate(BaseModel):
+    title: str | None = Field(default=None, min_length=2, max_length=200)
+    body: str | None = Field(default=None, min_length=10)
+    version: str | None = Field(default=None, max_length=32)
 
 
 class ListingModerationIn(BaseModel):

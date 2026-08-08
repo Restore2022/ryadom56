@@ -9,6 +9,7 @@ from app.core.database import get_db
 from app.core.security import create_access_token, hash_password, verify_password
 from app.models import Settlement, User
 from app.schemas import DeviceInfoIn, LoginIn, ProfileUpdateIn, RegisterIn, TokenOut, UserOut
+from app.services.rate_limit import limiter
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -42,6 +43,9 @@ def touch_user(user: User, request: Request, device: DeviceInfoIn | None = None)
 
 @router.post("/register", response_model=TokenOut)
 def register(payload: RegisterIn, request: Request, db: Session = Depends(get_db)):
+    ip = client_ip(request) or "unknown"
+    if not limiter.allow(f"register:{ip}", limit=8, window_sec=3600):
+        raise HTTPException(status_code=429, detail="Слишком много регистраций с этого адреса. Попробуйте позже")
     if not (payload.accepted_terms and payload.accepted_privacy and payload.accepted_listing_rules):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -50,6 +54,9 @@ def register(payload: RegisterIn, request: Request, db: Session = Depends(get_db
     exists = db.execute(select(User).where(User.email == payload.email.lower())).scalar_one_or_none()
     if exists:
         raise HTTPException(status_code=400, detail="Email уже зарегистрирован")
+    settlement = db.execute(select(Settlement).where(Settlement.id == payload.settlement_id)).scalar_one_or_none()
+    if not settlement:
+        raise HTTPException(status_code=400, detail="Населённый пункт не найден")
 
     user = User(
         email=payload.email.lower(),
@@ -69,6 +76,9 @@ def register(payload: RegisterIn, request: Request, db: Session = Depends(get_db
 
 @router.post("/login", response_model=TokenOut)
 def login(payload: LoginIn, request: Request, db: Session = Depends(get_db)):
+    ip = client_ip(request) or "unknown"
+    if not limiter.allow(f"login:{ip}", limit=40, window_sec=600):
+        raise HTTPException(status_code=429, detail="Слишком много попыток входа. Подождите")
     user = db.execute(select(User).where(User.email == payload.email.lower())).scalar_one_or_none()
     if not user or not verify_password(payload.password, user.password_hash):
         raise HTTPException(status_code=401, detail="Неверный email или пароль")

@@ -142,6 +142,11 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                                       const SizedBox(height: 6),
                                       Text('${item['body']}', style: TextStyle(color: scheme.onSurfaceVariant, height: 1.35)),
                                     ],
+                                    const SizedBox(height: 8),
+                                    Text(
+                                      _fmtWhen(item['created_at']?.toString()),
+                                      style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+                                    ),
                                   ],
                                 ),
                               ),
@@ -151,5 +156,18 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                       ),
                     ),
     );
+  }
+
+  String _fmtWhen(String? iso) {
+    if (iso == null || iso.isEmpty) return '';
+    final dt = DateTime.tryParse(iso)?.toLocal();
+    if (dt == null) return '';
+    final now = DateTime.now();
+    final diff = now.difference(dt);
+    if (diff.inMinutes < 1) return 'только что';
+    if (diff.inMinutes < 60) return '${diff.inMinutes} мин назад';
+    if (diff.inHours < 24 && now.day == dt.day) return '${diff.inHours} ч назад';
+    if (diff.inDays < 7) return '${diff.inDays == 0 ? 1 : diff.inDays} дн назад';
+    return '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}';
   }
 }

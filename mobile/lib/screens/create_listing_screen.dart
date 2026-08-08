@@ -327,7 +327,12 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
               DropdownMenuItem(value: 'free', child: Text('Отдам даром')),
               DropdownMenuItem(value: 'lost_found', child: Text('Потеряшки')),
             ],
-            onChanged: (v) => setState(() => category = v ?? 'goods'),
+            onChanged: (v) {
+              setState(() {
+                category = v ?? 'goods';
+                if (category == 'free') price.clear();
+              });
+            },
           ),
           const SizedBox(height: 12),
           DropdownButtonFormField<int>(
@@ -338,16 +343,23 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
                 .toList(),
             onChanged: (v) => setState(() => settlementId = v),
           ),
-          const SizedBox(height: 12),
-          TextField(
-            controller: price,
-            keyboardType: TextInputType.number,
-            decoration: const InputDecoration(labelText: 'Цена (необязательно)', border: OutlineInputBorder()),
-          ),
+          if (category != 'free') ...[
+            const SizedBox(height: 12),
+            TextField(
+              controller: price,
+              keyboardType: TextInputType.number,
+              decoration: const InputDecoration(labelText: 'Цена (необязательно)', border: OutlineInputBorder()),
+            ),
+          ],
           const SizedBox(height: 12),
           TextField(
             controller: phone,
-            decoration: const InputDecoration(labelText: 'Телефон для связи', border: OutlineInputBorder()),
+            keyboardType: TextInputType.phone,
+            decoration: const InputDecoration(
+              labelText: 'Телефон для связи',
+              hintText: '+79001234567',
+              border: OutlineInputBorder(),
+            ),
           ),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
@@ -400,7 +412,9 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
         'description': description.text.trim(),
         'category': category,
         'settlement_id': settlementId,
-        'price': price.text.trim().isEmpty ? null : double.tryParse(price.text.trim().replaceAll(',', '.')),
+        'price': category == 'free' || price.text.trim().isEmpty
+            ? null
+            : double.tryParse(price.text.trim().replaceAll(',', '.')),
         'contact_phone': phone.text.trim().isEmpty ? null : phone.text.trim(),
         'is_urgent': isUrgent,
       };
@@ -411,6 +425,10 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
         await app.createListing(body, imagePaths: photos.map((e) => e.path).toList(), asDraft: true);
       }
       savedOnExit = true;
+      final messenger = ScaffoldMessenger.maybeOf(context);
+      messenger?.showSnackBar(
+        const SnackBar(content: Text('Черновик сохранён автоматически')),
+      );
     } catch (_) {}
   }
 
@@ -429,6 +447,14 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
       setState(() => error = 'Выберите населённый пункт');
       return;
     }
+    final phoneRaw = phone.text.trim();
+    if (phoneRaw.isNotEmpty) {
+      final digits = phoneRaw.replaceAll(RegExp(r'\D'), '');
+      if (digits.length < 10) {
+        setState(() => error = 'Укажите корректный телефон');
+        return;
+      }
+    }
     setState(() {
       busy = true;
       error = null;
@@ -438,8 +464,10 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
       'description': descText,
       'category': category,
       'settlement_id': settlementId,
-      'price': price.text.trim().isEmpty ? null : double.tryParse(price.text.trim().replaceAll(',', '.')),
-      'contact_phone': phone.text.trim().isEmpty ? null : phone.text.trim(),
+      'price': category == 'free' || price.text.trim().isEmpty
+          ? null
+          : double.tryParse(price.text.trim().replaceAll(',', '.')),
+      'contact_phone': phoneRaw.isEmpty ? null : phoneRaw,
       'is_urgent': isUrgent,
     };
     try {

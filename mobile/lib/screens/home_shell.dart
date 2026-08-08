@@ -1156,7 +1156,18 @@ class _ProfileTab extends StatelessWidget {
         const SizedBox(height: 8),
         OutlinedButton(
           onPressed: () async {
-            await state.logout();
+            final ok = await showDialog<bool>(
+              context: context,
+              builder: (ctx) => AlertDialog(
+                title: const Text('Выйти из аккаунта?'),
+                content: const Text('Вы сможете войти снова в любой момент.'),
+                actions: [
+                  TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+                  FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Выйти')),
+                ],
+              ),
+            );
+            if (ok == true) await state.logout();
           },
           child: const Text('Выйти'),
         ),
