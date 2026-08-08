@@ -80,6 +80,7 @@ class User(Base):
     app_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
     device_info: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    fcm_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     settlement: Mapped["Settlement"] = relationship(back_populates="users")
     listings: Mapped[list["Listing"]] = relationship(back_populates="author")
@@ -104,6 +105,9 @@ class Listing(Base):
     status: Mapped[ListingStatus] = mapped_column(Enum(ListingStatus), default=ListingStatus.pending)
     moderation_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     is_urgent: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_pinned: Mapped[bool] = mapped_column(Boolean, default=False)
+    auto_flagged: Mapped[bool] = mapped_column(Boolean, default=False)
+    previous_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
     close_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
     close_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -239,3 +243,16 @@ class Notification(Base):
 
     user: Mapped["User"] = relationship()
     listing: Mapped["Listing | None"] = relationship()
+
+
+class BlacklistEntry(Base):
+    __tablename__ = "blacklist_entries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)  # phone | word
+    value: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    created_by: Mapped["User | None"] = relationship()

@@ -37,6 +37,15 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
   return res.json();
 }
 
+export async function apiText(path: string): Promise<string> {
+  const headers = new Headers();
+  const token = getToken();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  const res = await fetch(`${API_URL}${path}`, { headers });
+  if (!res.ok) throw new Error('Ошибка экспорта');
+  return res.text();
+}
+
 export type User = {
   id: number;
   email: string;
@@ -56,6 +65,15 @@ export type User = {
   last_seen_at?: string | null;
 };
 
+export type ListingSnapshot = {
+  title?: string | null;
+  description?: string | null;
+  category?: string | null;
+  price?: number | null;
+  contact_phone?: string | null;
+  is_urgent?: boolean | null;
+};
+
 export type Listing = {
   id: number;
   title: string;
@@ -71,8 +89,12 @@ export type Listing = {
   close_reason?: string | null;
   close_note?: string | null;
   is_urgent?: boolean;
+  is_pinned?: boolean;
+  auto_flagged?: boolean;
+  previous_snapshot?: ListingSnapshot | null;
   images?: { id: number; url: string; sort_order: number }[];
   created_at: string;
+  updated_at?: string;
 };
 
 export type ListingReport = {
@@ -127,4 +149,25 @@ export type Stats = {
   listings_approved: number;
   directory_items: number;
   settlements: number;
+  pending_over_24h?: number;
+  open_reports?: number;
+  moderated_approved_30d?: number;
+  moderated_rejected_30d?: number;
+  moderation_conversion?: number | null;
+  listings_per_day?: { day: string; count: number }[];
+  top_categories?: { category: string; count: number }[];
+};
+
+export type AdminAlerts = {
+  pending: number;
+  pending_over_24h: number;
+  open_reports: number;
+};
+
+export type BlacklistEntry = {
+  id: number;
+  kind: 'phone' | 'word' | string;
+  value: string;
+  note?: string | null;
+  created_at: string;
 };

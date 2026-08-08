@@ -15,6 +15,7 @@ class Settings(BaseSettings):
     admin_email: str = "admin@ryadom56.ru"
     admin_password: str = "admin123"
     admin_name: str = "Администратор"
+    fcm_server_key: str = ""
 
     class Config:
         env_file = ".env"

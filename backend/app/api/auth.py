@@ -36,6 +36,8 @@ def touch_user(user: User, request: Request, device: DeviceInfoIn | None = None)
             user.app_version = device.app_version.strip() or None
         if device.device_info is not None:
             user.device_info = device.device_info.strip() or None
+        if device.fcm_token is not None:
+            user.fcm_token = device.fcm_token.strip() or None
 
 
 @router.post("/register", response_model=TokenOut)

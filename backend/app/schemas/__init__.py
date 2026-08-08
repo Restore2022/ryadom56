@@ -139,6 +139,15 @@ class ListingImagesReorderIn(BaseModel):
     image_ids: list[int] = Field(min_length=1, max_length=5)
 
 
+class ListingSnapshot(BaseModel):
+    title: str | None = None
+    description: str | None = None
+    category: str | None = None
+    price: float | None = None
+    contact_phone: str | None = None
+    is_urgent: bool | None = None
+
+
 class ListingOut(BaseModel):
     id: int
     author_id: int
@@ -155,6 +164,9 @@ class ListingOut(BaseModel):
     close_reason: str | None = None
     close_note: str | None = None
     is_urgent: bool = False
+    is_pinned: bool = False
+    auto_flagged: bool = False
+    previous_snapshot: ListingSnapshot | None = None
     images: list[ListingImageOut] = []
     is_favorited: bool = False
     created_at: datetime
@@ -298,6 +310,17 @@ class DeviceInfoIn(BaseModel):
     device_os: str | None = Field(default=None, max_length=80)
     app_version: str | None = Field(default=None, max_length=40)
     device_info: str | None = Field(default=None, max_length=2000)
+    fcm_token: str | None = Field(default=None, max_length=255)
+
+
+class CategoryStat(BaseModel):
+    category: str
+    count: int
+
+
+class DayStat(BaseModel):
+    day: str
+    count: int
 
 
 class StatsOut(BaseModel):
@@ -306,6 +329,40 @@ class StatsOut(BaseModel):
     listings_approved: int
     directory_items: int
     settlements: int
+    pending_over_24h: int = 0
+    open_reports: int = 0
+    moderated_approved_30d: int = 0
+    moderated_rejected_30d: int = 0
+    moderation_conversion: float | None = None
+    listings_per_day: list[DayStat] = []
+    top_categories: list[CategoryStat] = []
+
+
+class AdminAlertsOut(BaseModel):
+    pending: int
+    pending_over_24h: int
+    open_reports: int
+
+
+class BlacklistCreate(BaseModel):
+    kind: str = Field(pattern="^(phone|word)$")
+    value: str = Field(min_length=1, max_length=200)
+    note: str | None = Field(default=None, max_length=255)
+
+
+class BlacklistOut(BaseModel):
+    id: int
+    kind: str
+    value: str
+    note: str | None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ListingPinIn(BaseModel):
+    pinned: bool = True
 
 
 class NotificationOut(BaseModel):

@@ -555,6 +555,7 @@ class AppState extends ChangeNotifier {
       'images': item['images'],
       'author_id': item['author_id'],
       'is_urgent': item['is_urgent'] == true,
+      'is_pinned': item['is_pinned'] == true,
     });
     if (viewHistory.length > 30) {
       viewHistory = viewHistory.take(30).toList();

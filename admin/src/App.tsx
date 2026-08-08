@@ -1,8 +1,114 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Navigate, NavLink, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom';
-import { api, mediaUrl, setToken } from './api';
-import type { AuditLog, DirectoryItem, Listing, ListingReport, Settlement, Stats, User } from './api';
+import { api, apiText, mediaUrl, setToken } from './api';
+import type {
+  AuditLog,
+  BlacklistEntry,
+  DirectoryItem,
+  Listing,
+  ListingReport,
+  Settlement,
+  Stats,
+  User,
+} from './api';
 import './App.css';
+
+const REJECTION_TEMPLATES = [
+  'Недостаточно информации в описании',
+  'Не подходит под правила раздела',
+  'Подозрение на спам или рекламу',
+  'Запрещённый или сомнительный товар/услуга',
+  'Некорректные контакты или вводящее в заблуждение',
+];
+
+function needsModeration(item: Listing) {
+  return item.status === 'pending';
+}
+
+function hoursWaiting(iso: string) {
+  const ms = Date.now() - new Date(iso).getTime();
+  return Math.max(0, Math.floor(ms / 3600000));
+}
+
+function canModerate(role: User['role']) {
+  return role === 'admin' || role === 'moderator';
+}
+
+function canEditDirectory(role: User['role']) {
+  return role === 'admin' || role === 'editor';
+}
+
+function PhotoGallery({ images }: { images: { id: number; url: string }[] }) {
+  const [index, setIndex] = useState<number | null>(null);
+  const urls = images.map((img) => mediaUrl(img.url)).filter(Boolean);
+
+  useEffect(() => {
+    if (index == null) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') setIndex(null);
+      if (e.key === 'ArrowRight') setIndex((i) => (i == null ? i : (i + 1) % urls.length));
+      if (e.key === 'ArrowLeft') setIndex((i) => (i == null ? i : (i - 1 + urls.length) % urls.length));
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [index, urls.length]);
+
+  if (!urls.length) return null;
+
+  return (
+    <>
+      <div className="photo-row">
+        {urls.map((url, i) => (
+          <button key={images[i]?.id ?? url} type="button" className="photo-thumb" onClick={() => setIndex(i)}>
+            <img src={url} alt="" />
+          </button>
+        ))}
+      </div>
+      {index != null && (
+        <div className="lightbox" onClick={() => setIndex(null)} role="dialog" aria-modal="true">
+          <button type="button" className="lightbox-close" onClick={() => setIndex(null)} aria-label="Закрыть">
+            ×
+          </button>
+          {urls.length > 1 && (
+            <button
+              type="button"
+              className="lightbox-nav prev"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIndex((i) => (i == null ? 0 : (i - 1 + urls.length) % urls.length));
+              }}
+              aria-label="Предыдущее"
+            >
+              ‹
+            </button>
+          )}
+          <img
+            className="lightbox-img"
+            src={urls[index]}
+            alt=""
+            onClick={(e) => e.stopPropagation()}
+          />
+          {urls.length > 1 && (
+            <button
+              type="button"
+              className="lightbox-nav next"
+              onClick={(e) => {
+                e.stopPropagation();
+                setIndex((i) => (i == null ? 0 : (i + 1) % urls.length));
+              }}
+              aria-label="Следующее"
+            >
+              ›
+            </button>
+          )}
+          <div className="lightbox-counter" onClick={(e) => e.stopPropagation()}>
+            {index + 1} / {urls.length}
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
 
 const CATEGORY_LABELS: Record<string, string> = {
   goods: 'Товары',
@@ -164,6 +270,42 @@ function Shell({
   onToggleTheme: () => void;
   children: React.ReactNode;
 }) {
+  const mod = canModerate(user.role);
+  const directory = canEditDirectory(user.role);
+
+  useEffect(() => {
+    if (!mod) return;
+    let lastPending = -1;
+    let stopped = false;
+
+    async function tick() {
+      try {
+        const alerts = await api<{ pending: number; pending_over_24h: number; open_reports: number }>('/admin/alerts');
+        if (stopped) return;
+        if (lastPending >= 0 && alerts.pending > lastPending && 'Notification' in window) {
+          if (Notification.permission === 'granted') {
+            new Notification('Рядом56: новые объявления', {
+              body: `На проверке: ${alerts.pending}` + (alerts.pending_over_24h ? ` · старше 24ч: ${alerts.pending_over_24h}` : ''),
+            });
+          }
+        }
+        lastPending = alerts.pending;
+      } catch {
+        /* ignore */
+      }
+    }
+
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission().catch(() => undefined);
+    }
+    tick();
+    const id = window.setInterval(tick, 45000);
+    return () => {
+      stopped = true;
+      window.clearInterval(id);
+    };
+  }, [mod]);
+
   return (
     <div className="layout">
       <aside className="sidebar">
@@ -175,18 +317,29 @@ function Shell({
           <NavLink to="/" end>
             <span className="nav-ico">◈</span> Сводка
           </NavLink>
-          <NavLink to="/moderation">
-            <span className="nav-ico">☰</span> Модерация
-          </NavLink>
-          <NavLink to="/reports">
-            <span className="nav-ico">!</span> Жалобы
-          </NavLink>
+          {mod && (
+            <NavLink to="/moderation">
+              <span className="nav-ico">☰</span> Модерация
+            </NavLink>
+          )}
+          {mod && (
+            <NavLink to="/reports">
+              <span className="nav-ico">!</span> Жалобы
+            </NavLink>
+          )}
           <NavLink to="/audit">
             <span className="nav-ico">≡</span> Лог действий
           </NavLink>
-          <NavLink to="/directory">
-            <span className="nav-ico">◎</span> Справочник
-          </NavLink>
+          {directory && (
+            <NavLink to="/directory">
+              <span className="nav-ico">◎</span> Справочник
+            </NavLink>
+          )}
+          {mod && (
+            <NavLink to="/blacklist">
+              <span className="nav-ico">⊘</span> Чёрный список
+            </NavLink>
+          )}
           {user.role === 'admin' && (
             <NavLink to="/users">
               <span className="nav-ico">☺</span> Пользователи
@@ -226,9 +379,12 @@ function Dashboard() {
     );
   }
 
+  const conv =
+    stats.moderation_conversion == null ? '—' : `${Math.round(stats.moderation_conversion * 100)}%`;
+
   return (
     <div>
-      <div className="page-head">
+      <div className="page-head compact">
         <div>
           <h1>Сводка</h1>
           <p>Состояние сервиса Рядом56 прямо сейчас</p>
@@ -238,6 +394,14 @@ function Dashboard() {
         <div className="stat warn">
           <div className="label">На модерации</div>
           <div className="value">{stats.listings_pending}</div>
+        </div>
+        <div className="stat warn">
+          <div className="label">Старше 24 ч</div>
+          <div className="value">{stats.pending_over_24h ?? 0}</div>
+        </div>
+        <div className="stat">
+          <div className="label">Открытые жалобы</div>
+          <div className="value">{stats.open_reports ?? 0}</div>
         </div>
         <div className="stat ok">
           <div className="label">Опубликовано</div>
@@ -252,8 +416,46 @@ function Dashboard() {
           <div className="value">{stats.users}</div>
         </div>
         <div className="stat">
-          <div className="label">Населённых пунктов</div>
-          <div className="value">{stats.settlements}</div>
+          <div className="label">Одобр. / откл. (30 дн.)</div>
+          <div className="value" style={{ fontSize: 22 }}>
+            {stats.moderated_approved_30d ?? 0} / {stats.moderated_rejected_30d ?? 0}
+          </div>
+        </div>
+        <div className="stat ok">
+          <div className="label">Конверсия модерации</div>
+          <div className="value" style={{ fontSize: 26 }}>
+            {conv}
+          </div>
+        </div>
+      </div>
+
+      <div className="analytics-grid">
+        <div className="panel">
+          <h2>Объявления за 7 дней</h2>
+          <div className="day-bars">
+            {(stats.listings_per_day || []).map((d) => {
+              const max = Math.max(1, ...(stats.listings_per_day || []).map((x) => x.count));
+              return (
+                <div key={d.day} className="day-bar">
+                  <div className="day-bar-fill" style={{ height: `${Math.max(8, (d.count / max) * 72)}px` }} />
+                  <span>{d.count}</span>
+                  <small>{d.day.slice(5)}</small>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        <div className="panel">
+          <h2>Топ категорий</h2>
+          <ul className="cat-list">
+            {(stats.top_categories || []).map((c) => (
+              <li key={c.category}>
+                <span>{CATEGORY_LABELS[c.category] || c.category}</span>
+                <strong>{c.count}</strong>
+              </li>
+            ))}
+            {!stats.top_categories?.length && <li className="muted">Пока нет данных</li>}
+          </ul>
         </div>
       </div>
     </div>
@@ -290,6 +492,7 @@ function ModerationPage() {
         params.set('status', filter);
       }
       if (serverQuery.trim()) params.set('q', serverQuery.trim());
+      if (filter === 'pending' || !filter) params.set('sort', 'sla');
       const qs = params.toString();
       setItems(await api<Listing[]>(`/listings/admin/all${qs ? `?${qs}` : ''}`));
       setChecked([]);
@@ -301,6 +504,26 @@ function ModerationPage() {
   useEffect(() => {
     load();
   }, [filter, closedOnly, serverQuery]);
+
+  async function togglePin(item: Listing) {
+    setBusyId(item.id);
+    try {
+      await api(`/listings/${item.id}/pin`, {
+        method: 'POST',
+        body: JSON.stringify({ pinned: !item.is_pinned }),
+      });
+      await load();
+      if (selected?.id === item.id) {
+        const next = await api<Listing[]>(`/listings/admin/all?status=approved`);
+        const found = next.find((x) => x.id === item.id);
+        if (found) setSelected(found);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusyId(null);
+    }
+  }
 
   useEffect(() => {
     if (!listingIdParam) return;
@@ -372,7 +595,8 @@ function ModerationPage() {
   }
 
   async function bulkModerate(status: 'approved' | 'rejected') {
-    if (!checked.length) return;
+    const ids = checked.filter((id) => items.some((x) => x.id === id && needsModeration(x)));
+    if (!ids.length) return;
     let moderation_note: string | null = null;
     if (status === 'rejected') {
       const note = window.prompt('Причина отклонения для автора');
@@ -387,7 +611,7 @@ function ModerationPage() {
     try {
       await api('/admin/listings/bulk-moderate', {
         method: 'POST',
-        body: JSON.stringify({ ids: checked, status, moderation_note }),
+        body: JSON.stringify({ ids, status, moderation_note }),
       });
       await load();
     } catch (err) {
@@ -406,16 +630,22 @@ function ModerationPage() {
     setModerationNote('');
   }
 
+  const pendingChecked = checked.filter((id) => items.find((x) => x.id === id && needsModeration(x)));
+  const over24 = items.filter((i) => needsModeration(i) && hoursWaiting(i.created_at) >= 24).length;
+
   return (
-    <div>
-      <div className="page-head">
+    <div className="moderation-page">
+      <div className="page-head compact">
         <div>
           <h1>Модерация</h1>
-          <p>Проверка, поиск по автору/телефону, массовые действия</p>
+          <p>
+            Очередь по SLA (дольше ждут сверху)
+            {over24 > 0 ? ` · старше 24 ч: ${over24}` : ''}
+          </p>
         </div>
       </div>
 
-      <div className="toolbar">
+      <div className="toolbar compact">
         <select
           value={closedOnly ? 'closed' : filter}
           onChange={(e) => {
@@ -458,9 +688,9 @@ function ModerationPage() {
         />
       </div>
 
-      {checked.length > 0 && (
-        <div className="toolbar">
-          <span className="muted">Выбрано: {checked.length}</span>
+      {pendingChecked.length > 0 && (
+        <div className="toolbar compact">
+          <span className="muted">Выбрано: {pendingChecked.length}</span>
           <button className="btn" type="button" disabled={bulkBusy} onClick={() => bulkModerate('approved')}>
             Одобрить выбранные
           </button>
@@ -472,17 +702,27 @@ function ModerationPage() {
 
       {error && <p className="error">{error}</p>}
 
-      <div className="list">
-        {visible.map((item) => (
-          <article key={item.id} className="row-card" onClick={() => openListing(item)}>
-            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-              <input
-                type="checkbox"
-                checked={checked.includes(item.id)}
-                onClick={(e) => e.stopPropagation()}
-                onChange={() => toggleCheck(item.id)}
-              />
-              <div>
+      <div className="list compact">
+        {visible.map((item) => {
+          const pending = needsModeration(item);
+          const waitH = hoursWaiting(item.created_at);
+          return (
+            <article
+              key={item.id}
+              className={`row-card compact${checked.includes(item.id) ? ' is-checked' : ''}`}
+              onClick={() => openListing(item)}
+            >
+              {pending && (
+                <input
+                  className="row-check"
+                  type="checkbox"
+                  checked={checked.includes(item.id)}
+                  onClick={(e) => e.stopPropagation()}
+                  onChange={() => toggleCheck(item.id)}
+                  aria-label={`Выбрать ${item.title}`}
+                />
+              )}
+              <div className="row-main">
                 <h3 className="row-title">{item.title}</h3>
                 <div className="meta">
                   <span className={STATUS_CHIP[item.status] || 'chip'}>{STATUS_LABEL[item.status] || item.status}</span>
@@ -490,56 +730,125 @@ function ModerationPage() {
                   <span className="chip neutral">{item.settlement_name}</span>
                   <span className="chip neutral">{item.author_name}</span>
                   {item.contact_phone && <span className="chip neutral">{item.contact_phone}</span>}
+                  {item.auto_flagged && <span className="chip danger">Автофлаг</span>}
+                  {item.is_pinned && <span className="chip warn">Закреплено</span>}
+                  {item.previous_snapshot && <span className="chip neutral">Правка</span>}
+                  {pending && waitH >= 24 && <span className="chip danger">{waitH} ч</span>}
+                  {pending && waitH < 24 && waitH > 0 && <span className="chip neutral">{waitH} ч</span>}
                   {item.close_reason && (
                     <span className="chip warn">{CLOSE_REASON_LABEL[item.close_reason] || item.close_reason}</span>
                   )}
                 </div>
                 <p className="row-body">
-                  {item.description.length > 160 ? `${item.description.slice(0, 160)}…` : item.description}
+                  {item.description.length > 110 ? `${item.description.slice(0, 110)}…` : item.description}
                 </p>
                 {item.price != null && <div className="price">{item.price.toLocaleString('ru-RU')} ₽</div>}
               </div>
-            </div>
-            <div className="actions" onClick={(e) => e.stopPropagation()}>
-              <button className="btn" disabled={busyId === item.id} onClick={() => moderate(item.id, 'approved')}>
-                Одобрить
-              </button>
-              <button className="btn danger" disabled={busyId === item.id} onClick={() => openListing(item)}>
-                Отклонить
-              </button>
-              <button className="btn ghost" onClick={() => openListing(item)}>
-                Открыть
-              </button>
-            </div>
-          </article>
-        ))}
+              <div className="actions inline" onClick={(e) => e.stopPropagation()}>
+                {pending && (
+                  <>
+                    <button className="btn" disabled={busyId === item.id} onClick={() => moderate(item.id, 'approved')}>
+                      Одобрить
+                    </button>
+                    <button className="btn danger" disabled={busyId === item.id} onClick={() => openListing(item)}>
+                      Отклонить
+                    </button>
+                  </>
+                )}
+                {item.status === 'approved' && (
+                  <button className="btn secondary" disabled={busyId === item.id} onClick={() => togglePin(item)}>
+                    {item.is_pinned ? 'Открепить' : 'Закрепить'}
+                  </button>
+                )}
+                <button className="btn ghost" onClick={() => openListing(item)}>
+                  Открыть
+                </button>
+              </div>
+            </article>
+          );
+        })}
         {!visible.length && <div className="empty">Пока нет объявлений в этом фильтре</div>}
       </div>
 
       {selected && (
         <div className="modal-backdrop" onClick={closeModal}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
+          <div className="modal modal-compact" onClick={(e) => e.stopPropagation()}>
             <div className="meta">
               <span className={STATUS_CHIP[selected.status] || 'chip'}>{STATUS_LABEL[selected.status]}</span>
               <span className="chip">{CATEGORY_LABELS[selected.category]}</span>
               <span className="chip neutral">{selected.settlement_name}</span>
+              {selected.auto_flagged && <span className="chip danger">Автофлаг</span>}
+              {selected.is_pinned && <span className="chip warn">Закреплено</span>}
+              {selected.close_reason && (
+                <span className="chip warn">{CLOSE_REASON_LABEL[selected.close_reason] || selected.close_reason}</span>
+              )}
             </div>
             <h2>{selected.title}</h2>
             {selected.price != null && <div className="price">{selected.price.toLocaleString('ru-RU')} ₽</div>}
-            {!!selected.images?.length && (
-              <div className="photo-row">
-                {selected.images.map((img) => (
-                  <a key={img.id} href={mediaUrl(img.url)} target="_blank" rel="noreferrer">
-                    <img src={mediaUrl(img.url)} alt="" />
-                  </a>
-                ))}
-              </div>
-            )}
-            <p className="row-body" style={{ marginTop: 14, whiteSpace: 'pre-wrap' }}>
+            {!!selected.images?.length && <PhotoGallery images={selected.images} />}
+            <p className="row-body" style={{ marginTop: 10, whiteSpace: 'pre-wrap' }}>
               {selected.description}
             </p>
-            <p className="muted" style={{ marginTop: 14 }}>
-              Автор: {selected.author_name || '—'} · Тел: {selected.contact_phone || '—'}
+            {selected.previous_snapshot && (
+              <div className="diff-box">
+                <h3>Было → стало</h3>
+                {(
+                  [
+                    ['title', 'Заголовок'],
+                    ['description', 'Описание'],
+                    ['category', 'Категория'],
+                    ['price', 'Цена'],
+                    ['contact_phone', 'Телефон'],
+                    ['is_urgent', 'Срочно'],
+                  ] as const
+                ).map(([key, label]) => {
+                  const before = selected.previous_snapshot?.[key];
+                  const after =
+                    key === 'category'
+                      ? selected.category
+                      : key === 'is_urgent'
+                        ? selected.is_urgent
+                        : key === 'price'
+                          ? selected.price
+                          : key === 'contact_phone'
+                            ? selected.contact_phone
+                            : key === 'title'
+                              ? selected.title
+                              : selected.description;
+                  const beforeText =
+                    before == null || before === ''
+                      ? '—'
+                      : key === 'category'
+                        ? CATEGORY_LABELS[String(before)] || String(before)
+                        : key === 'is_urgent'
+                          ? before
+                            ? 'да'
+                            : 'нет'
+                          : String(before);
+                  const afterText =
+                    after == null || after === ''
+                      ? '—'
+                      : key === 'category'
+                        ? CATEGORY_LABELS[String(after)] || String(after)
+                        : key === 'is_urgent'
+                          ? after
+                            ? 'да'
+                            : 'нет'
+                          : String(after);
+                  if (beforeText === afterText) return null;
+                  return (
+                    <div key={key} className="diff-row">
+                      <strong>{label}</strong>
+                      <div className="diff-old">{beforeText}</div>
+                      <div className="diff-new">{afterText}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+            <p className="muted" style={{ marginTop: 10 }}>
+              Автор: {selected.author_name || '—'} · Тел: {selected.contact_phone || '—'} · ждёт{' '}
+              {hoursWaiting(selected.created_at)} ч
             </p>
             {selected.close_reason && (
               <p className="muted">
@@ -548,29 +857,44 @@ function ModerationPage() {
               </p>
             )}
             {selected.moderation_note && <p className="muted">Заметка: {selected.moderation_note}</p>}
-            <label className="field" style={{ display: 'block', marginTop: 14 }}>
-              Причина отклонения (для автора)
-              <textarea
-                value={moderationNote}
-                onChange={(e) => setModerationNote(e.target.value)}
-                placeholder="Укажите причину, если отклоняете"
-                rows={3}
-              />
-              <span className="muted" style={{ display: 'block', marginTop: 6, fontSize: 13 }}>
-                Обязательно при отклонении
-              </span>
-            </label>
+            {needsModeration(selected) && (
+              <label className="field" style={{ display: 'block', marginTop: 12 }}>
+                Причина отклонения (для автора)
+                <div className="template-row">
+                  {REJECTION_TEMPLATES.map((t) => (
+                    <button key={t} type="button" className="btn ghost" onClick={() => setModerationNote(t)}>
+                      {t}
+                    </button>
+                  ))}
+                </div>
+                <textarea
+                  value={moderationNote}
+                  onChange={(e) => setModerationNote(e.target.value)}
+                  placeholder="Шаблон или свой текст"
+                  rows={2}
+                />
+              </label>
+            )}
             <div className="modal-actions">
-              <button className="btn" disabled={busyId === selected.id} onClick={() => moderate(selected.id, 'approved')}>
-                Одобрить
-              </button>
-              <button
-                className="btn danger"
-                disabled={busyId === selected.id || !moderationNote.trim()}
-                onClick={() => moderate(selected.id, 'rejected')}
-              >
-                Отклонить
-              </button>
+              {needsModeration(selected) && (
+                <>
+                  <button className="btn" disabled={busyId === selected.id} onClick={() => moderate(selected.id, 'approved')}>
+                    Одобрить
+                  </button>
+                  <button
+                    className="btn danger"
+                    disabled={busyId === selected.id || !moderationNote.trim()}
+                    onClick={() => moderate(selected.id, 'rejected')}
+                  >
+                    Отклонить
+                  </button>
+                </>
+              )}
+              {selected.status === 'approved' && (
+                <button className="btn secondary" disabled={busyId === selected.id} onClick={() => togglePin(selected)}>
+                  {selected.is_pinned ? 'Открепить' : 'Закрепить в ленте'}
+                </button>
+              )}
               <button className="btn secondary" onClick={closeModal}>
                 Закрыть
               </button>
@@ -634,7 +958,7 @@ function ReportsPage() {
       <div className="list">
         {items.map((r) => (
           <article key={r.id} className="row-card">
-            <div>
+            <div className="row-main">
               <h3
                 className="row-title"
                 style={{ cursor: 'pointer' }}
@@ -714,7 +1038,7 @@ function AuditPage() {
       <div className="list">
         {items.map((row) => (
           <article key={row.id} className="row-card">
-            <div>
+            <div className="row-main">
               <h3 className="row-title">{row.action}</h3>
               <div className="meta">
                 <span className="chip">{row.actor_name || `user #${row.actor_id}`}</span>
@@ -783,6 +1107,7 @@ function DirectoryPage() {
   const [settlements, setSettlements] = useState<Settlement[]>([]);
   const [form, setForm] = useState<DirectoryForm>(EMPTY_DIR);
   const [editingId, setEditingId] = useState<number | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
@@ -796,6 +1121,13 @@ function DirectoryPage() {
   useEffect(() => {
     load().catch((err) => setError(err.message));
   }, []);
+
+  function openCreate() {
+    setEditingId(null);
+    setForm(EMPTY_DIR);
+    setError('');
+    setModalOpen(true);
+  }
 
   function startEdit(item: DirectoryItem) {
     setEditingId(item.id);
@@ -813,10 +1145,11 @@ function DirectoryPage() {
       is_published: item.is_published,
     });
     setError('');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setModalOpen(true);
   }
 
-  function cancelEdit() {
+  function closeModal() {
+    setModalOpen(false);
     setEditingId(null);
     setForm(EMPTY_DIR);
     setError('');
@@ -838,7 +1171,7 @@ function DirectoryPage() {
           body: JSON.stringify(directoryPayload(form)),
         });
       }
-      cancelEdit();
+      closeModal();
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка');
@@ -850,7 +1183,7 @@ function DirectoryPage() {
   async function remove(id: number) {
     if (!confirm('Удалить запись из справочника?')) return;
     await api(`/directory/${id}`, { method: 'DELETE' });
-    if (editingId === id) cancelEdit();
+    if (editingId === id) closeModal();
     await load();
   }
 
@@ -861,96 +1194,10 @@ function DirectoryPage() {
           <h1>Справочник</h1>
           <p>Школы, больницы, магазины и другие точки района</p>
         </div>
+        <button className="btn" type="button" onClick={openCreate}>
+          Добавить запись
+        </button>
       </div>
-
-      <form className="panel" onSubmit={saveItem}>
-        <h2>{editingId ? 'Редактировать запись' : 'Добавить запись'}</h2>
-        <div className="grid2">
-          <label className="field">
-            Название
-            <input required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-          </label>
-          <label className="field">
-            Категория
-            <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-              {['school', 'hospital', 'shop', 'pharmacy', 'admin', 'bank', 'post', 'transport', 'culture', 'sport', 'other'].map(
-                (c) => (
-                  <option key={c} value={c}>
-                    {CATEGORY_LABELS[c]}
-                  </option>
-                ),
-              )}
-            </select>
-          </label>
-          <label className="field">
-            Населённый пункт
-            <select
-              value={form.settlement_id}
-              onChange={(e) => setForm({ ...form, settlement_id: e.target.value ? Number(e.target.value) : '' })}
-            >
-              <option value="">— не указан —</option>
-              {settlements.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.display_name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            Телефон
-            <input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
-          </label>
-          <label className="field full">
-            Адрес
-            <input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
-          </label>
-          <label className="field">
-            Сайт
-            <input value={form.website} onChange={(e) => setForm({ ...form, website: e.target.value })} />
-          </label>
-          <label className="field">
-            Часы работы
-            <input
-              value={form.hours}
-              onChange={(e) => setForm({ ...form, hours: e.target.value })}
-              placeholder="пн–пт 9:00–18:00"
-            />
-          </label>
-          <label className="field">
-            Опубликовано
-            <select
-              value={form.is_published ? '1' : '0'}
-              onChange={(e) => setForm({ ...form, is_published: e.target.value === '1' })}
-            >
-              <option value="1">Да</option>
-              <option value="0">Нет (скрыто)</option>
-            </select>
-          </label>
-          <label className="field">
-            Широта
-            <input value={form.lat} onChange={(e) => setForm({ ...form, lat: e.target.value })} placeholder="51.98" />
-          </label>
-          <label className="field">
-            Долгота
-            <input value={form.lon} onChange={(e) => setForm({ ...form, lon: e.target.value })} placeholder="55.33" />
-          </label>
-          <label className="field full">
-            Описание
-            <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-          </label>
-        </div>
-        {error && <p className="error">{error}</p>}
-        <div className="actions" style={{ marginTop: 12 }}>
-          <button className="btn" type="submit" disabled={busy}>
-            {busy ? 'Сохранение…' : editingId ? 'Сохранить изменения' : 'Добавить'}
-          </button>
-          {editingId && (
-            <button className="btn secondary" type="button" onClick={cancelEdit}>
-              Отмена
-            </button>
-          )}
-        </div>
-      </form>
 
       <div className="toolbar">
         <input placeholder="Поиск по справочнику…" value={query} onChange={(e) => setQuery(e.target.value)} />
@@ -981,7 +1228,7 @@ function DirectoryPage() {
           })
           .map((item) => (
             <article key={item.id} className="row-card">
-              <div>
+              <div className="row-main">
                 <h3 className="row-title">{item.title}</h3>
                 <div className="meta">
                   <span className="chip">{CATEGORY_LABELS[item.category] || item.category}</span>
@@ -1010,7 +1257,184 @@ function DirectoryPage() {
               </div>
             </article>
           ))}
-        {!items.length && <div className="empty">Справочник пуст — добавьте первую запись выше</div>}
+        {!items.length && <div className="empty">Справочник пуст — нажмите «Добавить запись»</div>}
+      </div>
+
+      {modalOpen && (
+        <div className="modal-backdrop" onClick={closeModal}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 'min(720px, 100%)' }}>
+            <h2>{editingId ? 'Редактировать запись' : 'Добавить запись'}</h2>
+            <form onSubmit={saveItem}>
+              <div className="grid2">
+                <label className="field">
+                  Название
+                  <input required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+                </label>
+                <label className="field">
+                  Категория
+                  <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+                    {['school', 'hospital', 'shop', 'pharmacy', 'admin', 'bank', 'post', 'transport', 'culture', 'sport', 'other'].map(
+                      (c) => (
+                        <option key={c} value={c}>
+                          {CATEGORY_LABELS[c]}
+                        </option>
+                      ),
+                    )}
+                  </select>
+                </label>
+                <label className="field">
+                  Населённый пункт
+                  <select
+                    value={form.settlement_id}
+                    onChange={(e) => setForm({ ...form, settlement_id: e.target.value ? Number(e.target.value) : '' })}
+                  >
+                    <option value="">— не указан —</option>
+                    {settlements.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.display_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  Телефон
+                  <input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+                </label>
+                <label className="field full">
+                  Адрес
+                  <input value={form.address} onChange={(e) => setForm({ ...form, address: e.target.value })} />
+                </label>
+                <label className="field">
+                  Сайт
+                  <input value={form.website} onChange={(e) => setForm({ ...form, website: e.target.value })} />
+                </label>
+                <label className="field">
+                  Часы работы
+                  <input
+                    value={form.hours}
+                    onChange={(e) => setForm({ ...form, hours: e.target.value })}
+                    placeholder="пн–пт 9:00–18:00"
+                  />
+                </label>
+                <label className="field">
+                  Опубликовано
+                  <select
+                    value={form.is_published ? '1' : '0'}
+                    onChange={(e) => setForm({ ...form, is_published: e.target.value === '1' })}
+                  >
+                    <option value="1">Да</option>
+                    <option value="0">Нет (скрыто)</option>
+                  </select>
+                </label>
+                <label className="field">
+                  Широта
+                  <input value={form.lat} onChange={(e) => setForm({ ...form, lat: e.target.value })} placeholder="51.98" />
+                </label>
+                <label className="field">
+                  Долгота
+                  <input value={form.lon} onChange={(e) => setForm({ ...form, lon: e.target.value })} placeholder="55.33" />
+                </label>
+                <label className="field full">
+                  Описание
+                  <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+                </label>
+              </div>
+              {error && <p className="error">{error}</p>}
+              <div className="modal-actions">
+                <button className="btn" type="submit" disabled={busy}>
+                  {busy ? 'Сохранение…' : editingId ? 'Сохранить' : 'Добавить'}
+                </button>
+                <button className="btn secondary" type="button" onClick={closeModal}>
+                  Отмена
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BlacklistPage() {
+  const [items, setItems] = useState<BlacklistEntry[]>([]);
+  const [kind, setKind] = useState<'phone' | 'word'>('word');
+  const [value, setValue] = useState('');
+  const [note, setNote] = useState('');
+  const [error, setError] = useState('');
+
+  async function load() {
+    setItems(await api<BlacklistEntry[]>('/admin/blacklist'));
+  }
+
+  useEffect(() => {
+    load().catch(console.error);
+  }, []);
+
+  async function add(e: React.FormEvent) {
+    e.preventDefault();
+    setError('');
+    try {
+      await api('/admin/blacklist', {
+        method: 'POST',
+        body: JSON.stringify({ kind, value: value.trim(), note: note.trim() || null }),
+      });
+      setValue('');
+      setNote('');
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    }
+  }
+
+  async function remove(id: number) {
+    await api(`/admin/blacklist/${id}`, { method: 'DELETE' });
+    await load();
+  }
+
+  return (
+    <div>
+      <div className="page-head compact">
+        <div>
+          <h1>Чёрный список</h1>
+          <p>Телефоны и слова — автофлаг на модерацию</p>
+        </div>
+      </div>
+      <form className="toolbar compact" onSubmit={add}>
+        <select value={kind} onChange={(e) => setKind(e.target.value as 'phone' | 'word')}>
+          <option value="word">Слово</option>
+          <option value="phone">Телефон</option>
+        </select>
+        <input
+          required
+          placeholder={kind === 'phone' ? '+7900…' : 'запрещённое слово'}
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+        />
+        <input placeholder="Заметка" value={note} onChange={(e) => setNote(e.target.value)} />
+        <button className="btn" type="submit">
+          Добавить
+        </button>
+      </form>
+      {error && <p className="error">{error}</p>}
+      <div className="list compact">
+        {items.map((row) => (
+          <article key={row.id} className="row-card compact">
+            <div className="row-main">
+              <h3 className="row-title">{row.value}</h3>
+              <div className="meta">
+                <span className="chip">{row.kind === 'phone' ? 'Телефон' : 'Слово'}</span>
+                {row.note && <span className="chip neutral">{row.note}</span>}
+              </div>
+            </div>
+            <div className="actions inline">
+              <button className="btn danger" type="button" onClick={() => remove(row.id)}>
+                Удалить
+              </button>
+            </div>
+          </article>
+        ))}
+        {!items.length && <div className="empty">Список пуст</div>}
       </div>
     </div>
   );
@@ -1031,16 +1455,39 @@ function UsersPage() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
+  const [suspicious, setSuspicious] = useState(false);
 
   async function load() {
-    const [u, s] = await Promise.all([api<User[]>('/admin/users'), api<Settlement[]>('/settlements')]);
+    const params = new URLSearchParams();
+    if (query.trim()) params.set('q', query.trim());
+    if (suspicious) params.set('suspicious', '1');
+    const qs = params.toString();
+    const [u, s] = await Promise.all([
+      api<User[]>(`/admin/users${qs ? `?${qs}` : ''}`),
+      api<Settlement[]>('/settlements'),
+    ]);
     setUsers(u);
     setSettlements(s);
   }
 
   useEffect(() => {
     load().catch(console.error);
-  }, []);
+  }, [suspicious]);
+
+  async function exportCsv() {
+    const params = new URLSearchParams();
+    if (query.trim()) params.set('q', query.trim());
+    if (suspicious) params.set('suspicious', '1');
+    const qs = params.toString();
+    const text = await apiText(`/admin/users/export${qs ? `?${qs}` : ''}`);
+    const blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = suspicious ? 'users-suspicious.csv' : 'users.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  }
 
   function openEdit(u: User) {
     setSelected(u);
@@ -1081,43 +1528,45 @@ function UsersPage() {
     }
   }
 
-  const visible = users.filter((u) => {
-    if (!query.trim()) return true;
-    const q = query.trim().toLowerCase();
-    return (
-      u.full_name.toLowerCase().includes(q) ||
-      u.email.toLowerCase().includes(q) ||
-      (u.phone || '').toLowerCase().includes(q) ||
-      (u.last_ip || '').toLowerCase().includes(q) ||
-      (u.device_brand || '').toLowerCase().includes(q) ||
-      (u.device_model || '').toLowerCase().includes(q)
-    );
-  });
-
   return (
     <div>
-      <div className="page-head">
+      <div className="page-head compact">
         <div>
           <h1>Пользователи</h1>
-          <p>Редактирование профиля, роли, устройство и IP</p>
+          <p>Роли, устройство, IP · подозрительные = один IP у нескольких аккаунтов</p>
         </div>
-        <button className="btn secondary" type="button" onClick={() => load().catch(console.error)}>
-          Обновить список
-        </button>
+        <div className="toolbar compact" style={{ margin: 0 }}>
+          <button className="btn secondary" type="button" onClick={() => load().catch(console.error)}>
+            Обновить
+          </button>
+          <button className="btn secondary" type="button" onClick={() => exportCsv().catch(console.error)}>
+            Экспорт CSV
+          </button>
+        </div>
       </div>
 
-      <div className="toolbar">
+      <div className="toolbar compact">
         <input
           placeholder="Поиск: имя, email, телефон, IP, устройство…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') load().catch(console.error);
+          }}
         />
+        <button className="btn" type="button" onClick={() => load().catch(console.error)}>
+          Найти
+        </button>
+        <label className="check-inline">
+          <input type="checkbox" checked={suspicious} onChange={(e) => setSuspicious(e.target.checked)} />
+          Только подозрительные
+        </label>
       </div>
 
-      <div className="list">
-        {visible.map((u) => (
-          <article key={u.id} className="row-card user-row" onClick={() => openEdit(u)}>
-            <div>
+      <div className="list compact">
+        {users.map((u) => (
+          <article key={u.id} className="row-card user-row compact" onClick={() => openEdit(u)}>
+            <div className="row-main">
               <h3 className="row-title">{u.full_name}</h3>
               <div className="meta">
                 <span className="chip neutral">{u.email}</span>
@@ -1154,7 +1603,7 @@ function UsersPage() {
             </div>
           </article>
         ))}
-        {!visible.length && <div className="empty">Пользователи не найдены</div>}
+        {!users.length && <div className="empty">Пользователи не найдены</div>}
       </div>
 
       {selected && (
@@ -1309,12 +1758,21 @@ export default function App() {
     >
       <Routes>
         <Route path="/" element={<Dashboard />} />
-        <Route path="/moderation" element={<ModerationPage />} />
-        <Route path="/reports" element={<ReportsPage />} />
+        {canModerate(user!.role) && <Route path="/moderation" element={<ModerationPage />} />}
+        {canModerate(user!.role) && <Route path="/reports" element={<ReportsPage />} />}
         <Route path="/audit" element={<AuditPage />} />
-        <Route path="/directory" element={<DirectoryPage />} />
+        {canEditDirectory(user!.role) && <Route path="/directory" element={<DirectoryPage />} />}
+        {canModerate(user!.role) && <Route path="/blacklist" element={<BlacklistPage />} />}
         {user!.role === 'admin' && <Route path="/users" element={<UsersPage />} />}
-        <Route path="*" element={<Navigate to="/" replace />} />
+        <Route
+          path="*"
+          element={
+            <Navigate
+              to={user!.role === 'editor' ? '/directory' : user!.role === 'moderator' ? '/moderation' : '/'}
+              replace
+            />
+          }
+        />
       </Routes>
     </Shell>
   );

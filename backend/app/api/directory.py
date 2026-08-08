@@ -64,7 +64,7 @@ def list_directory(
     user: User | None = Depends(get_optional_user),
 ):
     stmt = select(DirectoryItem).options(selectinload(DirectoryItem.settlement))
-    is_staff = user and user.role in (UserRole.admin, UserRole.editor, UserRole.moderator)
+    is_staff = user and user.role in (UserRole.admin, UserRole.editor)
     if not is_staff:
         stmt = stmt.where(DirectoryItem.is_published.is_(True))
     if category:

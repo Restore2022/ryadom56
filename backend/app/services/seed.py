@@ -17,12 +17,16 @@ USER_COLUMNS = {
     "app_version": "VARCHAR(40)",
     "device_info": "TEXT",
     "last_seen_at": "DATETIME",
+    "fcm_token": "VARCHAR(255)",
 }
 
 LISTING_COLUMNS = {
     "close_reason": "VARCHAR(40)",
     "close_note": "TEXT",
     "is_urgent": "BOOLEAN DEFAULT 0",
+    "is_pinned": "BOOLEAN DEFAULT 0",
+    "auto_flagged": "BOOLEAN DEFAULT 0",
+    "previous_snapshot": "TEXT",
 }
 
 REPORT_COLUMNS = {

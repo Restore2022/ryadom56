@@ -107,6 +107,46 @@ class HomeShell extends StatefulWidget {
 
 class _HomeShellState extends State<HomeShell> {
   int index = 0;
+  int _lastUnread = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final state = context.read<AppState>();
+      _lastUnread = state.unreadNotifications;
+      _pollNotifications();
+    });
+  }
+
+  Future<void> _pollNotifications() async {
+    while (mounted) {
+      await Future<void>.delayed(const Duration(seconds: 40));
+      if (!mounted) return;
+      final state = context.read<AppState>();
+      if (state.user == null) continue;
+      final before = state.unreadNotifications;
+      await state.refreshUnreadNotifications();
+      final after = state.unreadNotifications;
+      if (!mounted) return;
+      if (after > before && after > _lastUnread) {
+        _lastUnread = after;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Новое уведомление · непрочитанных: $after'),
+            action: SnackBarAction(
+              label: 'Открыть',
+              onPressed: () {
+                Navigator.push(context, fastRoute(const NotificationsScreen()));
+              },
+            ),
+          ),
+        );
+      } else {
+        _lastUnread = after;
+      }
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -456,12 +496,16 @@ class _ListingCard extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(18),
             border: Border.all(
-              color: item['is_urgent'] == true
-                  ? scheme.error.withValues(alpha: 0.55)
-                  : item['category'] == 'free'
-                      ? scheme.tertiary.withValues(alpha: 0.55)
-                      : scheme.outlineVariant.withValues(alpha: 0.45),
-              width: (item['is_urgent'] == true || item['category'] == 'free') ? 1.6 : 1,
+              color: item['is_pinned'] == true
+                  ? scheme.primary
+                  : item['is_urgent'] == true
+                      ? scheme.error.withValues(alpha: 0.55)
+                      : item['category'] == 'free'
+                          ? scheme.tertiary.withValues(alpha: 0.55)
+                          : scheme.outlineVariant.withValues(alpha: 0.45),
+              width: (item['is_pinned'] == true || item['is_urgent'] == true || item['category'] == 'free')
+                  ? 1.6
+                  : 1,
             ),
           ),
           child: Row(
@@ -503,6 +547,15 @@ class _ListingCard extends StatelessWidget {
                           categoryLabels[item['category']] ?? '${item['category']}',
                           style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700, fontSize: 12),
                         ),
+                        if (item['is_pinned'] == true)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: scheme.primary.withValues(alpha: 0.16),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text('Важно', style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w800, fontSize: 11)),
+                          ),
                         if (item['is_urgent'] == true)
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),

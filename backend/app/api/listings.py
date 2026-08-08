@@ -1,6 +1,6 @@
 from pathlib import Path
+import json
 import uuid
-
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy import exists, func, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -25,10 +25,13 @@ from app.schemas import (
     ListingModerationIn,
     ListingOut,
     ListingPageOut,
+    ListingPinIn,
     ListingReportIn,
+    ListingSnapshot,
     ListingUpdate,
 )
 from app.services.audit import log_action
+from app.services.blacklist import match_blacklist
 from app.services.notify import notify_user
 
 router = APIRouter(prefix="/listings", tags=["listings"])
@@ -75,6 +78,48 @@ def ensure_active_slot(db: Session, user_id: int, exclude_id: int | None = None)
         )
 
 
+def snapshot_listing(item: Listing) -> str:
+    return json.dumps(
+        {
+            "title": item.title,
+            "description": item.description,
+            "category": item.category.value if hasattr(item.category, "value") else str(item.category),
+            "price": item.price,
+            "contact_phone": item.contact_phone,
+            "is_urgent": bool(getattr(item, "is_urgent", False)),
+        },
+        ensure_ascii=False,
+    )
+
+
+def parse_snapshot(raw: str | None) -> ListingSnapshot | None:
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+        return ListingSnapshot(**data)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+def apply_blacklist_flag(db: Session, item: Listing) -> list[str]:
+    hits = match_blacklist(
+        db,
+        title=item.title or "",
+        description=item.description or "",
+        phone=item.contact_phone or (item.author.phone if item.author else None),
+    )
+    item.auto_flagged = bool(hits)
+    if hits:
+        note = "Автофлаг: " + "; ".join(hits)
+        if item.moderation_note:
+            if "Автофлаг:" not in item.moderation_note:
+                item.moderation_note = f"{note} | {item.moderation_note}"
+        else:
+            item.moderation_note = note
+    return hits
+
+
 def to_out(item: Listing, favorited_ids: set[int] | None = None) -> ListingOut:
     images = [
         ListingImageOut(id=img.id, url=image_url(img.path), sort_order=img.sort_order)
@@ -96,6 +141,9 @@ def to_out(item: Listing, favorited_ids: set[int] | None = None) -> ListingOut:
         close_reason=item.close_reason,
         close_note=item.close_note,
         is_urgent=bool(getattr(item, "is_urgent", False)),
+        is_pinned=bool(getattr(item, "is_pinned", False)),
+        auto_flagged=bool(getattr(item, "auto_flagged", False)),
+        previous_snapshot=parse_snapshot(getattr(item, "previous_snapshot", None)),
         images=images,
         is_favorited=bool(favorited_ids and item.id in favorited_ids),
         created_at=item.created_at,
@@ -127,6 +175,7 @@ def admin_list_listings(
     status_filter: ListingStatus | None = Query(default=None, alias="status"),
     q: str | None = None,
     closed_by_user: bool = False,
+    sort: str = Query(default="newest", pattern="^(newest|sla)$"),
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(UserRole.moderator, UserRole.admin)),
 ):
@@ -151,7 +200,10 @@ def admin_list_listings(
                 Listing.contact_phone.ilike(like),
             )
         )
-    stmt = stmt.order_by(Listing.created_at.desc())
+    if sort == "sla" or status_filter == ListingStatus.pending:
+        stmt = stmt.order_by(Listing.auto_flagged.desc(), Listing.created_at.asc())
+    else:
+        stmt = stmt.order_by(Listing.created_at.desc())
     return [to_out(r) for r in db.execute(stmt).scalars().unique().all()]
 
 
@@ -214,13 +266,13 @@ def list_listings(
     elif has_photos is False:
         stmt = stmt.where(~exists().where(ListingImage.listing_id == Listing.id))
     if sort == "oldest":
-        stmt = stmt.order_by(Listing.created_at.asc())
+        stmt = stmt.order_by(Listing.is_pinned.desc(), Listing.created_at.asc())
     elif sort == "price_asc":
-        stmt = stmt.order_by(Listing.price.asc(), Listing.created_at.desc())
+        stmt = stmt.order_by(Listing.is_pinned.desc(), Listing.price.asc(), Listing.created_at.desc())
     elif sort == "price_desc":
-        stmt = stmt.order_by(Listing.price.desc(), Listing.created_at.desc())
+        stmt = stmt.order_by(Listing.is_pinned.desc(), Listing.price.desc(), Listing.created_at.desc())
     else:
-        stmt = stmt.order_by(Listing.created_at.desc())
+        stmt = stmt.order_by(Listing.is_pinned.desc(), Listing.created_at.desc())
 
     count_stmt = select(func.count()).select_from(Listing)
     if mine:
@@ -285,6 +337,9 @@ def create_listing(
         status=ListingStatus.draft if as_draft else ListingStatus.pending,
     )
     db.add(item)
+    db.flush()
+    if not as_draft:
+        apply_blacklist_flag(db, item)
     db.commit()
     item = load_listing(db, item.id)
     return to_out(item, favorite_ids_for(db, user))
@@ -304,6 +359,9 @@ def update_listing(
         raise HTTPException(status_code=403, detail="Нет доступа")
     data = payload.model_dump(exclude_unset=True)
     as_draft = data.pop("as_draft", None)
+    was_approved = item.status == ListingStatus.approved
+    if was_approved and item.author_id == user.id and as_draft is not True:
+        item.previous_snapshot = snapshot_listing(item)
     for key, value in data.items():
         setattr(item, key, value)
     if item.author_id == user.id:
@@ -317,6 +375,7 @@ def update_listing(
         item.close_note = None
         if as_draft is not True:
             item.moderation_note = None
+            apply_blacklist_flag(db, item)
     db.commit()
     item = load_listing(db, listing_id)
     return to_out(item, favorite_ids_for(db, user))
@@ -360,6 +419,7 @@ def republish_listing(
     item.close_reason = None
     item.close_note = None
     item.moderation_note = None
+    apply_blacklist_flag(db, item)
     db.commit()
     item = load_listing(db, listing_id)
     return to_out(item, favorite_ids_for(db, user))
@@ -536,6 +596,38 @@ def reorder_listing_images(
     return to_out(item, favorite_ids_for(db, user))
 
 
+@router.post("/{listing_id}/pin", response_model=ListingOut)
+def pin_listing(
+    listing_id: int,
+    payload: ListingPinIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(UserRole.moderator, UserRole.admin)),
+):
+    item = load_listing(db, listing_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Объявление не найдено")
+    if payload.pinned:
+        if item.status != ListingStatus.approved:
+            raise HTTPException(status_code=400, detail="Закрепить можно только опубликованное")
+        pinned = db.execute(select(Listing).where(Listing.is_pinned.is_(True))).scalars().all()
+        for row in pinned:
+            row.is_pinned = False
+        item.is_pinned = True
+    else:
+        item.is_pinned = False
+    log_action(
+        db,
+        actor=user,
+        action="listing.pin" if payload.pinned else "listing.unpin",
+        entity_type="listing",
+        entity_id=item.id,
+        details=item.title,
+    )
+    db.commit()
+    item = load_listing(db, listing_id)
+    return to_out(item)
+
+
 @router.post("/{listing_id}/moderate", response_model=ListingOut)
 def moderate_listing(
     listing_id: int,
@@ -553,6 +645,11 @@ def moderate_listing(
     old = item.status.value
     item.status = payload.status
     item.moderation_note = payload.moderation_note
+    if payload.status == ListingStatus.approved:
+        item.auto_flagged = False
+        item.previous_snapshot = None
+    if payload.status in (ListingStatus.rejected, ListingStatus.archived):
+        item.is_pinned = False
     log_action(
         db,
         actor=user,
