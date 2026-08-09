@@ -915,10 +915,11 @@ class _EventsTabState extends State<_EventsTab> {
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
           child: SegmentedButton<String>(
+            showSelectedIcon: false,
             segments: const [
-              ButtonSegment(value: 'upcoming', label: Text('Скоро'), icon: Icon(Icons.event_available_outlined, size: 18)),
-              ButtonSegment(value: 'past', label: Text('Прошедшие'), icon: Icon(Icons.history, size: 18)),
-              ButtonSegment(value: 'all', label: Text('Все'), icon: Icon(Icons.list_alt, size: 18)),
+              ButtonSegment(value: 'upcoming', label: Text('Скоро')),
+              ButtonSegment(value: 'past', label: Text('Было')),
+              ButtonSegment(value: 'all', label: Text('Все')),
             ],
             selected: {
               if (upcomingOnly == true) 'upcoming' else if (upcomingOnly == false) 'past' else 'all',
@@ -1671,28 +1672,24 @@ class _DirectoryTabState extends State<_DirectoryTab> {
                                             style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
                                           ),
                                         ],
-                                        const SizedBox(height: 12),
+                                        const SizedBox(height: 8),
                                         Row(
                                           children: [
                                             if (phone != null && phone.isNotEmpty)
-                                              FilledButton.tonalIcon(
+                                              IconButton.filledTonal(
+                                                tooltip: 'Позвонить',
                                                 onPressed: () => _call(phone),
-                                                icon: const Icon(Icons.phone, size: 18),
-                                                label: const Text('Позвонить'),
+                                                icon: const Icon(Icons.phone, size: 20),
+                                                visualDensity: VisualDensity.compact,
                                               ),
-                                            if (hasMap) ...[
-                                              if (phone != null && phone.isNotEmpty) const SizedBox(width: 8),
-                                              OutlinedButton.icon(
+                                            if (hasMap)
+                                              IconButton.outlined(
+                                                tooltip: 'Карта',
                                                 onPressed: () => _openMaps(mapsUrl, item),
-                                                icon: const Icon(Icons.map_outlined, size: 18),
-                                                label: const Text('Карта'),
+                                                icon: const Icon(Icons.map_outlined, size: 20),
+                                                visualDensity: VisualDensity.compact,
                                               ),
-                                            ],
                                             const Spacer(),
-                                            Text(
-                                              'Подробнее',
-                                              style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700),
-                                            ),
                                             Icon(Icons.chevron_right, color: scheme.primary),
                                           ],
                                         ),
