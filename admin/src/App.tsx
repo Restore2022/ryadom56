@@ -5,6 +5,7 @@ import type {
   AuditLog,
   BlacklistEntry,
   DirectoryItem,
+  DirectoryReport,
   AppUpdateInfo,
   DistrictAlert,
   EventItem,
@@ -193,6 +194,9 @@ const REPORT_REASON_LABEL: Record<string, string> = {
   fraud: 'Мошенничество',
   prohibited: 'Запрещённый контент',
   other: 'Другое',
+  wrong_phone: 'Неверный телефон',
+  wrong_address: 'Неверный адрес',
+  closed: 'Закрыто / не работает',
 };
 
 const REPORT_STATUS_LABEL: Record<string, string> = {
@@ -396,7 +400,7 @@ function Shell({
               <span className="nav-ico">☰</span> Модерация
             </NavLink>
           )}
-          {mod && (
+          {(mod || directory) && (
             <NavLink to="/reports">
               <span className="nav-ico">!</span> Жалобы
             </NavLink>
@@ -639,6 +643,23 @@ function Dashboard({ isAdmin }: { isAdmin?: boolean }) {
             {stats.directory_favorites_total ?? 0} · транспорт {stats.transport_favorites_total ?? 0} · афиша{' '}
             {stats.event_favorite_adds_total ?? 0}
           </p>
+        </div>
+        <div className="panel" style={{ gridColumn: '1 / -1' }}>
+          <h2>По сёлам: объявления / открытия справочника</h2>
+          <p className="muted" style={{ marginTop: 0 }}>
+            Жалобы на контакты справочника (открытые): {stats.open_directory_reports ?? 0}
+          </p>
+          <ul className="cat-list">
+            {(stats.by_settlement || []).slice(0, 40).map((s) => (
+              <li key={s.settlement_id ?? 'none'}>
+                <span>{s.settlement_name}</span>
+                <strong>
+                  {s.listings_count} объяв. / {s.directory_opens} откр.
+                </strong>
+              </li>
+            ))}
+            {!stats.by_settlement?.length && <li className="muted">Пока нет данных по сёлам</li>}
+          </ul>
         </div>
       </div>
     </div>
@@ -1180,13 +1201,16 @@ function ModerationPage() {
   );
 }
 
-function ReportsPage() {
+function ReportsPage({ canListings }: { canListings: boolean }) {
   const navigate = useNavigate();
+  const [tab, setTab] = useState<'listings' | 'directory'>(canListings ? 'listings' : 'directory');
   const [items, setItems] = useState<ListingReport[]>([]);
+  const [dirItems, setDirItems] = useState<DirectoryReport[]>([]);
   const [status, setStatus] = useState('open');
   const [error, setError] = useState('');
   const [replyModal, setReplyModal] = useState<{
-    report: ListingReport;
+    kind: 'listing' | 'directory';
+    report: ListingReport | DirectoryReport;
     next: 'reviewed' | 'dismissed';
   } | null>(null);
   const [moderatorReply, setModeratorReply] = useState('');
@@ -1196,7 +1220,12 @@ function ReportsPage() {
   async function load() {
     try {
       const qs = status ? `?status=${status}` : '';
-      setItems(await api<ListingReport[]>(`/admin/reports${qs}`));
+      if (tab === 'listings') {
+        if (!canListings) return;
+        setItems(await api<ListingReport[]>(`/admin/reports${qs}`));
+      } else {
+        setDirItems(await api<DirectoryReport[]>(`/admin/directory-reports${qs}`));
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка');
     }
@@ -1204,10 +1233,14 @@ function ReportsPage() {
 
   useEffect(() => {
     load().catch(console.error);
-  }, [status]);
+  }, [status, tab, canListings]);
 
-  function openReplyModal(report: ListingReport, next: 'reviewed' | 'dismissed') {
-    setReplyModal({ report, next });
+  function openReplyModal(
+    kind: 'listing' | 'directory',
+    report: ListingReport | DirectoryReport,
+    next: 'reviewed' | 'dismissed',
+  ) {
+    setReplyModal({ kind, report, next });
     setModeratorReply('');
     setOpenListingAfter(false);
     setError('');
@@ -1226,12 +1259,16 @@ function ReportsPage() {
       if (!(await confirmAction('Отклонить эту жалобу?'))) return;
     }
     const next = replyModal.next;
-    const listingId = replyModal.report.listing_id;
-    const shouldOpen = openListingAfter;
+    const listingId = replyModal.kind === 'listing' ? (replyModal.report as ListingReport).listing_id : null;
+    const shouldOpen = openListingAfter && listingId != null;
     setBusy(true);
     setError('');
     try {
-      await api(`/admin/reports/${replyModal.report.id}`, {
+      const path =
+        replyModal.kind === 'listing'
+          ? `/admin/reports/${replyModal.report.id}`
+          : `/admin/directory-reports/${replyModal.report.id}`;
+      await api(path, {
         method: 'PATCH',
         body: JSON.stringify({
           status: next,
@@ -1243,7 +1280,7 @@ function ReportsPage() {
       setOpenListingAfter(false);
       await load();
       pushToast(next === 'reviewed' ? 'Жалоба просмотрена' : 'Жалоба отклонена');
-      if (shouldOpen) navigate(`/moderation?listingId=${listingId}`);
+      if (shouldOpen && listingId != null) navigate(`/moderation?listingId=${listingId}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Ошибка';
       setError(msg);
@@ -1257,15 +1294,36 @@ function ReportsPage() {
     navigate(`/moderation?listingId=${listingId}`);
   }
 
+  const titleOf = (r: ListingReport | DirectoryReport) => {
+    if ('listing_id' in r) return r.listing_title || `Объявление #${r.listing_id}`;
+    return r.directory_title || `Контакт #${r.directory_id}`;
+  };
+
   return (
     <div>
       <div className="page-head">
         <div>
           <h1>Жалобы</h1>
-          <p>Сигналы пользователей по объявлениям</p>
+          <p>Объявления и неверные контакты справочника</p>
         </div>
       </div>
       <div className="toolbar">
+        {canListings && (
+          <button
+            className={tab === 'listings' ? 'btn' : 'btn ghost'}
+            type="button"
+            onClick={() => setTab('listings')}
+          >
+            Объявления
+          </button>
+        )}
+        <button
+          className={tab === 'directory' ? 'btn' : 'btn ghost'}
+          type="button"
+          onClick={() => setTab('directory')}
+        >
+          Справочник
+        </button>
         <select value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="open">Открытые</option>
           <option value="reviewed">Просмотренные</option>
@@ -1275,43 +1333,80 @@ function ReportsPage() {
       </div>
       {error && !replyModal && <p className="error">{error}</p>}
       <div className="list">
-        {items.map((r) => (
-          <article key={r.id} className="row-card">
-            <div className="row-main">
-              <h3
-                className="row-title"
-                style={{ cursor: 'pointer' }}
-                onClick={() => goToListing(r.listing_id)}
-              >
-                {r.listing_title || `Объявление #${r.listing_id}`}
-              </h3>
-              <div className="meta">
-                <span className="chip warn">{REPORT_REASON_LABEL[r.reason] || r.reason}</span>
-                <span className="chip neutral">{r.reporter_name}</span>
-                <span className="chip">{REPORT_STATUS_LABEL[r.status] || r.status}</span>
+        {tab === 'listings' &&
+          items.map((r) => (
+            <article key={r.id} className="row-card">
+              <div className="row-main">
+                <h3 className="row-title" style={{ cursor: 'pointer' }} onClick={() => goToListing(r.listing_id)}>
+                  {r.listing_title || `Объявление #${r.listing_id}`}
+                </h3>
+                <div className="meta">
+                  <span className="chip warn">{REPORT_REASON_LABEL[r.reason] || r.reason}</span>
+                  <span className="chip neutral">{r.reporter_name}</span>
+                  <span className="chip">{REPORT_STATUS_LABEL[r.status] || r.status}</span>
+                </div>
+                {r.note && <p className="row-body">{r.note}</p>}
+                {r.moderator_reply && <p className="muted">Ответ: {r.moderator_reply}</p>}
+                <p className="muted">{formatDate(r.created_at)}</p>
               </div>
-              {r.note && <p className="row-body">{r.note}</p>}
-              {r.moderator_reply && <p className="muted">Ответ: {r.moderator_reply}</p>}
-              <p className="muted">{formatDate(r.created_at)}</p>
-            </div>
-            <div className="actions">
-              <button className="btn ghost" type="button" onClick={() => goToListing(r.listing_id)}>
-                К объявлению
-              </button>
-              {r.status === 'open' && (
-                <>
-                  <button className="btn" type="button" onClick={() => openReplyModal(r, 'reviewed')}>
-                    Просмотрено
-                  </button>
-                  <button className="btn secondary" type="button" onClick={() => openReplyModal(r, 'dismissed')}>
-                    Отклонить
-                  </button>
-                </>
-              )}
-            </div>
-          </article>
-        ))}
-        {!items.length && <div className="empty">Жалоб нет</div>}
+              <div className="actions">
+                <button className="btn ghost" type="button" onClick={() => goToListing(r.listing_id)}>
+                  К объявлению
+                </button>
+                {r.status === 'open' && (
+                  <>
+                    <button className="btn" type="button" onClick={() => openReplyModal('listing', r, 'reviewed')}>
+                      Просмотрено
+                    </button>
+                    <button
+                      className="btn secondary"
+                      type="button"
+                      onClick={() => openReplyModal('listing', r, 'dismissed')}
+                    >
+                      Отклонить
+                    </button>
+                  </>
+                )}
+              </div>
+            </article>
+          ))}
+        {tab === 'directory' &&
+          dirItems.map((r) => (
+            <article key={r.id} className="row-card">
+              <div className="row-main">
+                <h3 className="row-title">{r.directory_title || `Контакт #${r.directory_id}`}</h3>
+                <div className="meta">
+                  <span className="chip warn">{REPORT_REASON_LABEL[r.reason] || r.reason}</span>
+                  <span className="chip neutral">{r.reporter_name}</span>
+                  <span className="chip">{REPORT_STATUS_LABEL[r.status] || r.status}</span>
+                </div>
+                {r.note && <p className="row-body">{r.note}</p>}
+                {r.moderator_reply && <p className="muted">Ответ: {r.moderator_reply}</p>}
+                <p className="muted">{formatDate(r.created_at)}</p>
+              </div>
+              <div className="actions">
+                <button className="btn ghost" type="button" onClick={() => navigate('/directory')}>
+                  К справочнику
+                </button>
+                {r.status === 'open' && (
+                  <>
+                    <button className="btn" type="button" onClick={() => openReplyModal('directory', r, 'reviewed')}>
+                      Просмотрено
+                    </button>
+                    <button
+                      className="btn secondary"
+                      type="button"
+                      onClick={() => openReplyModal('directory', r, 'dismissed')}
+                    >
+                      Отклонить
+                    </button>
+                  </>
+                )}
+              </div>
+            </article>
+          ))}
+        {tab === 'listings' && !items.length && <div className="empty">Жалоб нет</div>}
+        {tab === 'directory' && !dirItems.length && <div className="empty">Жалоб на контакты нет</div>}
       </div>
 
       {replyModal && (
@@ -1319,7 +1414,7 @@ function ReportsPage() {
           <div className="modal modal-compact" onClick={(e) => e.stopPropagation()}>
             <h2>{replyModal.next === 'reviewed' ? 'Просмотреть жалобу' : 'Отклонить жалобу'}</h2>
             <p className="muted" style={{ marginTop: 0 }}>
-              {replyModal.report.listing_title || `Объявление #${replyModal.report.listing_id}`}
+              {titleOf(replyModal.report)}
             </p>
             <label className="field" style={{ display: 'block', marginTop: 12 }}>
               Ответ автору жалобы (необязательно)
@@ -1330,14 +1425,16 @@ function ReportsPage() {
                 rows={3}
               />
             </label>
-            <label className="check-inline" style={{ marginTop: 12 }}>
-              <input
-                type="checkbox"
-                checked={openListingAfter}
-                onChange={(e) => setOpenListingAfter(e.target.checked)}
-              />
-              Перейти к объявлению после
-            </label>
+            {replyModal.kind === 'listing' && (
+              <label className="check-inline" style={{ marginTop: 12 }}>
+                <input
+                  type="checkbox"
+                  checked={openListingAfter}
+                  onChange={(e) => setOpenListingAfter(e.target.checked)}
+                />
+                Перейти к объявлению после
+              </label>
+            )}
             {error && <p className="error">{error}</p>}
             <div className="modal-actions">
               <button
@@ -3794,7 +3891,9 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Dashboard isAdmin={user!.role === 'admin'} />} />
         {canModerate(user!.role) && <Route path="/moderation" element={<ModerationPage />} />}
-        {canModerate(user!.role) && <Route path="/reports" element={<ReportsPage />} />}
+        {(canModerate(user!.role) || canEditDirectory(user!.role)) && (
+          <Route path="/reports" element={<ReportsPage canListings={canModerate(user!.role)} />} />
+        )}
         <Route path="/audit" element={<AuditPage />} />
         {canEditDirectory(user!.role) && <Route path="/directory" element={<DirectoryPage />} />}
         {canEditDirectory(user!.role) && <Route path="/events" element={<EventsPage />} />}

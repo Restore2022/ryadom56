@@ -202,6 +202,19 @@ export type ListingReport = {
   created_at: string;
 };
 
+export type DirectoryReport = {
+  id: number;
+  directory_id: number;
+  directory_title?: string | null;
+  reporter_id: number;
+  reporter_name?: string | null;
+  reason: string;
+  note?: string | null;
+  moderator_reply?: string | null;
+  status: string;
+  created_at: string;
+};
+
 export type AuditLog = {
   id: number;
   actor_id: number;
@@ -259,6 +272,13 @@ export type Stats = {
   listing_favorites_total?: number;
   directory_favorites_total?: number;
   event_favorite_adds_total?: number;
+  open_directory_reports?: number;
+  by_settlement?: {
+    settlement_id?: number | null;
+    settlement_name: string;
+    listings_count: number;
+    directory_opens: number;
+  }[];
 };
 
 export type EventItem = {

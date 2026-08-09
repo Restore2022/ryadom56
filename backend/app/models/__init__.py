@@ -153,6 +153,7 @@ class DirectoryItem(Base):
     lat: Mapped[float | None] = mapped_column(Float, nullable=True)
     lon: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_published: Mapped[bool] = mapped_column(Boolean, default=True)
+    view_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -332,6 +333,25 @@ class DirectoryFavorite(Base):
 
     user: Mapped["User"] = relationship()
     directory_item: Mapped["DirectoryItem"] = relationship()
+
+
+class DirectoryReport(Base):
+    __tablename__ = "directory_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    directory_id: Mapped[int] = mapped_column(ForeignKey("directory_items.id"), nullable=False, index=True)
+    reporter_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    reason: Mapped[str] = mapped_column(String(40), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="open")  # open / reviewed / dismissed
+    moderator_reply: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    reviewed_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+    directory_item: Mapped["DirectoryItem"] = relationship()
+    reporter: Mapped["User"] = relationship(foreign_keys=[reporter_id])
+    reviewed_by: Mapped["User | None"] = relationship(foreign_keys=[reviewed_by_id])
 
 
 class AuditLog(Base):

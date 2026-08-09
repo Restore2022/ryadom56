@@ -17,6 +17,7 @@ from app.models import (
     BlacklistEntry,
     DirectoryFavorite,
     DirectoryItem,
+    DirectoryReport,
     DistrictAlert,
     DistrictNews,
     Event,
@@ -38,9 +39,11 @@ from app.schemas import (
     BulkModerateIn,
     CategoryStat,
     DayStat,
+    DirectoryReportOut,
     ListingOut,
     ListingReportOut,
     ReportStatusUpdate,
+    SettlementStat,
     StatsOut,
     UserOut,
     UserRoleUpdate,
@@ -70,9 +73,57 @@ def stats(
             Listing.created_at < day_ago,
         )
     ).scalar_one()
-    open_reports = db.execute(
-        select(func.count(ListingReport.id)).where(ListingReport.status == "open")
-    ).scalar_one()
+    open_listing_reports = int(
+        db.execute(select(func.count(ListingReport.id)).where(ListingReport.status == "open")).scalar_one()
+    )
+    open_directory_reports = int(
+        db.execute(select(func.count(DirectoryReport.id)).where(DirectoryReport.status == "open")).scalar_one()
+    )
+    open_reports = open_listing_reports + open_directory_reports
+
+    listing_by_settlement = {
+        sid: int(n)
+        for sid, n in db.execute(
+            select(Listing.settlement_id, func.count(Listing.id))
+            .where(Listing.status == ListingStatus.approved)
+            .group_by(Listing.settlement_id)
+        ).all()
+    }
+    directory_opens_by_settlement = {
+        sid: int(n or 0)
+        for sid, n in db.execute(
+            select(DirectoryItem.settlement_id, func.coalesce(func.sum(DirectoryItem.view_count), 0)).group_by(
+                DirectoryItem.settlement_id
+            )
+        ).all()
+    }
+    settlements_rows = db.execute(select(Settlement).order_by(Settlement.display_name)).scalars().all()
+    by_settlement: list[SettlementStat] = []
+    for s in settlements_rows:
+        listings_n = listing_by_settlement.get(s.id, 0)
+        opens_n = directory_opens_by_settlement.get(s.id, 0)
+        if listings_n or opens_n:
+            by_settlement.append(
+                SettlementStat(
+                    settlement_id=s.id,
+                    settlement_name=s.display_name,
+                    listings_count=listings_n,
+                    directory_opens=opens_n,
+                )
+            )
+    # без привязки к селу
+    unassigned_listings = listing_by_settlement.get(None, 0)
+    unassigned_opens = directory_opens_by_settlement.get(None, 0)
+    if unassigned_listings or unassigned_opens:
+        by_settlement.append(
+            SettlementStat(
+                settlement_id=None,
+                settlement_name="Без населённого пункта",
+                listings_count=unassigned_listings,
+                directory_opens=unassigned_opens,
+            )
+        )
+    by_settlement.sort(key=lambda x: (-(x.listings_count + x.directory_opens), x.settlement_name))
 
     approved_30 = 0
     rejected_30 = 0
@@ -123,7 +174,8 @@ def stats(
         directory_items=db.execute(select(func.count(DirectoryItem.id))).scalar_one(),
         settlements=db.execute(select(func.count(Settlement.id))).scalar_one(),
         pending_over_24h=int(pending_over),
-        open_reports=int(open_reports),
+        open_reports=open_reports,
+        open_directory_reports=open_directory_reports,
         moderated_approved_30d=approved_30,
         moderated_rejected_30d=rejected_30,
         moderation_conversion=conversion,
@@ -180,6 +232,7 @@ def stats(
         event_favorite_adds_total=int(
             db.execute(select(func.coalesce(func.sum(Event.favorite_add_count), 0))).scalar_one()
         ),
+        by_settlement=by_settlement,
     )
 
 
@@ -222,9 +275,10 @@ def alerts(
             ).scalar_one()
         ),
         open_reports=int(
-            db.execute(
-                select(func.count(ListingReport.id)).where(ListingReport.status == "open")
-            ).scalar_one()
+            db.execute(select(func.count(ListingReport.id)).where(ListingReport.status == "open")).scalar_one()
+        )
+        + int(
+            db.execute(select(func.count(DirectoryReport.id)).where(DirectoryReport.status == "open")).scalar_one()
         ),
     )
 
@@ -480,6 +534,92 @@ def list_reports(
         )
         for r in rows
     ]
+
+
+@router.get("/directory-reports", response_model=list[DirectoryReportOut])
+def list_directory_reports(
+    status_filter: str | None = Query(default="open", alias="status"),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(UserRole.moderator, UserRole.admin, UserRole.editor)),
+):
+    stmt = select(DirectoryReport).options(
+        selectinload(DirectoryReport.directory_item),
+        selectinload(DirectoryReport.reporter),
+    )
+    if status_filter:
+        stmt = stmt.where(DirectoryReport.status == status_filter)
+    stmt = stmt.order_by(DirectoryReport.created_at.desc())
+    rows = db.execute(stmt).scalars().unique().all()
+    return [
+        DirectoryReportOut(
+            id=r.id,
+            directory_id=r.directory_id,
+            directory_title=r.directory_item.title if r.directory_item else None,
+            reporter_id=r.reporter_id,
+            reporter_name=r.reporter.full_name if r.reporter else None,
+            reason=r.reason,
+            note=r.note,
+            status=r.status,
+            moderator_reply=getattr(r, "moderator_reply", None),
+            created_at=r.created_at,
+        )
+        for r in rows
+    ]
+
+
+@router.patch("/directory-reports/{report_id}", response_model=DirectoryReportOut)
+def update_directory_report(
+    report_id: int,
+    payload: ReportStatusUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(UserRole.moderator, UserRole.admin, UserRole.editor)),
+):
+    report = db.execute(
+        select(DirectoryReport)
+        .options(selectinload(DirectoryReport.directory_item), selectinload(DirectoryReport.reporter))
+        .where(DirectoryReport.id == report_id)
+    ).scalar_one_or_none()
+    if not report:
+        raise HTTPException(status_code=404, detail="Жалоба не найдена")
+    report.status = payload.status
+    report.reviewed_at = datetime.now(timezone.utc)
+    report.reviewed_by_id = user.id
+    reply = (payload.moderator_reply or "").strip() or None
+    report.moderator_reply = reply
+    log_action(
+        db,
+        actor=user,
+        action=f"directory_report.{payload.status}",
+        entity_type="directory_report",
+        entity_id=report.id,
+        details=f"directory={report.directory_id}; reply={reply or ''}",
+    )
+    title_txt = report.directory_item.title if report.directory_item else f"#{report.directory_id}"
+    status_label = "просмотрена" if payload.status == "reviewed" else "отклонена"
+    body = f"Ваша жалоба на контакт «{title_txt}» {status_label}."
+    if reply:
+        body = f"{body} Ответ: {reply}"
+    notify_user(
+        db,
+        user_id=report.reporter_id,
+        type="directory_report_update",
+        title="Жалоба на контакт",
+        body=body,
+        listing_id=None,
+    )
+    db.commit()
+    return DirectoryReportOut(
+        id=report.id,
+        directory_id=report.directory_id,
+        directory_title=report.directory_item.title if report.directory_item else None,
+        reporter_id=report.reporter_id,
+        reporter_name=report.reporter.full_name if report.reporter else None,
+        reason=report.reason,
+        note=report.note,
+        status=report.status,
+        moderator_reply=report.moderator_reply,
+        created_at=report.created_at,
+    )
 
 
 @router.patch("/reports/{report_id}", response_model=ListingReportOut)

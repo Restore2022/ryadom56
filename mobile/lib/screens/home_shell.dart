@@ -108,10 +108,29 @@ class RyadomFilterChip extends StatelessWidget {
       backgroundColor: bg,
       checkmarkColor: fg,
       side: BorderSide(color: border),
-      labelStyle: GoogleFonts.manrope(fontWeight: FontWeight.w700, fontSize: 13, color: fg),
+      visualDensity: VisualDensity.compact,
+      materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 0),
+      labelPadding: const EdgeInsets.symmetric(horizontal: 6),
+      labelStyle: GoogleFonts.manrope(fontWeight: FontWeight.w700, fontSize: 13, color: fg, height: 1.1),
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
     );
   }
+}
+
+/// Горизонтальный ряд чипов без обрезки по высоте (раньше SizedBox(height: 40) резал ленту).
+Widget ryadomChipRow({
+  required EdgeInsetsGeometry padding,
+  required List<Widget> children,
+}) {
+  return SingleChildScrollView(
+    scrollDirection: Axis.horizontal,
+    padding: padding,
+    child: Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(children: children),
+    ),
+  );
 }
 
 class HomeShell extends StatefulWidget {
@@ -480,35 +499,31 @@ class _ListingsTabState extends State<_ListingsTab> {
               ),
             ),
             SliverToBoxAdapter(
-              child: SizedBox(
-                height: 40,
-                child: ListView(
-                  scrollDirection: Axis.horizontal,
-                  padding: EdgeInsets.symmetric(horizontal: padH),
-                  children: [
-                    Padding(
+              child: ryadomChipRow(
+                padding: EdgeInsets.symmetric(horizontal: padH),
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: RyadomFilterChip(
+                      label: 'С фото',
+                      selected: state.filterHasPhotos,
+                      onSelected: (_) => state.applyListingFilters(hasPhotos: !state.filterHasPhotos),
+                    ),
+                  ),
+                  ...['goods', 'services', 'jobs', 'rent', 'free', 'lost_found'].map(
+                    (c) => Padding(
                       padding: const EdgeInsets.only(right: 8),
                       child: RyadomFilterChip(
-                        label: 'С фото',
-                        selected: state.filterHasPhotos,
-                        onSelected: (_) => state.applyListingFilters(hasPhotos: !state.filterHasPhotos),
-                      ),
-                    ),
-                    ...['goods', 'services', 'jobs', 'rent', 'free', 'lost_found'].map(
-                      (c) => Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: RyadomFilterChip(
-                          label: categoryLabels[c]!,
-                          selected: state.filterCategory == c,
-                          onSelected: (_) => state.applyListingFilters(
-                            category: state.filterCategory == c ? '' : c,
-                            clearCategory: state.filterCategory == c,
-                          ),
+                        label: categoryLabels[c]!,
+                        selected: state.filterCategory == c,
+                        onSelected: (_) => state.applyListingFilters(
+                          category: state.filterCategory == c ? '' : c,
+                          clearCategory: state.filterCategory == c,
                         ),
                       ),
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
             ),
             SliverToBoxAdapter(
@@ -1267,31 +1282,27 @@ class _TransportTabState extends State<_TransportTab> {
                   ),
                 ),
                 if (settlementId != null) ...[
-                  SizedBox(
-                    height: 40,
-                    child: ListView(
-                      scrollDirection: Axis.horizontal,
-                      padding: EdgeInsets.fromLTRB(padH, 0, padH, 8),
-                      children: [
-                        for (final entry in const [
-                          ('today', 'Сегодня'),
-                          ('weekdays', 'Будни'),
-                          ('weekends', 'Выходные'),
-                          ('all', 'Все'),
-                        ])
-                          Padding(
-                            padding: const EdgeInsets.only(right: 8),
-                            child: RyadomFilterChip(
-                              label: entry.$2,
-                              selected: dayFilter == entry.$1,
-                              onSelected: (_) {
-                                setState(() => dayFilter = entry.$1);
-                                _load();
-                              },
-                            ),
+                  ryadomChipRow(
+                    padding: EdgeInsets.fromLTRB(padH, 0, padH, 8),
+                    children: [
+                      for (final entry in const [
+                        ('today', 'Сегодня'),
+                        ('weekdays', 'Будни'),
+                        ('weekends', 'Выходные'),
+                        ('all', 'Все'),
+                      ])
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: RyadomFilterChip(
+                            label: entry.$2,
+                            selected: dayFilter == entry.$1,
+                            onSelected: (_) {
+                              setState(() => dayFilter = entry.$1);
+                              _load();
+                            },
                           ),
-                      ],
-                    ),
+                        ),
+                    ],
                   ),
                   Padding(
                     padding: EdgeInsets.fromLTRB(padH, 0, padH, 8),
@@ -1563,40 +1574,36 @@ class _DirectoryTabState extends State<_DirectoryTab> {
                     ),
                   ),
                 ),
-                SizedBox(
-                  height: 40,
-                  child: ListView(
-                    scrollDirection: Axis.horizontal,
-                    padding: EdgeInsets.symmetric(horizontal: padH),
-                    children: [
-                      Padding(
+                ryadomChipRow(
+                  padding: EdgeInsets.symmetric(horizontal: padH),
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: RyadomFilterChip(
+                        label: 'Все',
+                        selected: state.directoryCategory == null,
+                        onSelected: (_) => state.setDirectoryFilters(
+                          category: null,
+                          settlementId: state.directorySettlementId,
+                          query: search.text,
+                        ),
+                      ),
+                    ),
+                    ...dirCategories.map(
+                      (c) => Padding(
                         padding: const EdgeInsets.only(right: 8),
                         child: RyadomFilterChip(
-                          label: 'Все',
-                          selected: state.directoryCategory == null,
+                          label: categoryLabels[c] ?? c,
+                          selected: state.directoryCategory == c,
                           onSelected: (_) => state.setDirectoryFilters(
-                            category: null,
+                            category: state.directoryCategory == c ? null : c,
                             settlementId: state.directorySettlementId,
                             query: search.text,
                           ),
                         ),
                       ),
-                      ...dirCategories.map(
-                        (c) => Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: RyadomFilterChip(
-                            label: categoryLabels[c] ?? c,
-                            selected: state.directoryCategory == c,
-                            onSelected: (_) => state.setDirectoryFilters(
-                              category: state.directoryCategory == c ? null : c,
-                              settlementId: state.directorySettlementId,
-                              query: search.text,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
                 ),
                 Padding(
                   padding: EdgeInsets.fromLTRB(padH, 8, padH, 6),
@@ -1757,18 +1764,24 @@ class _DirectoryTabState extends State<_DirectoryTab> {
                                         ),
                                         Text(
                                           item['title'] as String,
-                                          style: GoogleFonts.manrope(fontSize: 18, fontWeight: FontWeight.w800),
+                                          style: GoogleFonts.manrope(fontSize: 18, fontWeight: FontWeight.w800, height: 1.25),
+                                          softWrap: true,
                                         ),
                                         if (item['address'] != null) ...[
                                           const SizedBox(height: 8),
                                           Row(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
                                             children: [
-                                              Icon(Icons.place_outlined, size: 16, color: scheme.onSurfaceVariant),
+                                              Padding(
+                                                padding: const EdgeInsets.only(top: 2),
+                                                child: Icon(Icons.place_outlined, size: 16, color: scheme.onSurfaceVariant),
+                                              ),
                                               const SizedBox(width: 4),
                                               Expanded(
                                                 child: Text(
                                                   '${item['address']}',
-                                                  style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
+                                                  style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13, height: 1.3),
+                                                  softWrap: true,
                                                 ),
                                               ),
                                             ],
@@ -1779,6 +1792,7 @@ class _DirectoryTabState extends State<_DirectoryTab> {
                                           Text(
                                             '${item['settlement_name']}',
                                             style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
+                                            softWrap: true,
                                           ),
                                         ],
                                         const SizedBox(height: 8),
@@ -1791,13 +1805,15 @@ class _DirectoryTabState extends State<_DirectoryTab> {
                                                 icon: const Icon(Icons.phone, size: 20),
                                                 visualDensity: VisualDensity.compact,
                                               ),
-                                            if (hasMap)
+                                            if (hasMap) ...[
+                                              if (phone != null && phone.isNotEmpty) const SizedBox(width: 4),
                                               IconButton.outlined(
                                                 tooltip: 'Карта',
                                                 onPressed: () => _openMaps(mapsUrl, item),
                                                 icon: const Icon(Icons.map_outlined, size: 20),
                                                 visualDensity: VisualDensity.compact,
                                               ),
+                                            ],
                                             const Spacer(),
                                             Icon(Icons.chevron_right, color: scheme.primary),
                                           ],

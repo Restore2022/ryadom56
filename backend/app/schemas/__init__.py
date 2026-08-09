@@ -237,6 +237,27 @@ class ListingReportOut(BaseModel):
         from_attributes = True
 
 
+class DirectoryReportIn(BaseModel):
+    reason: str = Field(pattern="^(wrong_phone|wrong_address|closed|other)$")
+    note: str | None = Field(default=None, max_length=500)
+
+
+class DirectoryReportOut(BaseModel):
+    id: int
+    directory_id: int
+    directory_title: str | None = None
+    reporter_id: int
+    reporter_name: str | None = None
+    reason: str
+    note: str | None
+    status: str
+    moderator_reply: str | None = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
 class ReportStatusUpdate(BaseModel):
     status: str = Field(pattern="^(open|reviewed|dismissed)$")
     moderator_reply: str | None = Field(default=None, max_length=500)
@@ -304,6 +325,7 @@ class DirectoryOut(BaseModel):
     lon: float | None
     is_published: bool
     is_favorited: bool = False
+    view_count: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -348,6 +370,13 @@ class CategoryStat(BaseModel):
 class DayStat(BaseModel):
     day: str
     count: int
+
+
+class SettlementStat(BaseModel):
+    settlement_id: int | None = None
+    settlement_name: str
+    listings_count: int = 0
+    directory_opens: int = 0
 
 
 class EventCreate(BaseModel):
@@ -583,6 +612,8 @@ class StatsOut(BaseModel):
     listing_favorites_total: int = 0
     directory_favorites_total: int = 0
     event_favorite_adds_total: int = 0
+    by_settlement: list[SettlementStat] = []
+    open_directory_reports: int = 0
 
 
 class AdminAlertsOut(BaseModel):

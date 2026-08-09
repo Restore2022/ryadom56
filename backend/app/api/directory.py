@@ -2,14 +2,23 @@ from datetime import datetime
 import re
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, get_optional_user, require_roles
 from app.core.database import get_db
-from app.models import DirectoryCategory, DirectoryFavorite, DirectoryItem, User, UserRole
-from app.schemas import DirectoryCreate, DirectoryOut, DirectoryUpdate
+from app.models import (
+    DirectoryCategory,
+    DirectoryFavorite,
+    DirectoryItem,
+    DirectoryReport,
+    User,
+    UserRole,
+)
+from app.schemas import DirectoryCreate, DirectoryOut, DirectoryReportIn, DirectoryUpdate
+from app.services.notify import notify_user
+from app.services.rate_limit import limiter
 
 router = APIRouter(prefix="/directory", tags=["directory"])
 
@@ -77,6 +86,7 @@ def to_out(item: DirectoryItem, favorited_ids: set[int] | None = None) -> Direct
         lon=item.lon,
         is_published=item.is_published,
         is_favorited=bool(favorited_ids and item.id in favorited_ids),
+        view_count=item.view_count or 0,
         created_at=item.created_at,
         updated_at=item.updated_at,
     )
@@ -140,6 +150,76 @@ def get_directory_item(
     if not item or not item.is_published:
         raise HTTPException(status_code=404, detail="Запись не найдена")
     return to_out(item, favorite_ids_for(db, user))
+
+
+@router.post("/{item_id}/view", response_model=DirectoryOut)
+def track_directory_view(
+    item_id: int,
+    db: Session = Depends(get_db),
+    user: User | None = Depends(get_optional_user),
+):
+    item = db.execute(
+        select(DirectoryItem).options(selectinload(DirectoryItem.settlement)).where(DirectoryItem.id == item_id)
+    ).scalar_one_or_none()
+    if not item or (not item.is_published and not (user and user.role in (UserRole.admin, UserRole.editor))):
+        raise HTTPException(status_code=404, detail="Запись не найдена")
+    item.view_count = (item.view_count or 0) + 1
+    db.commit()
+    item = db.execute(
+        select(DirectoryItem).options(selectinload(DirectoryItem.settlement)).where(DirectoryItem.id == item_id)
+    ).scalar_one()
+    return to_out(item, favorite_ids_for(db, user))
+
+
+@router.post("/{item_id}/report")
+def report_directory_item(
+    item_id: int,
+    payload: DirectoryReportIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    ip = (request.client.host if request.client else "unknown") or "unknown"
+    if not limiter.allow(f"dir-report:{user.id}:{ip}", limit=15, window_sec=3600):
+        raise HTTPException(status_code=429, detail="Слишком много жалоб. Попробуйте позже")
+    item = db.execute(select(DirectoryItem).where(DirectoryItem.id == item_id)).scalar_one_or_none()
+    if not item or not item.is_published:
+        raise HTTPException(status_code=404, detail="Запись не найдена")
+    recent = db.execute(
+        select(DirectoryReport).where(
+            DirectoryReport.directory_id == item_id,
+            DirectoryReport.reporter_id == user.id,
+            DirectoryReport.status == "open",
+        )
+    ).scalar_one_or_none()
+    if recent:
+        raise HTTPException(status_code=400, detail="Жалоба уже отправлена")
+    db.add(
+        DirectoryReport(
+            directory_id=item_id,
+            reporter_id=user.id,
+            reason=payload.reason,
+            note=(payload.note or "").strip() or None,
+            status="open",
+        )
+    )
+    db.flush()
+    for staff in db.execute(
+        select(User).where(
+            User.role.in_([UserRole.admin, UserRole.editor, UserRole.moderator]),
+            User.is_active.is_(True),
+        )
+    ).scalars().all():
+        notify_user(
+            db,
+            user_id=staff.id,
+            type="directory_reported",
+            title="Жалоба на контакт справочника",
+            body=f'«{item.title}»: неверные данные',
+            listing_id=None,
+        )
+    db.commit()
+    return {"ok": True}
 
 
 @router.post("/{item_id}/favorite", response_model=DirectoryOut)

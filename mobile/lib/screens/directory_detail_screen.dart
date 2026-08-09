@@ -7,10 +7,37 @@ import '../auth_prompt.dart';
 import '../state/app_state.dart';
 import 'home_shell.dart';
 
-class DirectoryDetailScreen extends StatelessWidget {
+const directoryReportReasons = {
+  'wrong_phone': 'Неверный телефон',
+  'wrong_address': 'Неверный адрес',
+  'closed': 'Закрыто / не работает',
+  'other': 'Другое',
+};
+
+class DirectoryDetailScreen extends StatefulWidget {
   const DirectoryDetailScreen({super.key, required this.item});
 
   final Map<String, dynamic> item;
+
+  @override
+  State<DirectoryDetailScreen> createState() => _DirectoryDetailScreenState();
+}
+
+class _DirectoryDetailScreenState extends State<DirectoryDetailScreen> {
+  bool reportBusy = false;
+
+  Map<String, dynamic> get item => widget.item;
+
+  @override
+  void initState() {
+    super.initState();
+    final id = item['id'];
+    if (id is int) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        context.read<AppState>().trackDirectoryView(id);
+      });
+    }
+  }
 
   Future<void> _call(String phone) async {
     final uri = Uri(scheme: 'tel', path: phone.replaceAll(RegExp(r'[\s\-()]'), ''));
@@ -55,6 +82,77 @@ class DirectoryDetailScreen extends StatelessWidget {
     }
   }
 
+  Future<void> _report() async {
+    if (reportBusy) return;
+    final id = item['id'];
+    if (id is! int) return;
+    final loggedIn = await ensureLoggedIn(context, message: 'Войдите, чтобы сообщить о неверных контактах');
+    if (!loggedIn || !mounted) return;
+    String reason = 'wrong_phone';
+    final note = TextEditingController();
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            return AlertDialog(
+              title: const Text('Неверные контакты'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButtonFormField<String>(
+                    value: reason,
+                    decoration: const InputDecoration(labelText: 'Что не так', border: OutlineInputBorder()),
+                    items: directoryReportReasons.entries
+                        .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value)))
+                        .toList(),
+                    onChanged: (v) => setLocal(() => reason = v ?? 'wrong_phone'),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: note,
+                    decoration: const InputDecoration(
+                      labelText: 'Комментарий (необязательно)',
+                      border: OutlineInputBorder(),
+                    ),
+                    maxLines: 2,
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+                FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Отправить')),
+              ],
+            );
+          },
+        );
+      },
+    );
+    if (ok != true || !mounted) return;
+    setState(() => reportBusy = true);
+    try {
+      await context.read<AppState>().reportDirectory(
+            id,
+            reason: reason,
+            note: note.text.trim().isEmpty ? null : note.text.trim(),
+          );
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Жалоба отправлена')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(AppState.userFriendlyError(e))),
+        );
+      }
+    } finally {
+      note.dispose();
+      if (mounted) setState(() => reportBusy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -71,6 +169,11 @@ class DirectoryDetailScreen extends StatelessWidget {
       appBar: AppBar(
         title: const Text('Контакт'),
         actions: [
+          IconButton(
+            tooltip: 'Неверные контакты',
+            onPressed: reportBusy ? null : _report,
+            icon: const Icon(Icons.flag_outlined),
+          ),
           Consumer<AppState>(
             builder: (context, state, _) {
               final id = item['id'] as int?;
@@ -163,6 +266,12 @@ class DirectoryDetailScreen extends StatelessWidget {
               label: const Text('Открыть сайт'),
             ),
           ],
+          const SizedBox(height: 10),
+          TextButton.icon(
+            onPressed: reportBusy ? null : _report,
+            icon: const Icon(Icons.flag_outlined),
+            label: const Text('Сообщить о неверных контактах'),
+          ),
         ],
       ),
     );

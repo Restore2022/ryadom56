@@ -841,6 +841,21 @@ class AppState extends ChangeNotifier {
     );
   }
 
+  Future<void> reportDirectory(int id, {required String reason, String? note}) async {
+    await api.request(
+      '/directory/$id/report',
+      method: 'POST',
+      auth: true,
+      body: {'reason': reason, 'note': note},
+    );
+  }
+
+  Future<void> trackDirectoryView(int id) async {
+    try {
+      await api.request('/directory/$id/view', method: 'POST');
+    } catch (_) {}
+  }
+
   Future<Map<String, dynamic>> republishListing(int id) async {
     final updated = await api.request('/listings/$id/republish', method: 'POST', auth: true) as Map<String, dynamic>;
     await loadListings();

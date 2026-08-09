@@ -48,6 +48,7 @@ REPORT_COLUMNS = {
 
 DIRECTORY_COLUMNS = {
     "hours": "VARCHAR(255)",
+    "view_count": "INTEGER DEFAULT 0",
 }
 
 EVENT_COLUMNS = {
