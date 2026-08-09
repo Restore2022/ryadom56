@@ -1,4 +1,14 @@
-const API_URL = import.meta.env.VITE_API_URL || 'http://127.0.0.1:8000/api';
+function resolveApiUrl(): string {
+  const fromEnv = import.meta.env.VITE_API_URL as string | undefined;
+  if (fromEnv && fromEnv.trim()) return fromEnv.trim().replace(/\/$/, '');
+  // В проде админка и API на одном origin — без локальных адресов в бандле
+  if (typeof window !== 'undefined' && window.location?.origin) {
+    return `${window.location.origin}/api`;
+  }
+  return '/api';
+}
+
+const API_URL = resolveApiUrl();
 const MEDIA_BASE = API_URL.replace(/\/api\/?$/, '');
 
 export function mediaUrl(path?: string | null) {

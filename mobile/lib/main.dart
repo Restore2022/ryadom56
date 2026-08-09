@@ -16,9 +16,17 @@ Future<void> main() async {
   final prefs = await SharedPreferences.getInstance();
   const fromBuild = String.fromEnvironment(
     'API_BASE',
-    defaultValue: 'http://192.168.0.110:8000/api',
+    defaultValue: 'http://155.212.174.201:8080/api',
   );
-  final apiBase = prefs.getString('api_base') ?? fromBuild;
+  var apiBase = prefs.getString('api_base') ?? fromBuild;
+  // Сбрасываем старые локальные адреса (LAN / localhost)
+  if (apiBase.contains('192.168.') ||
+      apiBase.contains('127.0.0.1') ||
+      apiBase.contains('localhost') ||
+      apiBase.contains('10.0.')) {
+    apiBase = fromBuild;
+  }
+  await prefs.setString('api_base', apiBase);
   runApp(RyadomApp(apiBase: apiBase));
 }
 

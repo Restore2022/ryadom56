@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     admin_password: str = "admin123"
     admin_name: str = "Администратор"
     fcm_server_key: str = ""
+    # Демо-контент (ярмарки, маршруты-заглушки) только для локальной разработки
+    seed_demo_content: bool = False
 
     class Config:
         env_file = ".env"

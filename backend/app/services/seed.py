@@ -236,11 +236,12 @@ def seed_db(session: Session) -> None:
             )
         )
 
-    _seed_events(session)
-    _seed_transport(session)
-    _seed_news(session)
-    _seed_alerts(session)
-    _enrich_transport(session)
+    if settings.seed_demo_content:
+        _seed_events(session)
+        _seed_transport(session)
+        _seed_news(session)
+        _seed_alerts(session)
+        _enrich_transport(session)
 
     session.commit()
 

@@ -255,8 +255,8 @@ function useAuth() {
 }
 
 function LoginPage({ onLogin }: { onLogin: (u: User) => void }) {
-  const [email, setEmail] = useState('admin@ryadom56.ru');
-  const [password, setPassword] = useState('admin123');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
 

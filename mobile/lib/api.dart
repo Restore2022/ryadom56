@@ -18,7 +18,7 @@ class ApiException implements Exception {
 }
 
 class ApiClient {
-  ApiClient({this.baseUrl = 'http://192.168.0.110:8000/api'});
+  ApiClient({this.baseUrl = 'http://155.212.174.201:8080/api'});
 
   /// На телефоне: IP ПК в Wi‑Fi. В эмуляторе: http://10.0.2.2:8000/api
   final String baseUrl;
