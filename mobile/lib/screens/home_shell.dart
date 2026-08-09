@@ -10,6 +10,7 @@ import '../state/app_state.dart';
 import '../ui_helpers.dart';
 import '../update_service.dart';
 import 'about_screen.dart';
+import 'chats_screen.dart';
 import 'create_listing_screen.dart';
 import 'directory_detail_screen.dart';
 import 'district_hub_screen.dart';
@@ -150,6 +151,9 @@ class _HomeShellState extends State<HomeShell> {
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       final state = context.read<AppState>();
       _lastUnread = state.unreadNotifications;
+      if (state.user != null) {
+        await state.refreshUnreadChats();
+      }
       _pollNotifications();
       final msg = state.sessionMessage;
       if (msg != null && mounted) {
@@ -172,6 +176,7 @@ class _HomeShellState extends State<HomeShell> {
       if (state.user == null) continue;
       final before = state.unreadNotifications;
       await state.refreshUnreadNotifications();
+      await state.refreshUnreadChats();
       final after = state.unreadNotifications;
       if (!mounted) return;
       if (after > before && after > _lastUnread) {
@@ -193,19 +198,35 @@ class _HomeShellState extends State<HomeShell> {
     }
   }
 
+  void _openProfile(BuildContext context, AppState state) {
+    Navigator.push(
+      context,
+      fastRoute(
+        Scaffold(
+          appBar: AppBar(title: const Text('Профиль')),
+          body: ProfileScreen(user: state.user),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final titles = ['Объявления', 'Афиша', 'Транспорт', 'Справочник', 'Профиль'];
+    final titles = ['Объявления', 'Афиша', 'Транспорт', 'Места', 'Чаты'];
     final pages = [
       const _ListingsTab(),
       const _EventsTab(),
       const _TransportTab(),
       const _DirectoryTab(),
-      _ProfileTab(user: state.user),
+      const ChatsTab(),
     ];
     final useRail = context.useNavigationRail;
     final landscape = context.isLandscape;
+    final chatBadge = state.user != null && state.unreadChats > 0;
+    final chatLabel = '${state.unreadChats > 99 ? 99 : state.unreadChats}';
+    final profileBadge = state.user != null && state.unreadNotifications > 0;
+    final profileLabel = '${state.unreadNotifications > 99 ? 99 : state.unreadNotifications}';
 
     final destinations = <NavigationDestination>[
       const NavigationDestination(icon: Icon(Icons.storefront_outlined), selectedIcon: Icon(Icons.storefront), label: 'Лента'),
@@ -218,16 +239,16 @@ class _HomeShellState extends State<HomeShell> {
       const NavigationDestination(icon: Icon(Icons.map_outlined), selectedIcon: Icon(Icons.map), label: 'Места'),
       NavigationDestination(
         icon: Badge(
-          isLabelVisible: state.user != null && state.unreadNotifications > 0,
-          label: Text('${state.unreadNotifications > 99 ? 99 : state.unreadNotifications}'),
-          child: const Icon(Icons.person_outline),
+          isLabelVisible: chatBadge,
+          label: Text(chatLabel),
+          child: const Icon(Icons.chat_bubble_outline),
         ),
         selectedIcon: Badge(
-          isLabelVisible: state.user != null && state.unreadNotifications > 0,
-          label: Text('${state.unreadNotifications > 99 ? 99 : state.unreadNotifications}'),
-          child: const Icon(Icons.person),
+          isLabelVisible: chatBadge,
+          label: Text(chatLabel),
+          child: const Icon(Icons.chat_bubble),
         ),
-        label: 'Профиль',
+        label: 'Чаты',
       ),
     ];
 
@@ -242,16 +263,16 @@ class _HomeShellState extends State<HomeShell> {
       const NavigationRailDestination(icon: Icon(Icons.map_outlined), selectedIcon: Icon(Icons.map), label: Text('Места')),
       NavigationRailDestination(
         icon: Badge(
-          isLabelVisible: state.user != null && state.unreadNotifications > 0,
-          label: Text('${state.unreadNotifications > 99 ? 99 : state.unreadNotifications}'),
-          child: const Icon(Icons.person_outline),
+          isLabelVisible: chatBadge,
+          label: Text(chatLabel),
+          child: const Icon(Icons.chat_bubble_outline),
         ),
         selectedIcon: Badge(
-          isLabelVisible: state.user != null && state.unreadNotifications > 0,
-          label: Text('${state.unreadNotifications > 99 ? 99 : state.unreadNotifications}'),
-          child: const Icon(Icons.person),
+          isLabelVisible: chatBadge,
+          label: Text(chatLabel),
+          child: const Icon(Icons.chat_bubble),
         ),
-        label: const Text('Профиль'),
+        label: const Text('Чаты'),
       ),
     ];
 
@@ -261,15 +282,19 @@ class _HomeShellState extends State<HomeShell> {
         toolbarHeight: landscape && !context.isTablet ? 48 : kToolbarHeight,
         actions: [
           IconButton(
-            tooltip: state.darkMode ? 'Светлая тема' : 'Тёмная тема',
-            onPressed: () => state.setDarkMode(!state.darkMode),
-            icon: Icon(state.darkMode ? Icons.light_mode_outlined : Icons.dark_mode_outlined),
+            tooltip: 'Подать объявление',
+            onPressed: () => _openCreate(context),
+            icon: const Icon(Icons.add_circle_outline),
           ),
-          if (index == 0)
-            IconButton(
-              icon: const Icon(Icons.add_circle_outline),
-              onPressed: () => _openCreate(context),
+          IconButton(
+            tooltip: 'Профиль',
+            onPressed: () => _openProfile(context, state),
+            icon: Badge(
+              isLabelVisible: profileBadge,
+              label: Text(profileLabel),
+              child: const Icon(Icons.person_outline),
             ),
+          ),
         ],
       ),
       body: Row(
@@ -293,19 +318,6 @@ class _HomeShellState extends State<HomeShell> {
               onDestinationSelected: (i) => setState(() => index = i),
               destinations: destinations,
             ),
-      floatingActionButton: index == 0
-          ? (landscape
-              ? FloatingActionButton(
-                  onPressed: () => _openCreate(context),
-                  tooltip: 'Подать',
-                  child: const Icon(Icons.add),
-                )
-              : FloatingActionButton.extended(
-                  onPressed: () => _openCreate(context),
-                  icon: const Icon(Icons.add),
-                  label: const Text('Подать'),
-                ))
-          : null,
     );
   }
 
@@ -1901,8 +1913,8 @@ class _DirectoryTabState extends State<_DirectoryTab> {
   }
 }
 
-class _ProfileTab extends StatelessWidget {
-  const _ProfileTab({required this.user});
+class ProfileScreen extends StatelessWidget {
+  const ProfileScreen({super.key, required this.user});
   final Map<String, dynamic>? user;
 
   @override

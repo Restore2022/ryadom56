@@ -99,6 +99,7 @@ class AppState extends ChangeNotifier {
       directoryFavoriteIds.clear();
       transportFavoriteIds.clear();
       unreadNotifications = 0;
+      unreadChats = 0;
       sessionMessage = 'Сессия истекла. Войдите снова';
       notifyListeners();
     } finally {
@@ -676,6 +677,8 @@ class AppState extends ChangeNotifier {
     return await api.request('/auth/users/$userId/public') as Map<String, dynamic>;
   }
 
+  int unreadChats = 0;
+
   Future<List<dynamic>> loadListingMessages(int listingId) async {
     return await api.request('/listings/$listingId/messages', auth: true) as List<dynamic>;
   }
@@ -687,6 +690,30 @@ class AppState extends ChangeNotifier {
       auth: true,
       body: {'body': body},
     ) as Map<String, dynamic>;
+  }
+
+  Future<List<dynamic>> loadConversations() async {
+    final rows = await api.request('/listings/conversations', auth: true) as List<dynamic>;
+    var unread = 0;
+    for (final row in rows) {
+      if (row is Map && row['unread_count'] is int) {
+        unread += row['unread_count'] as int;
+      }
+    }
+    unreadChats = unread;
+    notifyListeners();
+    return rows;
+  }
+
+  Future<void> refreshUnreadChats() async {
+    if (user == null) {
+      unreadChats = 0;
+      notifyListeners();
+      return;
+    }
+    try {
+      await loadConversations();
+    } catch (_) {}
   }
 
   Future<List<dynamic>> loadReportsAgainstMe() async {
@@ -1094,6 +1121,7 @@ class AppState extends ChangeNotifier {
     directoryFavoriteIds.clear();
     transportFavoriteIds.clear();
     unreadNotifications = 0;
+    unreadChats = 0;
     await loadListings();
     notifyListeners();
   }

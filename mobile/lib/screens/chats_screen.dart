@@ -1,0 +1,254 @@
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:provider/provider.dart';
+
+import '../auth_prompt.dart';
+import '../responsive.dart';
+import '../state/app_state.dart';
+import '../ui_helpers.dart';
+import 'listing_chat_screen.dart';
+
+class ChatsTab extends StatefulWidget {
+  const ChatsTab({super.key});
+
+  @override
+  State<ChatsTab> createState() => _ChatsTabState();
+}
+
+class _ChatsTabState extends State<ChatsTab> {
+  List<dynamic> items = [];
+  bool loading = true;
+  String? error;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  Future<void> _load() async {
+    final state = context.read<AppState>();
+    if (state.user == null) {
+      setState(() {
+        items = [];
+        loading = false;
+        error = null;
+      });
+      return;
+    }
+    setState(() {
+      loading = true;
+      error = null;
+    });
+    try {
+      final rows = await state.loadConversations();
+      if (!mounted) return;
+      setState(() {
+        items = rows;
+        loading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        error = AppState.userFriendlyError(e);
+        loading = false;
+      });
+    }
+  }
+
+  String _fmtWhen(String? iso) {
+    if (iso == null || iso.isEmpty) return '';
+    final dt = DateTime.tryParse(iso)?.toLocal();
+    if (dt == null) return '';
+    final now = DateTime.now();
+    if (dt.year == now.year && dt.month == now.month && dt.day == now.day) {
+      return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    }
+    return '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final scheme = Theme.of(context).colorScheme;
+    final pad = context.isLandscape ? 12.0 : 16.0;
+
+    if (state.user == null) {
+      return ListView(
+        padding: EdgeInsets.all(pad),
+        children: [
+          adaptiveFillMessage(
+            context: context,
+            child: emptyState(
+              context: context,
+              title: 'Чаты',
+              subtitle: 'Войдите, чтобы писать по объявлениям и видеть переписки',
+              icon: Icons.chat_bubble_outline,
+              actionLabel: 'Войти',
+              onAction: () async {
+                final ok = await ensureLoggedIn(context, message: 'Войдите, чтобы открыть чаты');
+                if (ok && mounted) _load();
+              },
+            ),
+          ),
+        ],
+      );
+    }
+
+    return RefreshIndicator(
+      onRefresh: _load,
+      child: loading && items.isEmpty
+          ? ListView(
+              children: const [
+                SizedBox(height: 120),
+                Center(child: CircularProgressIndicator()),
+              ],
+            )
+          : error != null && items.isEmpty
+              ? ListView(
+                  children: [
+                    adaptiveFillMessage(
+                      context: context,
+                      child: errorState(context: context, message: error!, onRetry: _load),
+                    ),
+                  ],
+                )
+              : items.isEmpty
+                  ? ListView(
+                      children: [
+                        adaptiveFillMessage(
+                          context: context,
+                          child: emptyState(
+                            context: context,
+                            title: 'Пока нет чатов',
+                            subtitle: 'Напишите автору из карточки объявления — переписка появится здесь',
+                            icon: Icons.forum_outlined,
+                            actionLabel: 'Обновить',
+                            onAction: _load,
+                          ),
+                        ),
+                      ],
+                    )
+                  : ListView.separated(
+                      padding: EdgeInsets.fromLTRB(pad, 8, pad, 24),
+                      itemCount: items.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 10),
+                      itemBuilder: (_, i) {
+                        final item = items[i] as Map<String, dynamic>;
+                        final unread = item['unread_count'] as int? ?? 0;
+                        final peer = item['peer_name']?.toString();
+                        final title = item['listing_title']?.toString() ?? 'Объявление';
+                        final last = item['last_message']?.toString() ?? '';
+                        final isSeller = item['is_seller'] == true;
+                        return Material(
+                          color: Theme.of(context).cardTheme.color,
+                          borderRadius: BorderRadius.circular(16),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(16),
+                            onTap: () async {
+                              await Navigator.push(
+                                context,
+                                MaterialPageRoute(
+                                  builder: (_) => ListingChatScreen(
+                                    listingId: item['listing_id'] as int,
+                                    listingTitle: title,
+                                  ),
+                                ),
+                              );
+                              if (mounted) _load();
+                            },
+                            child: Container(
+                              padding: const EdgeInsets.all(14),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.45)),
+                              ),
+                              child: Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  CircleAvatar(
+                                    backgroundColor: scheme.primaryContainer,
+                                    child: Icon(
+                                      isSeller ? Icons.storefront : Icons.person_outline,
+                                      color: scheme.onPrimaryContainer,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Row(
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                peer?.isNotEmpty == true ? peer! : (isSeller ? 'Покупатель' : 'Продавец'),
+                                                style: GoogleFonts.manrope(
+                                                  fontWeight: FontWeight.w800,
+                                                  fontSize: 16,
+                                                ),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                            Text(
+                                              _fmtWhen(item['last_message_at']?.toString()),
+                                              style: TextStyle(
+                                                color: scheme.onSurfaceVariant,
+                                                fontSize: 12,
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          title,
+                                          style: TextStyle(
+                                            color: scheme.primary,
+                                            fontWeight: FontWeight.w600,
+                                            fontSize: 13,
+                                          ),
+                                          maxLines: 1,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                        const SizedBox(height: 4),
+                                        Text(
+                                          last,
+                                          style: TextStyle(
+                                            color: scheme.onSurfaceVariant,
+                                            fontWeight: unread > 0 ? FontWeight.w700 : FontWeight.w400,
+                                          ),
+                                          maxLines: 2,
+                                          overflow: TextOverflow.ellipsis,
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  if (unread > 0) ...[
+                                    const SizedBox(width: 8),
+                                    Container(
+                                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                      decoration: BoxDecoration(
+                                        color: scheme.primary,
+                                        borderRadius: BorderRadius.circular(999),
+                                      ),
+                                      child: Text(
+                                        unread > 99 ? '99+' : '$unread',
+                                        style: TextStyle(
+                                          color: scheme.onPrimary,
+                                          fontWeight: FontWeight.w800,
+                                          fontSize: 12,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ],
+                              ),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+    );
+  }
+}

@@ -576,6 +576,17 @@ class ListingMessageOut(BaseModel):
     is_mine: bool = False
 
 
+class ConversationOut(BaseModel):
+    listing_id: int
+    listing_title: str
+    listing_status: str
+    peer_name: str | None = None
+    last_message: str | None = None
+    last_message_at: datetime | None = None
+    unread_count: int = 0
+    is_seller: bool = False
+
+
 class AuthorReportOut(BaseModel):
     id: int
     listing_id: int

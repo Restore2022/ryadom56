@@ -20,6 +20,7 @@ from app.models import (
 )
 from app.schemas import (
     AuthorReportOut,
+    ConversationOut,
     ListingCloseIn,
     ListingCreate,
     ListingImageOut,
@@ -280,6 +281,75 @@ def list_favorites(
     )
     fav_ids = favorite_ids_for(db, user)
     return [to_out(r, fav_ids, viewer=user) for r in db.execute(stmt).scalars().unique().all()]
+
+
+@router.get("/conversations", response_model=list[ConversationOut])
+def list_conversations(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Чаты по объявлениям: как покупатель и как продавец."""
+    as_sender = select(ListingMessage.listing_id).where(ListingMessage.sender_id == user.id)
+    as_author = (
+        select(ListingMessage.listing_id)
+        .join(Listing, Listing.id == ListingMessage.listing_id)
+        .where(Listing.author_id == user.id)
+    )
+    listing_ids = list({*db.execute(as_sender).scalars().all(), *db.execute(as_author).scalars().all()})
+    if not listing_ids:
+        return []
+
+    listings = {
+        row.id: row
+        for row in db.execute(
+            select(Listing)
+            .options(selectinload(Listing.author))
+            .where(Listing.id.in_(listing_ids))
+        ).scalars().all()
+    }
+
+    result: list[ConversationOut] = []
+    for lid in listing_ids:
+        item = listings.get(lid)
+        if not item:
+            continue
+        msgs = db.execute(
+            select(ListingMessage)
+            .where(ListingMessage.listing_id == lid)
+            .order_by(ListingMessage.created_at.desc())
+        ).scalars().all()
+        if not msgs:
+            continue
+        last = msgs[0]
+        unread = sum(1 for m in msgs if m.sender_id != user.id and not m.is_read)
+        is_seller = item.author_id == user.id
+        if is_seller:
+            other_id = next((m.sender_id for m in msgs if m.sender_id != user.id), None)
+        else:
+            other_id = item.author_id
+        peer_name = None
+        if other_id:
+            peer = db.execute(select(User).where(User.id == other_id)).scalar_one_or_none()
+            peer_name = peer.full_name if peer else None
+            if not peer_name and not is_seller and item.author:
+                peer_name = item.author.full_name
+        result.append(
+            ConversationOut(
+                listing_id=item.id,
+                listing_title=item.title,
+                listing_status=item.status.value if hasattr(item.status, "value") else str(item.status),
+                peer_name=peer_name,
+                last_message=last.body,
+                last_message_at=last.created_at,
+                unread_count=unread,
+                is_seller=is_seller,
+            )
+        )
+    result.sort(
+        key=lambda c: c.last_message_at.timestamp() if c.last_message_at else 0,
+        reverse=True,
+    )
+    return result
 
 
 @router.get("/reports/against-me", response_model=list[AuthorReportOut])
