@@ -22,21 +22,26 @@ extension RyadomResponsive on BuildContext {
     return EdgeInsets.fromLTRB(h, v, h, v);
   }
 
-  /// Запас снизу, чтобы последняя карточка не уезжала под NavigationBar.
+  /// Запас под последней карточкой. Scaffold уже поднимает body над NavigationBar —
+  /// большой отступ (100+) давал пустоту; оставляем только «воздух».
   double get listBottomPad {
     final safe = MediaQuery.paddingOf(this).bottom;
-    if (useNavigationRail) return 28 + safe;
-    return (isLandscape ? 88 : 112) + safe;
+    if (useNavigationRail) return 20 + safe * 0.25;
+    return 20 + safe * 0.25;
   }
 
   /// Ограничение ширины контента на больших экранах.
   Widget constrainContent(Widget child) {
-    return Align(
-      alignment: Alignment.topCenter,
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: RyadomBreakpoints.contentMax),
-        child: child,
-      ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final w = constraints.maxWidth.isFinite
+            ? constraints.maxWidth.clamp(0.0, RyadomBreakpoints.contentMax)
+            : RyadomBreakpoints.contentMax;
+        return Align(
+          alignment: Alignment.topCenter,
+          child: SizedBox(width: w, child: child),
+        );
+      },
     );
   }
 }

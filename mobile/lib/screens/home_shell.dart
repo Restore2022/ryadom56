@@ -1558,292 +1558,282 @@ class _DirectoryTabState extends State<_DirectoryTab> {
     final items = state.directory;
     final scheme = Theme.of(context).colorScheme;
     final padH = context.isLandscape ? 12.0 : 16.0;
+    final bottomPad = context.listBottomPad;
 
-    return Column(
-      children: [
-        Flexible(
-          fit: FlexFit.loose,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
+    return RefreshIndicator(
+      onRefresh: () => state.loadDirectory(),
+      child: CustomScrollView(
+        physics: const AlwaysScrollableScrollPhysics(),
+        slivers: [
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(padH, context.isLandscape ? 6 : 12, padH, 8),
+              child: TextField(
+                controller: search,
+                textInputAction: TextInputAction.search,
+                onSubmitted: (v) {
+                  state.setDirectoryFilters(
+                    category: state.directoryCategory,
+                    settlementId: state.directorySettlementId,
+                    query: v,
+                  );
+                },
+                decoration: InputDecoration(
+                  isDense: context.isLandscape,
+                  hintText: 'Школа, больница, магазин…',
+                  prefixIcon: const Icon(Icons.search),
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.tune),
+                    onPressed: () => _openFilters(context, state),
+                  ),
+                ),
+              ),
+            ),
+          ),
+          SliverToBoxAdapter(
+            child: ryadomChipRow(
+              padding: EdgeInsets.symmetric(horizontal: padH),
               children: [
                 Padding(
-                  padding: EdgeInsets.fromLTRB(padH, context.isLandscape ? 6 : 12, padH, 8),
-                  child: TextField(
-                    controller: search,
-                    textInputAction: TextInputAction.search,
-                    onSubmitted: (v) {
-                      state.setDirectoryFilters(
-                        category: state.directoryCategory,
-                        settlementId: state.directorySettlementId,
-                        query: v,
-                      );
-                    },
-                    decoration: InputDecoration(
-                      isDense: context.isLandscape,
-                      hintText: 'Школа, больница, магазин…',
-                      prefixIcon: const Icon(Icons.search),
-                      suffixIcon: IconButton(
-                        icon: const Icon(Icons.tune),
-                        onPressed: () => _openFilters(context, state),
-                      ),
+                  padding: const EdgeInsets.only(right: 8),
+                  child: RyadomFilterChip(
+                    label: 'Все',
+                    selected: state.directoryCategory == null,
+                    onSelected: (_) => state.setDirectoryFilters(
+                      category: null,
+                      settlementId: state.directorySettlementId,
+                      query: search.text,
                     ),
                   ),
                 ),
-                ryadomChipRow(
-                  padding: EdgeInsets.symmetric(horizontal: padH),
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: RyadomFilterChip(
-                        label: 'Все',
-                        selected: state.directoryCategory == null,
-                        onSelected: (_) => state.setDirectoryFilters(
-                          category: null,
-                          settlementId: state.directorySettlementId,
-                          query: search.text,
-                        ),
+                ...dirCategories.map(
+                  (c) => Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: RyadomFilterChip(
+                      label: categoryLabels[c] ?? c,
+                      selected: state.directoryCategory == c,
+                      onSelected: (_) => state.setDirectoryFilters(
+                        category: state.directoryCategory == c ? null : c,
+                        settlementId: state.directorySettlementId,
+                        query: search.text,
                       ),
-                    ),
-                    ...dirCategories.map(
-                      (c) => Padding(
-                        padding: const EdgeInsets.only(right: 8),
-                        child: RyadomFilterChip(
-                          label: categoryLabels[c] ?? c,
-                          selected: state.directoryCategory == c,
-                          onSelected: (_) => state.setDirectoryFilters(
-                            category: state.directoryCategory == c ? null : c,
-                            settlementId: state.directorySettlementId,
-                            query: search.text,
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                Padding(
-                  padding: EdgeInsets.fromLTRB(padH, 8, padH, 6),
-                  child: Align(
-                    alignment: Alignment.centerLeft,
-                    child: Text(
-                      '${items.length} записей',
-                      style: TextStyle(color: scheme.onSurfaceVariant),
                     ),
                   ),
                 ),
               ],
             ),
           ),
-        ),
-        Expanded(
-          child: RefreshIndicator(
-            onRefresh: () => state.loadDirectory(),
-            child: state.directoryLoading && items.isEmpty
-                ? const Center(child: CircularProgressIndicator())
-                : state.directoryOffline && items.isEmpty
-                    ? ListView(
-                        children: [
-                          adaptiveFillMessage(
-                            context: context,
-                            child: errorState(
-                              context: context,
-                              message: state.error ?? AppState.offlineMessage,
-                              onRetry: () => state.loadDirectory(),
-                            ),
-                          ),
-                        ],
-                      )
-                    : items.isEmpty
-                        ? ListView(
-                            children: [
-                              adaptiveFillMessage(
-                                context: context,
-                                child: emptyState(
-                                  context: context,
-                                  title: 'Справочник пуст',
-                                  subtitle: 'Попробуйте другой населённый пункт или категорию',
-                                  icon: Icons.map_outlined,
-                                  actionLabel: 'Обновить',
-                                  onAction: () => state.loadDirectory(),
-                                ),
-                              ),
-                            ],
-                          )
-                        : ListView.separated(
-                            padding: EdgeInsets.fromLTRB(16, 4, 16, context.listBottomPad),
-                            itemCount: items.length,
-                            separatorBuilder: (_, __) => const SizedBox(height: 12),
-                            itemBuilder: (_, i) {
-                              final item = items[i] as Map<String, dynamic>;
-                              final phone = item['phone']?.toString();
-                              final dirFav = item['is_favorited'] == true;
-                              final openNow = item['is_open_now'] == true;
-                              final closedNow = item['is_open_now'] == false;
-                              final mapsUrl = item['maps_url']?.toString();
-                              final hasMap = (mapsUrl != null && mapsUrl.isNotEmpty) ||
-                                  (item['lat'] is num && item['lon'] is num) ||
-                                  (item['address'] != null && '${item['address']}'.isNotEmpty);
-                              return Material(
-                                color: Theme.of(context).cardTheme.color,
-                                borderRadius: BorderRadius.circular(18),
-                                child: InkWell(
-                                  borderRadius: BorderRadius.circular(18),
-                                  onTap: () {
-                                    Navigator.push(
-                                      context,
-                                      MaterialPageRoute(builder: (_) => DirectoryDetailScreen(item: item)),
-                                    );
-                                  },
-                                  child: Container(
-                                    padding: const EdgeInsets.all(16),
-                                    decoration: BoxDecoration(
-                                      borderRadius: BorderRadius.circular(18),
-                                      border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.45)),
+          SliverToBoxAdapter(
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(padH, 8, padH, 6),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  '${items.length} записей',
+                  style: TextStyle(color: scheme.onSurfaceVariant),
+                ),
+              ),
+            ),
+          ),
+          if (state.directoryLoading && items.isEmpty)
+            const SliverFillRemaining(child: Center(child: CircularProgressIndicator()))
+          else if (state.directoryOffline && items.isEmpty)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: errorState(
+                context: context,
+                message: state.error ?? AppState.offlineMessage,
+                onRetry: () => state.loadDirectory(),
+              ),
+            )
+          else if (items.isEmpty)
+            SliverFillRemaining(
+              hasScrollBody: false,
+              child: emptyState(
+                context: context,
+                title: 'Справочник пуст',
+                subtitle: 'Попробуйте другой населённый пункт или категорию',
+                icon: Icons.map_outlined,
+                actionLabel: 'Обновить',
+                onAction: () => state.loadDirectory(),
+              ),
+            )
+          else
+            SliverPadding(
+              padding: EdgeInsets.fromLTRB(padH, 4, padH, bottomPad),
+              sliver: SliverList.separated(
+                itemCount: items.length,
+                separatorBuilder: (_, __) => const SizedBox(height: 12),
+                itemBuilder: (_, i) {
+                  final item = items[i] as Map<String, dynamic>;
+                  final phone = item['phone']?.toString();
+                  final dirFav = item['is_favorited'] == true;
+                  final openNow = item['is_open_now'] == true;
+                  final closedNow = item['is_open_now'] == false;
+                  final mapsUrl = item['maps_url']?.toString();
+                  final hasMap = (mapsUrl != null && mapsUrl.isNotEmpty) ||
+                      (item['lat'] is num && item['lon'] is num) ||
+                      (item['address'] != null && '${item['address']}'.isNotEmpty);
+                  return Material(
+                    color: Theme.of(context).cardTheme.color,
+                    borderRadius: BorderRadius.circular(18),
+                    clipBehavior: Clip.antiAlias,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(18),
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => DirectoryDetailScreen(item: item)),
+                        );
+                      },
+                      child: Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.45)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    categoryLabels[item['category']] ?? '${item['category']}',
+                                    style: TextStyle(
+                                      color: scheme.primary,
+                                      fontWeight: FontWeight.w700,
+                                      fontSize: 12,
                                     ),
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Row(
-                                          children: [
-                                            Expanded(
-                                              child: Text(
-                                                categoryLabels[item['category']] ?? '${item['category']}',
-                                                style: TextStyle(
-                                                  color: scheme.primary,
-                                                  fontWeight: FontWeight.w700,
-                                                  fontSize: 12,
-                                                ),
-                                              ),
-                                            ),
-                                            if (openNow)
-                                              Container(
-                                                margin: const EdgeInsets.only(right: 4),
-                                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                                decoration: BoxDecoration(
-                                                  color: scheme.primaryContainer,
-                                                  borderRadius: BorderRadius.circular(999),
-                                                ),
-                                                child: Text(
-                                                  'Открыто',
-                                                  style: TextStyle(
-                                                    color: scheme.onPrimaryContainer,
-                                                    fontWeight: FontWeight.w800,
-                                                    fontSize: 11,
-                                                  ),
-                                                ),
-                                              )
-                                            else if (closedNow)
-                                              Container(
-                                                margin: const EdgeInsets.only(right: 4),
-                                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                                                decoration: BoxDecoration(
-                                                  color: scheme.surfaceContainerHighest,
-                                                  borderRadius: BorderRadius.circular(999),
-                                                ),
-                                                child: Text(
-                                                  'Закрыто',
-                                                  style: TextStyle(
-                                                    color: scheme.onSurfaceVariant,
-                                                    fontWeight: FontWeight.w700,
-                                                    fontSize: 11,
-                                                  ),
-                                                ),
-                                              ),
-                                            IconButton(
-                                              visualDensity: VisualDensity.compact,
-                                              tooltip: dirFav ? 'Убрать из избранного' : 'В избранное',
-                                              onPressed: () async {
-                                                final ok = await ensureLoggedIn(
-                                                  context,
-                                                  message: 'Войдите, чтобы сохранить организацию',
-                                                );
-                                                if (!ok || !context.mounted) return;
-                                                try {
-                                                  await state.toggleDirectoryFavorite(
-                                                    item['id'] as int,
-                                                    currentlyFavorited: dirFav,
-                                                  );
-                                                } catch (e) {
-                                                  if (context.mounted) {
-                                                    ScaffoldMessenger.of(context).showSnackBar(
-                                                      SnackBar(content: Text(AppState.userFriendlyError(e))),
-                                                    );
-                                                  }
-                                                }
-                                              },
-                                              icon: Icon(
-                                                dirFav ? Icons.bookmark : Icons.bookmark_border,
-                                                color: dirFav ? scheme.primary : scheme.onSurfaceVariant,
-                                              ),
-                                            ),
-                                          ],
-                                        ),
-                                        Text(
-                                          item['title'] as String,
-                                          style: GoogleFonts.manrope(fontSize: 18, fontWeight: FontWeight.w800, height: 1.25),
-                                          softWrap: true,
-                                        ),
-                                        if (item['address'] != null) ...[
-                                          const SizedBox(height: 8),
-                                          Row(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Padding(
-                                                padding: const EdgeInsets.only(top: 2),
-                                                child: Icon(Icons.place_outlined, size: 16, color: scheme.onSurfaceVariant),
-                                              ),
-                                              const SizedBox(width: 4),
-                                              Expanded(
-                                                child: Text(
-                                                  '${item['address']}',
-                                                  style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13, height: 1.3),
-                                                  softWrap: true,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
-                                        ],
-                                        if (item['settlement_name'] != null) ...[
-                                          const SizedBox(height: 4),
-                                          Text(
-                                            '${item['settlement_name']}',
-                                            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
-                                            softWrap: true,
-                                          ),
-                                        ],
-                                        const SizedBox(height: 8),
-                                        Row(
-                                          children: [
-                                            if (phone != null && phone.isNotEmpty)
-                                              IconButton.filledTonal(
-                                                tooltip: 'Позвонить',
-                                                onPressed: () => _call(phone),
-                                                icon: const Icon(Icons.phone, size: 20),
-                                                visualDensity: VisualDensity.compact,
-                                              ),
-                                            if (hasMap) ...[
-                                              if (phone != null && phone.isNotEmpty) const SizedBox(width: 4),
-                                              IconButton.outlined(
-                                                tooltip: 'Карта',
-                                                onPressed: () => _openMaps(mapsUrl, item),
-                                                icon: const Icon(Icons.map_outlined, size: 20),
-                                                visualDensity: VisualDensity.compact,
-                                              ),
-                                            ],
-                                            const Spacer(),
-                                            Icon(Icons.chevron_right, color: scheme.primary),
-                                          ],
-                                        ),
-                                      ],
-                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
                                   ),
                                 ),
-                              );
-                            },
-                          ),
-          ),
-        ),
-      ],
+                                if (openNow)
+                                  Padding(
+                                    padding: const EdgeInsets.only(left: 6),
+                                    child: Text(
+                                      'Открыто',
+                                      style: TextStyle(
+                                        color: scheme.primary,
+                                        fontWeight: FontWeight.w800,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                  )
+                                else if (closedNow)
+                                  Padding(
+                                    padding: const EdgeInsets.only(left: 6),
+                                    child: Text(
+                                      'Закрыто',
+                                      style: TextStyle(
+                                        color: scheme.onSurfaceVariant,
+                                        fontWeight: FontWeight.w700,
+                                        fontSize: 11,
+                                      ),
+                                    ),
+                                  ),
+                                IconButton(
+                                  visualDensity: VisualDensity.compact,
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                                  tooltip: dirFav ? 'Убрать из избранного' : 'В избранное',
+                                  onPressed: () async {
+                                    final ok = await ensureLoggedIn(
+                                      context,
+                                      message: 'Войдите, чтобы сохранить организацию',
+                                    );
+                                    if (!ok || !context.mounted) return;
+                                    try {
+                                      await state.toggleDirectoryFavorite(
+                                        item['id'] as int,
+                                        currentlyFavorited: dirFav,
+                                      );
+                                    } catch (e) {
+                                      if (context.mounted) {
+                                        ScaffoldMessenger.of(context).showSnackBar(
+                                          SnackBar(content: Text(AppState.userFriendlyError(e))),
+                                        );
+                                      }
+                                    }
+                                  },
+                                  icon: Icon(
+                                    dirFav ? Icons.bookmark : Icons.bookmark_border,
+                                    size: 22,
+                                    color: dirFav ? scheme.primary : scheme.onSurfaceVariant,
+                                  ),
+                                ),
+                              ],
+                            ),
+                            Text(
+                              item['title'] as String,
+                              style: GoogleFonts.manrope(fontSize: 17, fontWeight: FontWeight.w800, height: 1.25),
+                              softWrap: true,
+                            ),
+                            if (item['address'] != null) ...[
+                              const SizedBox(height: 6),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Padding(
+                                    padding: const EdgeInsets.only(top: 2),
+                                    child: Icon(Icons.place_outlined, size: 16, color: scheme.onSurfaceVariant),
+                                  ),
+                                  const SizedBox(width: 4),
+                                  Expanded(
+                                    child: Text(
+                                      '${item['address']}',
+                                      style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13, height: 1.3),
+                                      softWrap: true,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
+                            if (item['settlement_name'] != null) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                '${item['settlement_name']}',
+                                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
+                                softWrap: true,
+                              ),
+                            ],
+                            const SizedBox(height: 6),
+                            Row(
+                              children: [
+                                if (phone != null && phone.isNotEmpty)
+                                  IconButton.filledTonal(
+                                    tooltip: 'Позвонить',
+                                    onPressed: () => _call(phone),
+                                    icon: const Icon(Icons.phone, size: 20),
+                                    visualDensity: VisualDensity.compact,
+                                    constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                                  ),
+                                if (hasMap) ...[
+                                  if (phone != null && phone.isNotEmpty) const SizedBox(width: 4),
+                                  IconButton.outlined(
+                                    tooltip: 'Карта',
+                                    onPressed: () => _openMaps(mapsUrl, item),
+                                    icon: const Icon(Icons.map_outlined, size: 20),
+                                    visualDensity: VisualDensity.compact,
+                                    constraints: const BoxConstraints(minWidth: 40, minHeight: 40),
+                                  ),
+                                ],
+                                const Spacer(),
+                                Icon(Icons.chevron_right, color: scheme.primary),
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+        ],
+      ),
     );
   }
 
