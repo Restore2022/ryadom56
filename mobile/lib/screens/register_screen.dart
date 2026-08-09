@@ -5,6 +5,7 @@ import '../state/app_state.dart';
 import '../ui_helpers.dart';
 import 'home_shell.dart';
 import 'legal_doc_screen.dart';
+import 'pin_setup_screen.dart';
 
 class RegisterScreen extends StatefulWidget {
   const RegisterScreen({super.key});
@@ -22,8 +23,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
   bool terms = false;
   bool privacy = false;
   bool listingRules = false;
+  bool obscure = true;
   String? error;
   bool busy = false;
+
+  @override
+  void dispose() {
+    name.dispose();
+    email.dispose();
+    password.dispose();
+    phone.dispose();
+    super.dispose();
+  }
 
   void _openLegal(String slug, String title) {
     Navigator.push(context, fastRoute(LegalDocScreen(slug: slug, title: title)));
@@ -67,9 +78,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
         'accepted_privacy': privacy,
         'accepted_listing_rules': listingRules,
       });
-      if (context.mounted) {
-        Navigator.pushNamedAndRemoveUntil(context, '/home', (route) => false);
-      }
+      if (!mounted) return;
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(builder: (_) => const PinSetupScreen()),
+        (route) => false,
+      );
     } catch (e) {
       if (mounted) setState(() => error = friendlyError(e, context: 'register'));
     } finally {
@@ -125,8 +139,15 @@ class _RegisterScreenState extends State<RegisterScreen> {
           const SizedBox(height: 12),
           TextField(
             controller: password,
-            obscureText: true,
-            decoration: const InputDecoration(labelText: 'Пароль (минимум 6)', border: OutlineInputBorder()),
+            obscureText: obscure,
+            decoration: InputDecoration(
+              labelText: 'Пароль (минимум 6)',
+              border: const OutlineInputBorder(),
+              suffixIcon: IconButton(
+                onPressed: busy ? null : () => setState(() => obscure = !obscure),
+                icon: Icon(obscure ? Icons.visibility : Icons.visibility_off),
+              ),
+            ),
           ),
           const SizedBox(height: 12),
           TextField(controller: phone, decoration: const InputDecoration(labelText: 'Телефон (необязательно)', border: OutlineInputBorder())),

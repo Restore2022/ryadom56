@@ -7,6 +7,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api.dart';
+import '../pin_storage.dart';
 
 class AppState extends ChangeNotifier {
   AppState(this.api) {
@@ -16,6 +17,8 @@ class AppState extends ChangeNotifier {
   final ApiClient api;
   bool booting = true;
   bool darkMode = false;
+  bool hasPin = false;
+  bool pinUnlocked = false;
   Map<String, dynamic>? user;
   List<dynamic> settlements = [];
   List<dynamic> listings = [];
@@ -144,12 +147,27 @@ class AppState extends ChangeNotifier {
   static const _newsCachePrefix = 'cache_news_json';
   static const _transportCachePrefix = 'cache_transport_';
 
+  /// Блокируем приложение PIN только если сессия уже восстановлена.
+  /// Если пользователь вышел — PIN предлагается на экране входа.
+  bool get needsPinUnlock => hasPin && !pinUnlocked && user != null;
+
+  bool get canUnlockWithPin => hasPin && _hasPinSession;
+
+  bool _hasPinSession = false;
+
+  void markPinUnlocked() {
+    pinUnlocked = true;
+    notifyListeners();
+  }
+
   Future<void> bootstrap() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       darkMode = prefs.getBool('dark_mode') ?? false;
       onboardingDone = prefs.getBool(_onboardingKey) ?? false;
       preferredSettlementId = prefs.getInt(_settlementPrefKey);
+      hasPin = await PinStorage.hasPin();
+      _hasPinSession = (await PinStorage.readSessionToken()) != null;
       await _loadSavedFilters(prefs);
       await _loadViewHistory(prefs);
       try {
@@ -162,25 +180,67 @@ class AppState extends ChangeNotifier {
         try {
           user = await api.request('/auth/me', auth: true) as Map<String, dynamic>;
           await reportDeviceInfo();
+          await PinStorage.saveSessionToken(token);
+          _hasPinSession = true;
+          // Если PIN задан — на холодном старте просим его снова.
+          pinUnlocked = !hasPin;
         } on ApiException catch (e) {
           if (e.statusCode == 401 || e.statusCode == 403) {
             await api.setToken(null);
             user = null;
             sessionMessage = 'Сессия истекла. Войдите снова';
+            pinUnlocked = false;
           }
         } catch (_) {
           await api.setToken(null);
           user = null;
+          pinUnlocked = false;
         }
+      } else if (hasPin && _hasPinSession) {
+        // Токен сброшен, но PIN + резервная сессия есть — можно войти по PIN.
+        pinUnlocked = false;
+      } else {
+        pinUnlocked = true;
       }
       await Future.wait([loadListings(), loadDirectory()]);
-      if (user != null) await refreshUnreadNotifications();
+      if (user != null && pinUnlocked) await refreshUnreadNotifications();
       if (!listingsOffline && !directoryOffline) error = null;
     } catch (e) {
       error = userFriendlyError(e);
     } finally {
       booting = false;
       notifyListeners();
+    }
+  }
+
+  Future<bool> unlockWithPin(String pin) async {
+    final ok = await PinStorage.verifyPin(pin);
+    if (!ok) return false;
+    var token = await api.token;
+    token ??= await PinStorage.readSessionToken();
+    if (token == null || token.isEmpty) {
+      pinUnlocked = false;
+      notifyListeners();
+      return false;
+    }
+    await api.setToken(token);
+    try {
+      user = await api.request('/auth/me', auth: true) as Map<String, dynamic>;
+      await PinStorage.saveSessionToken(token);
+      _hasPinSession = true;
+      await reportDeviceInfo();
+      await refreshPublic();
+      await refreshUnreadNotifications();
+      pinUnlocked = true;
+      hasPin = true;
+      notifyListeners();
+      return true;
+    } catch (_) {
+      await api.setToken(null);
+      user = null;
+      pinUnlocked = false;
+      notifyListeners();
+      return false;
     }
   }
 
@@ -976,8 +1036,13 @@ class AppState extends ChangeNotifier {
       'email': email,
       'password': password,
     }) as Map<String, dynamic>;
-    await api.setToken(data['access_token'] as String);
+    final token = data['access_token'] as String;
+    await api.setToken(token);
+    await PinStorage.saveSessionToken(token);
+    _hasPinSession = true;
     user = await api.request('/auth/me', auth: true) as Map<String, dynamic>;
+    hasPin = await PinStorage.hasPin();
+    pinUnlocked = true;
     await reportDeviceInfo();
     await refreshPublic();
     await refreshUnreadNotifications();
@@ -986,8 +1051,12 @@ class AppState extends ChangeNotifier {
 
   Future<void> register(Map<String, dynamic> body) async {
     final data = await api.request('/auth/register', method: 'POST', body: body) as Map<String, dynamic>;
-    await api.setToken(data['access_token'] as String);
+    final token = data['access_token'] as String;
+    await api.setToken(token);
+    await PinStorage.saveSessionToken(token);
+    _hasPinSession = true;
     user = await api.request('/auth/me', auth: true) as Map<String, dynamic>;
+    pinUnlocked = true;
     await reportDeviceInfo();
     await refreshPublic();
     await refreshUnreadNotifications();
@@ -995,8 +1064,16 @@ class AppState extends ChangeNotifier {
   }
 
   Future<void> logout() async {
+    // Резервный токен оставляем, если PIN есть — можно войти по PIN снова.
+    final keepPinSession = hasPin || await PinStorage.hasPin();
+    final current = await api.token;
+    if (keepPinSession && current != null) {
+      await PinStorage.saveSessionToken(current);
+      _hasPinSession = true;
+    }
     await api.setToken(null);
     user = null;
+    pinUnlocked = false;
     favorites = [];
     favoriteIds.clear();
     directoryFavoriteIds.clear();

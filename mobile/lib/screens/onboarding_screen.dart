@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
+import '../responsive.dart';
 import '../state/app_state.dart';
 import 'home_shell.dart';
 
@@ -62,47 +63,57 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     title: 'Рядом56 — всё о районе',
                     body: 'Объявления соседей, справочник организаций, транспорт, афиша и новости Сакмарского района — в одном приложении.',
                   ),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 28),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.place_outlined, size: 72, color: scheme.primary),
-                        const SizedBox(height: 24),
-                        Text(
-                          'Выберите своё село',
-                          textAlign: TextAlign.center,
-                          style: GoogleFonts.unbounded(fontSize: 24, fontWeight: FontWeight.w600),
-                        ),
-                        const SizedBox(height: 12),
-                        Text(
-                          'Покажем события, транспорт и новости ближе к вам. Можно изменить в профиле.',
-                          textAlign: TextAlign.center,
-                          style: TextStyle(color: scheme.onSurfaceVariant, height: 1.4),
-                        ),
-                        const SizedBox(height: 24),
-                        DropdownButtonFormField<int?>(
-                          value: settlementId != null && state.settlements.any((s) => s['id'] == settlementId)
-                              ? settlementId
-                              : null,
-                          isExpanded: true,
-                          decoration: const InputDecoration(
-                            labelText: 'Населённый пункт',
-                            border: OutlineInputBorder(),
-                          ),
-                          items: [
-                            const DropdownMenuItem(value: null, child: Text('Весь район')),
-                            ...state.settlements.map(
-                              (s) => DropdownMenuItem(
-                                value: s['id'] as int,
-                                child: Text(s['display_name'] as String),
+                  LayoutBuilder(
+                    builder: (context, constraints) {
+                      final iconSize = context.isLandscape ? 48.0 : 72.0;
+                      final titleSize = context.isLandscape ? 20.0 : 24.0;
+                      return SingleChildScrollView(
+                        padding: const EdgeInsets.symmetric(horizontal: 28),
+                        child: ConstrainedBox(
+                          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(Icons.place_outlined, size: iconSize, color: scheme.primary),
+                              SizedBox(height: context.isLandscape ? 12 : 24),
+                              Text(
+                                'Выберите своё село',
+                                textAlign: TextAlign.center,
+                                style: GoogleFonts.unbounded(fontSize: titleSize, fontWeight: FontWeight.w600),
                               ),
-                            ),
-                          ],
-                          onChanged: (v) => setState(() => settlementId = v),
+                              const SizedBox(height: 12),
+                              Text(
+                                'Покажем события, транспорт и новости ближе к вам. Можно изменить в профиле.',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(color: scheme.onSurfaceVariant, height: 1.4),
+                              ),
+                              SizedBox(height: context.isLandscape ? 16 : 24),
+                              DropdownButtonFormField<int?>(
+                                value: settlementId != null && state.settlements.any((s) => s['id'] == settlementId)
+                                    ? settlementId
+                                    : null,
+                                isExpanded: true,
+                                isDense: context.isLandscape,
+                                decoration: const InputDecoration(
+                                  labelText: 'Населённый пункт',
+                                  border: OutlineInputBorder(),
+                                ),
+                                items: [
+                                  const DropdownMenuItem(value: null, child: Text('Весь район')),
+                                  ...state.settlements.map(
+                                    (s) => DropdownMenuItem(
+                                      value: s['id'] as int,
+                                      child: Text(s['display_name'] as String),
+                                    ),
+                                  ),
+                                ],
+                                onChanged: (v) => setState(() => settlementId = v),
+                              ),
+                            ],
+                          ),
                         ),
-                      ],
-                    ),
+                      );
+                    },
                   ),
                   _Slide(
                     icon: Icons.add_circle_outline,
@@ -155,26 +166,42 @@ class _Slide extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 28),
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          Icon(icon, size: 72, color: scheme.primary),
-          const SizedBox(height: 24),
-          Text(
-            title,
-            textAlign: TextAlign.center,
-            style: GoogleFonts.unbounded(fontSize: 24, fontWeight: FontWeight.w600, height: 1.2),
+    final landscape = context.isLandscape;
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        return SingleChildScrollView(
+          padding: const EdgeInsets.symmetric(horizontal: 28),
+          child: ConstrainedBox(
+            constraints: BoxConstraints(minHeight: constraints.maxHeight),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                Icon(icon, size: landscape ? 48 : 72, color: scheme.primary),
+                SizedBox(height: landscape ? 12 : 24),
+                Text(
+                  title,
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.unbounded(
+                    fontSize: landscape ? 20 : 24,
+                    fontWeight: FontWeight.w600,
+                    height: 1.2,
+                  ),
+                ),
+                SizedBox(height: landscape ? 10 : 16),
+                Text(
+                  body,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: scheme.onSurfaceVariant,
+                    height: 1.45,
+                    fontSize: landscape ? 14 : 15,
+                  ),
+                ),
+              ],
+            ),
           ),
-          const SizedBox(height: 16),
-          Text(
-            body,
-            textAlign: TextAlign.center,
-            style: TextStyle(color: scheme.onSurfaceVariant, height: 1.45, fontSize: 15),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 }

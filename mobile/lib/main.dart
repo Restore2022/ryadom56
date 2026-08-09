@@ -7,6 +7,7 @@ import 'api.dart';
 import 'screens/home_shell.dart';
 import 'screens/login_screen.dart';
 import 'screens/onboarding_screen.dart';
+import 'screens/pin_unlock_screen.dart';
 import 'screens/register_screen.dart';
 import 'state/app_state.dart';
 import 'theme.dart';
@@ -47,6 +48,14 @@ class RyadomApp extends StatelessWidget {
             theme: buildRyadomTheme(Brightness.light),
             darkTheme: buildRyadomTheme(Brightness.dark),
             themeMode: state.darkMode ? ThemeMode.dark : ThemeMode.light,
+            builder: (context, child) {
+              final mq = MediaQuery.of(context);
+              final scale = mq.textScaler.scale(1).clamp(0.9, 1.25);
+              return MediaQuery(
+                data: mq.copyWith(textScaler: TextScaler.linear(scale)),
+                child: child ?? const SizedBox.shrink(),
+              );
+            },
             routes: {
               '/': (_) => const RootGate(),
               '/login': (_) => const LoginScreen(),
@@ -81,6 +90,7 @@ class RootGate extends StatelessWidget {
       );
     }
     if (!state.onboardingDone) return const OnboardingScreen();
+    if (state.needsPinUnlock) return const PinUnlockScreen();
     return const HomeShell();
   }
 }

@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
-import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../auth_prompt.dart';
@@ -66,21 +65,6 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
         });
       }
     }
-  }
-
-  Future<void> _share() async {
-    final data = item;
-    if (data == null) return;
-    final price = data['price'] != null ? '${data['price']} ₽' : 'цена не указана';
-    final place = data['settlement_name'] ?? '';
-    final text = [
-      '${data['title']}',
-      price,
-      if ('$place'.isNotEmpty) '$place',
-      '',
-      'Смотрите в приложении Рядом56',
-    ].join('\n');
-    await SharePlus.instance.share(ShareParams(text: text));
   }
 
   Future<void> _message(String? phone, {required bool whatsapp}) async {
@@ -316,12 +300,6 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
       appBar: AppBar(
         title: const Text('Объявление'),
         actions: [
-          if (data != null)
-            IconButton(
-              tooltip: 'Поделиться',
-              onPressed: _share,
-              icon: const Icon(Icons.share_outlined),
-            ),
           if (data != null && !isOwner)
             IconButton(
               tooltip: favorited ? 'Убрать из избранного' : 'В избранное',

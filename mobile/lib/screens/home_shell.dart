@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../auth_prompt.dart';
 import '../event_actions.dart';
+import '../responsive.dart';
 import '../state/app_state.dart';
 import '../ui_helpers.dart';
 import '../update_service.dart';
@@ -184,9 +185,61 @@ class _HomeShellState extends State<HomeShell> {
       const _DirectoryTab(),
       _ProfileTab(user: state.user),
     ];
+    final useRail = context.useNavigationRail;
+    final landscape = context.isLandscape;
+
+    final destinations = <NavigationDestination>[
+      const NavigationDestination(icon: Icon(Icons.storefront_outlined), selectedIcon: Icon(Icons.storefront), label: 'Лента'),
+      const NavigationDestination(icon: Icon(Icons.event_outlined), selectedIcon: Icon(Icons.event), label: 'Афиша'),
+      const NavigationDestination(
+        icon: Icon(Icons.directions_bus_outlined),
+        selectedIcon: Icon(Icons.directions_bus),
+        label: 'Транспорт',
+      ),
+      const NavigationDestination(icon: Icon(Icons.map_outlined), selectedIcon: Icon(Icons.map), label: 'Места'),
+      NavigationDestination(
+        icon: Badge(
+          isLabelVisible: state.user != null && state.unreadNotifications > 0,
+          label: Text('${state.unreadNotifications > 99 ? 99 : state.unreadNotifications}'),
+          child: const Icon(Icons.person_outline),
+        ),
+        selectedIcon: Badge(
+          isLabelVisible: state.user != null && state.unreadNotifications > 0,
+          label: Text('${state.unreadNotifications > 99 ? 99 : state.unreadNotifications}'),
+          child: const Icon(Icons.person),
+        ),
+        label: 'Профиль',
+      ),
+    ];
+
+    final railDestinations = [
+      const NavigationRailDestination(icon: Icon(Icons.storefront_outlined), selectedIcon: Icon(Icons.storefront), label: Text('Лента')),
+      const NavigationRailDestination(icon: Icon(Icons.event_outlined), selectedIcon: Icon(Icons.event), label: Text('Афиша')),
+      const NavigationRailDestination(
+        icon: Icon(Icons.directions_bus_outlined),
+        selectedIcon: Icon(Icons.directions_bus),
+        label: Text('Транспорт'),
+      ),
+      const NavigationRailDestination(icon: Icon(Icons.map_outlined), selectedIcon: Icon(Icons.map), label: Text('Места')),
+      NavigationRailDestination(
+        icon: Badge(
+          isLabelVisible: state.user != null && state.unreadNotifications > 0,
+          label: Text('${state.unreadNotifications > 99 ? 99 : state.unreadNotifications}'),
+          child: const Icon(Icons.person_outline),
+        ),
+        selectedIcon: Badge(
+          isLabelVisible: state.user != null && state.unreadNotifications > 0,
+          label: Text('${state.unreadNotifications > 99 ? 99 : state.unreadNotifications}'),
+          child: const Icon(Icons.person),
+        ),
+        label: const Text('Профиль'),
+      ),
+    ];
+
     return Scaffold(
       appBar: AppBar(
         title: Text(titles[index]),
+        toolbarHeight: landscape && !context.isTablet ? 48 : kToolbarHeight,
         actions: [
           IconButton(
             tooltip: state.darkMode ? 'Светлая тема' : 'Тёмная тема',
@@ -200,40 +253,39 @@ class _HomeShellState extends State<HomeShell> {
             ),
         ],
       ),
-      body: pages[index],
-      bottomNavigationBar: NavigationBar(
-        selectedIndex: index,
-        onDestinationSelected: (i) => setState(() => index = i),
-        destinations: [
-          const NavigationDestination(icon: Icon(Icons.storefront_outlined), selectedIcon: Icon(Icons.storefront), label: 'Лента'),
-          const NavigationDestination(icon: Icon(Icons.event_outlined), selectedIcon: Icon(Icons.event), label: 'Афиша'),
-          const NavigationDestination(
-            icon: Icon(Icons.directions_bus_outlined),
-            selectedIcon: Icon(Icons.directions_bus),
-            label: 'Транспорт',
-          ),
-          const NavigationDestination(icon: Icon(Icons.map_outlined), selectedIcon: Icon(Icons.map), label: 'Места'),
-          NavigationDestination(
-            icon: Badge(
-              isLabelVisible: state.user != null && state.unreadNotifications > 0,
-              label: Text('${state.unreadNotifications > 99 ? 99 : state.unreadNotifications}'),
-              child: const Icon(Icons.person_outline),
+      body: Row(
+        children: [
+          if (useRail)
+            NavigationRail(
+              selectedIndex: index,
+              onDestinationSelected: (i) => setState(() => index = i),
+              labelType: NavigationRailLabelType.all,
+              destinations: railDestinations,
             ),
-            selectedIcon: Badge(
-              isLabelVisible: state.user != null && state.unreadNotifications > 0,
-              label: Text('${state.unreadNotifications > 99 ? 99 : state.unreadNotifications}'),
-              child: const Icon(Icons.person),
-            ),
-            label: 'Профиль',
-          ),
+          if (useRail) const VerticalDivider(width: 1),
+          Expanded(child: context.constrainContent(pages[index])),
         ],
       ),
+      bottomNavigationBar: useRail
+          ? null
+          : NavigationBar(
+              height: landscape ? 64 : null,
+              selectedIndex: index,
+              onDestinationSelected: (i) => setState(() => index = i),
+              destinations: destinations,
+            ),
       floatingActionButton: index == 0
-          ? FloatingActionButton.extended(
-              onPressed: () => _openCreate(context),
-              icon: const Icon(Icons.add),
-              label: const Text('Подать'),
-            )
+          ? (landscape
+              ? FloatingActionButton(
+                  onPressed: () => _openCreate(context),
+                  tooltip: 'Подать',
+                  child: const Icon(Icons.add),
+                )
+              : FloatingActionButton.extended(
+                  onPressed: () => _openCreate(context),
+                  icon: const Icon(Icons.add),
+                  label: const Text('Подать'),
+                ))
           : null,
     );
   }
@@ -313,213 +365,229 @@ class _ListingsTabState extends State<_ListingsTab> {
     final state = context.watch<AppState>();
     final items = state.listings;
     final scheme = Theme.of(context).colorScheme;
+    final padH = context.isLandscape ? 12.0 : 16.0;
+    final bottomPad = context.listBottomPad;
+    final visibleAlerts =
+        activeAlerts.where((a) => !dismissedAlertIds.contains(a['id'] as int?)).toList();
+    // В альбоме не забиваем экран пачкой баннеров
+    final alertsToShow = context.isLandscape ? visibleAlerts.take(1).toList() : visibleAlerts;
 
-    return Column(
-      children: [
-        if (state.hasConnectionIssue)
-          Material(
-            color: scheme.errorContainer,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 16, 10),
-              child: Row(
-                children: [
-                  Icon(Icons.wifi_off, color: scheme.onErrorContainer),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      AppState.offlineMessage,
-                      style: TextStyle(
-                        color: scheme.onErrorContainer,
-                        fontWeight: FontWeight.w600,
-                        fontSize: 13,
-                      ),
+    return RefreshIndicator(
+      onRefresh: () async {
+        await Future.wait([state.loadListings(), _loadAlert()]);
+      },
+      child: NotificationListener<ScrollNotification>(
+        onNotification: (n) {
+          if (n.metrics.pixels >= n.metrics.maxScrollExtent - 240) {
+            state.loadMoreListings();
+          }
+          return false;
+        },
+        child: CustomScrollView(
+          physics: const AlwaysScrollableScrollPhysics(),
+          slivers: [
+            if (state.hasConnectionIssue)
+              SliverToBoxAdapter(
+                child: Material(
+                  color: scheme.errorContainer,
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(padH, 8, padH, 8),
+                    child: Row(
+                      children: [
+                        Icon(Icons.wifi_off, color: scheme.onErrorContainer, size: 20),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            AppState.offlineMessage,
+                            style: TextStyle(
+                              color: scheme.onErrorContainer,
+                              fontWeight: FontWeight.w600,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                        TextButton(
+                          onPressed: () => state.refreshPublic(),
+                          child: const Text('Ещё раз'),
+                        ),
+                      ],
                     ),
                   ),
-                  TextButton(
-                    onPressed: () => state.refreshPublic(),
-                    child: const Text('Ещё раз'),
+                ),
+              ),
+            ...alertsToShow.map(
+              (alert) => SliverToBoxAdapter(
+                child: Material(
+                  color: _alertBg(context, alert['kind']?.toString()),
+                  child: Padding(
+                    padding: EdgeInsets.fromLTRB(padH, context.isLandscape ? 6 : 10, 8, context.isLandscape ? 6 : 10),
+                    child: Row(
+                      children: [
+                        Icon(
+                          alert['kind'] == 'danger'
+                              ? Icons.warning_amber_rounded
+                              : alert['kind'] == 'warn'
+                                  ? Icons.info_outline
+                                  : Icons.campaign_outlined,
+                          color: _alertFg(context, alert['kind']?.toString()),
+                          size: 20,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            '${alert['message']}',
+                            maxLines: context.isLandscape ? 2 : 4,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: _alertFg(context, alert['kind']?.toString()),
+                              fontWeight: FontWeight.w600,
+                              height: 1.3,
+                              fontSize: 13,
+                            ),
+                          ),
+                        ),
+                        IconButton(
+                          visualDensity: VisualDensity.compact,
+                          onPressed: () {
+                            final id = alert['id'];
+                            if (id is int) setState(() => dismissedAlertIds.add(id));
+                          },
+                          icon: Icon(Icons.close, color: _alertFg(context, alert['kind']?.toString())),
+                        ),
+                      ],
+                    ),
                   ),
-                ],
+                ),
               ),
             ),
-          ),
-        if (activeAlerts.isNotEmpty)
-          ...activeAlerts.where((a) => !dismissedAlertIds.contains(a['id'] as int?)).map(
-            (alert) => Material(
-              color: _alertBg(context, alert['kind']?.toString()),
+            SliverToBoxAdapter(
               child: Padding(
-                padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(
-                      alert['kind'] == 'danger'
-                          ? Icons.warning_amber_rounded
-                          : alert['kind'] == 'warn'
-                              ? Icons.info_outline
-                              : Icons.campaign_outlined,
-                      color: _alertFg(context, alert['kind']?.toString()),
+                padding: EdgeInsets.fromLTRB(padH, 8, padH, 6),
+                child: TextField(
+                  controller: search,
+                  textInputAction: TextInputAction.search,
+                  onSubmitted: (v) => state.applyListingFilters(query: v),
+                  decoration: InputDecoration(
+                    isDense: context.isLandscape,
+                    hintText: 'Поиск по объявлениям',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: IconButton(
+                      icon: const Icon(Icons.tune),
+                      onPressed: () => _openFilters(context, state),
                     ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: Text(
-                        '${alert['message']}',
-                        style: TextStyle(
-                          color: _alertFg(context, alert['kind']?.toString()),
-                          fontWeight: FontWeight.w600,
-                          height: 1.35,
-                        ),
+                  ),
+                ),
+              ),
+            ),
+            SliverToBoxAdapter(
+              child: SizedBox(
+                height: 40,
+                child: ListView(
+                  scrollDirection: Axis.horizontal,
+                  padding: EdgeInsets.symmetric(horizontal: padH),
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: RyadomFilterChip(
+                        label: 'С фото',
+                        selected: state.filterHasPhotos,
+                        onSelected: (_) => state.applyListingFilters(hasPhotos: !state.filterHasPhotos),
                       ),
                     ),
-                    IconButton(
-                      visualDensity: VisualDensity.compact,
-                      onPressed: () {
-                        final id = alert['id'];
-                        if (id is int) setState(() => dismissedAlertIds.add(id));
-                      },
-                      icon: Icon(
-                        Icons.close,
-                        color: _alertFg(context, alert['kind']?.toString()),
+                    ...['goods', 'services', 'jobs', 'rent', 'free', 'lost_found'].map(
+                      (c) => Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: RyadomFilterChip(
+                          label: categoryLabels[c]!,
+                          selected: state.filterCategory == c,
+                          onSelected: (_) => state.applyListingFilters(
+                            category: state.filterCategory == c ? '' : c,
+                            clearCategory: state.filterCategory == c,
+                          ),
+                        ),
                       ),
                     ),
                   ],
                 ),
               ),
             ),
-          ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-          child: TextField(
-            controller: search,
-            textInputAction: TextInputAction.search,
-            onSubmitted: (v) => state.applyListingFilters(query: v),
-            decoration: InputDecoration(
-              hintText: 'Поиск по объявлениям',
-              prefixIcon: const Icon(Icons.search),
-              suffixIcon: IconButton(
-                icon: const Icon(Icons.tune),
-                onPressed: () => _openFilters(context, state),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(padH, 8, padH, 4),
+                child: Row(
+                  children: [
+                    Text(
+                      state.listingsTotal > 0
+                          ? '${state.listingsTotal} объявл.'
+                          : '${items.length} объявл.',
+                      style: TextStyle(color: scheme.onSurfaceVariant),
+                    ),
+                    const Spacer(),
+                    DropdownButtonHideUnderline(
+                      child: DropdownButton<String>(
+                        value: state.sort,
+                        items: sortLabels.entries
+                            .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value)))
+                            .toList(),
+                        onChanged: (v) {
+                          if (v != null) state.applyListingFilters(sortBy: v);
+                        },
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ),
-          ),
-        ),
-        SizedBox(
-          height: 44,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: RyadomFilterChip(
-                  label: 'С фото',
-                  selected: state.filterHasPhotos,
-                  onSelected: (_) => state.applyListingFilters(hasPhotos: !state.filterHasPhotos),
-                ),
-              ),
-              ...['goods', 'services', 'jobs', 'rent', 'free', 'lost_found'].map(
-                (c) => Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: RyadomFilterChip(
-                    label: categoryLabels[c]!,
-                    selected: state.filterCategory == c,
-                    onSelected: (_) => state.applyListingFilters(
-                      category: state.filterCategory == c ? '' : c,
-                      clearCategory: state.filterCategory == c,
-                    ),
+            if (state.listingsLoading && items.isEmpty)
+              const SliverFillRemaining(hasScrollBody: false, child: Center(child: CircularProgressIndicator()))
+            else if (state.listingsOffline && items.isEmpty)
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: adaptiveFillMessage(
+                  context: context,
+                  child: errorState(
+                    context: context,
+                    message: state.error ?? AppState.offlineMessage,
+                    onRetry: () => state.loadListings(),
                   ),
                 ),
-              ),
-            ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
-          child: Row(
-            children: [
-              Text(
-                state.listingsTotal > 0
-                    ? '${state.listingsTotal} объявл.'
-                    : '${items.length} объявл.',
-                style: TextStyle(color: scheme.onSurfaceVariant),
-              ),
-              const Spacer(),
-              DropdownButtonHideUnderline(
-                child: DropdownButton<String>(
-                  value: state.sort,
-                  items: sortLabels.entries
-                      .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value)))
-                      .toList(),
-                  onChanged: (v) {
-                    if (v != null) state.applyListingFilters(sortBy: v);
+              )
+            else if (items.isEmpty)
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: adaptiveFillMessage(
+                  context: context,
+                  child: emptyState(
+                    context: context,
+                    title: 'Пока нет объявлений',
+                    subtitle: 'Измените фильтры или подайте своё объявление',
+                    icon: Icons.storefront_outlined,
+                    actionLabel: 'Обновить',
+                    onAction: () => state.loadListings(),
+                  ),
+                ),
+              )
+            else
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(padH, 4, padH, bottomPad),
+                sliver: SliverList.separated(
+                  itemCount: items.length + (state.listingsLoadingMore ? 1 : 0),
+                  separatorBuilder: (_, __) => const SizedBox(height: 12),
+                  itemBuilder: (_, i) {
+                    if (i >= items.length) {
+                      return const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 16),
+                        child: Center(child: CircularProgressIndicator()),
+                      );
+                    }
+                    final item = items[i] as Map<String, dynamic>;
+                    return _ListingCard(item: item);
                   },
                 ),
               ),
-            ],
-          ),
+          ],
         ),
-        Expanded(
-          child: RefreshIndicator(
-            onRefresh: () async {
-              await Future.wait([state.loadListings(), _loadAlert()]);
-            },
-            child: state.listingsLoading && items.isEmpty
-                ? const Center(child: CircularProgressIndicator())
-                : state.listingsOffline && items.isEmpty
-                    ? ListView(
-                        children: [
-                          SizedBox(
-                            height: 280,
-                            child: errorState(
-                              context: context,
-                              message: state.error ?? AppState.offlineMessage,
-                              onRetry: () => state.loadListings(),
-                            ),
-                          ),
-                        ],
-                      )
-                : items.isEmpty
-                    ? ListView(
-                        children: [
-                          SizedBox(
-                            height: 280,
-                            child: emptyState(
-                              context: context,
-                              title: 'Пока нет объявлений',
-                              subtitle: 'Измените фильтры или подайте своё объявление',
-                              icon: Icons.storefront_outlined,
-                              actionLabel: 'Обновить',
-                              onAction: () => state.loadListings(),
-                            ),
-                          ),
-                        ],
-                      )
-                    : NotificationListener<ScrollNotification>(
-                        onNotification: (n) {
-                          if (n.metrics.pixels >= n.metrics.maxScrollExtent - 240) {
-                            state.loadMoreListings();
-                          }
-                          return false;
-                        },
-                        child: ListView.separated(
-                          padding: const EdgeInsets.fromLTRB(16, 4, 16, 100),
-                          itemCount: items.length + (state.listingsLoadingMore ? 1 : 0),
-                          separatorBuilder: (_, __) => const SizedBox(height: 12),
-                          itemBuilder: (_, i) {
-                            if (i >= items.length) {
-                              return const Padding(
-                                padding: EdgeInsets.symmetric(vertical: 16),
-                                child: Center(child: CircularProgressIndicator()),
-                              );
-                            }
-                            final item = items[i] as Map<String, dynamic>;
-                            return _ListingCard(item: item);
-                          },
-                        ),
-                      ),
-          ),
-        ),
-      ],
+      ),
     );
   }
 
@@ -885,56 +953,70 @@ class _EventsTabState extends State<_EventsTab> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final settlements = context.watch<AppState>().settlements;
+    final padH = context.isLandscape ? 12.0 : 16.0;
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-          child: DropdownButtonFormField<int?>(
-            value: settlementId != null && settlements.any((s) => s['id'] == settlementId) ? settlementId : null,
-            isExpanded: true,
-            decoration: const InputDecoration(
-              labelText: 'Населённый пункт',
-              prefixIcon: Icon(Icons.place_outlined),
-              border: OutlineInputBorder(),
-            ),
-            items: [
-              const DropdownMenuItem<int?>(value: null, child: Text('Весь район')),
-              ...settlements.map(
-                (s) => DropdownMenuItem<int?>(
-                  value: s['id'] as int,
-                  child: Text(s['display_name'] as String, overflow: TextOverflow.ellipsis),
+        Flexible(
+          fit: FlexFit.loose,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: EdgeInsets.fromLTRB(padH, context.isLandscape ? 6 : 12, padH, 8),
+                  child: DropdownButtonFormField<int?>(
+                    value: settlementId != null && settlements.any((s) => s['id'] == settlementId)
+                        ? settlementId
+                        : null,
+                    isExpanded: true,
+                    decoration: InputDecoration(
+                      isDense: context.isLandscape,
+                      labelText: 'Населённый пункт',
+                      prefixIcon: const Icon(Icons.place_outlined),
+                      border: const OutlineInputBorder(),
+                    ),
+                    items: [
+                      const DropdownMenuItem<int?>(value: null, child: Text('Весь район')),
+                      ...settlements.map(
+                        (s) => DropdownMenuItem<int?>(
+                          value: s['id'] as int,
+                          child: Text(s['display_name'] as String, overflow: TextOverflow.ellipsis),
+                        ),
+                      ),
+                    ],
+                    onChanged: (v) {
+                      setState(() => settlementId = v);
+                      _load();
+                    },
+                  ),
                 ),
-              ),
-            ],
-            onChanged: (v) {
-              setState(() => settlementId = v);
-              _load();
-            },
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: SegmentedButton<String>(
-            showSelectedIcon: false,
-            segments: const [
-              ButtonSegment(value: 'upcoming', label: Text('Скоро')),
-              ButtonSegment(value: 'past', label: Text('Было')),
-              ButtonSegment(value: 'all', label: Text('Все')),
-            ],
-            selected: {
-              if (upcomingOnly == true) 'upcoming' else if (upcomingOnly == false) 'past' else 'all',
-            },
-            onSelectionChanged: (s) {
-              final v = s.first;
-              setState(() {
-                upcomingOnly = v == 'upcoming'
-                    ? true
-                    : v == 'past'
-                        ? false
-                        : null;
-              });
-              _load();
-            },
+                Padding(
+                  padding: EdgeInsets.fromLTRB(padH, 0, padH, 8),
+                  child: SegmentedButton<String>(
+                    showSelectedIcon: false,
+                    segments: const [
+                      ButtonSegment(value: 'upcoming', label: Text('Скоро')),
+                      ButtonSegment(value: 'past', label: Text('Было')),
+                      ButtonSegment(value: 'all', label: Text('Все')),
+                    ],
+                    selected: {
+                      if (upcomingOnly == true) 'upcoming' else if (upcomingOnly == false) 'past' else 'all',
+                    },
+                    onSelectionChanged: (s) {
+                      final v = s.first;
+                      setState(() {
+                        upcomingOnly = v == 'upcoming'
+                            ? true
+                            : v == 'past'
+                                ? false
+                                : null;
+                      });
+                      _load();
+                    },
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
         Expanded(
@@ -945,8 +1027,8 @@ class _EventsTabState extends State<_EventsTab> {
                 : error != null && items.isEmpty
                     ? ListView(
                         children: [
-                          SizedBox(
-                            height: 280,
+                          adaptiveFillMessage(
+                            context: context,
                             child: errorState(context: context, message: error!, onRetry: _load),
                           ),
                         ],
@@ -954,8 +1036,8 @@ class _EventsTabState extends State<_EventsTab> {
                     : items.isEmpty
                         ? ListView(
                             children: [
-                              SizedBox(
-                                height: 280,
+                              adaptiveFillMessage(
+                                context: context,
                                 child: emptyState(
                                   context: context,
                                   title: upcomingOnly == false ? 'Прошедших событий нет' : 'Пока нет событий',
@@ -1127,121 +1209,136 @@ class _TransportTabState extends State<_TransportTab> {
     final state = context.watch<AppState>();
     final scheme = Theme.of(context).colorScheme;
     final settlements = state.settlements;
+    final padH = context.isLandscape ? 12.0 : 16.0;
 
     return Column(
       children: [
-        if (state.lastTransportFromCache)
-          Material(
-            color: scheme.secondaryContainer,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-              child: Row(
-                children: [
-                  Icon(Icons.offline_bolt, size: 18, color: scheme.onSecondaryContainer),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Показано сохранённое расписание — нет связи с сервером',
-                      style: TextStyle(color: scheme.onSecondaryContainer, fontSize: 12),
+        Flexible(
+          fit: FlexFit.loose,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (state.lastTransportFromCache)
+                  Material(
+                    color: scheme.secondaryContainer,
+                    child: Padding(
+                      padding: EdgeInsets.fromLTRB(padH, 8, padH, 8),
+                      child: Row(
+                        children: [
+                          Icon(Icons.offline_bolt, size: 18, color: scheme.onSecondaryContainer),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'Показано сохранённое расписание — нет связи с сервером',
+                              style: TextStyle(color: scheme.onSecondaryContainer, fontSize: 12),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                Padding(
+                  padding: EdgeInsets.fromLTRB(padH, context.isLandscape ? 6 : 12, padH, 8),
+                  child: DropdownButtonFormField<int>(
+                    value: settlementId != null && settlements.any((s) => s['id'] == settlementId)
+                        ? settlementId
+                        : null,
+                    isExpanded: true,
+                    decoration: InputDecoration(
+                      isDense: context.isLandscape,
+                      labelText: 'Населённый пункт',
+                      hintText: 'Выберите населённый пункт',
+                      prefixIcon: const Icon(Icons.place_outlined),
+                      border: const OutlineInputBorder(),
+                    ),
+                    items: settlements
+                        .map(
+                          (s) => DropdownMenuItem<int>(
+                            value: s['id'] as int,
+                            child: Text(s['display_name'] as String, overflow: TextOverflow.ellipsis),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (v) {
+                      setState(() => settlementId = v);
+                      _load();
+                    },
+                  ),
+                ),
+                if (settlementId != null) ...[
+                  SizedBox(
+                    height: 40,
+                    child: ListView(
+                      scrollDirection: Axis.horizontal,
+                      padding: EdgeInsets.fromLTRB(padH, 0, padH, 8),
+                      children: [
+                        for (final entry in const [
+                          ('today', 'Сегодня'),
+                          ('weekdays', 'Будни'),
+                          ('weekends', 'Выходные'),
+                          ('all', 'Все'),
+                        ])
+                          Padding(
+                            padding: const EdgeInsets.only(right: 8),
+                            child: RyadomFilterChip(
+                              label: entry.$2,
+                              selected: dayFilter == entry.$1,
+                              onSelected: (_) {
+                                setState(() => dayFilter = entry.$1);
+                                _load();
+                              },
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(padH, 0, padH, 8),
+                    child: TextField(
+                      controller: search,
+                      textInputAction: TextInputAction.search,
+                      onSubmitted: (_) => _load(),
+                      decoration: InputDecoration(
+                        isDense: context.isLandscape,
+                        hintText: 'направление, остановка…',
+                        prefixIcon: const Icon(Icons.search),
+                        suffixIcon: search.text.isEmpty
+                            ? null
+                            : IconButton(
+                                icon: const Icon(Icons.clear),
+                                onPressed: () {
+                                  search.clear();
+                                  _load();
+                                },
+                              ),
+                        border: const OutlineInputBorder(),
+                      ),
+                      onChanged: (_) => setState(() {}),
+                    ),
+                  ),
+                  Padding(
+                    padding: EdgeInsets.fromLTRB(padH, 0, padH, 6),
+                    child: Row(
+                      children: [
+                        Text(
+                          '${items.length} маршрутов',
+                          style: TextStyle(color: scheme.onSurfaceVariant),
+                        ),
+                        const Spacer(),
+                        RyadomFilterChip(
+                          label: 'Избранное',
+                          selected: favoritesOnly,
+                          onSelected: (_) => _toggleFavoritesFilter(),
+                        ),
+                      ],
                     ),
                   ),
                 ],
-              ),
+              ],
             ),
-          ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-          child: DropdownButtonFormField<int>(
-            value: settlementId != null && settlements.any((s) => s['id'] == settlementId) ? settlementId : null,
-            isExpanded: true,
-            decoration: const InputDecoration(
-              labelText: 'Населённый пункт',
-              hintText: 'Выберите населённый пункт',
-              prefixIcon: Icon(Icons.place_outlined),
-              border: OutlineInputBorder(),
-            ),
-            items: settlements
-                .map(
-                  (s) => DropdownMenuItem<int>(
-                    value: s['id'] as int,
-                    child: Text(s['display_name'] as String, overflow: TextOverflow.ellipsis),
-                  ),
-                )
-                .toList(),
-            onChanged: (v) {
-              setState(() => settlementId = v);
-              _load();
-            },
           ),
         ),
-        if (settlementId != null) ...[
-          SizedBox(
-            height: 44,
-            child: ListView(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-              children: [
-                for (final entry in const [
-                  ('today', 'Сегодня'),
-                  ('weekdays', 'Будни'),
-                  ('weekends', 'Выходные'),
-                  ('all', 'Все'),
-                ])
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: RyadomFilterChip(
-                      label: entry.$2,
-                      selected: dayFilter == entry.$1,
-                      onSelected: (_) {
-                        setState(() => dayFilter = entry.$1);
-                        _load();
-                      },
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-            child: TextField(
-              controller: search,
-              textInputAction: TextInputAction.search,
-              onSubmitted: (_) => _load(),
-              decoration: InputDecoration(
-                hintText: 'направление, остановка…',
-                prefixIcon: const Icon(Icons.search),
-                suffixIcon: search.text.isEmpty
-                    ? null
-                    : IconButton(
-                        icon: const Icon(Icons.clear),
-                        onPressed: () {
-                          search.clear();
-                          _load();
-                        },
-                      ),
-                border: const OutlineInputBorder(),
-              ),
-              onChanged: (_) => setState(() {}),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 6),
-            child: Row(
-              children: [
-                Text(
-                  '${items.length} маршрутов',
-                  style: TextStyle(color: scheme.onSurfaceVariant),
-                ),
-                const Spacer(),
-                RyadomFilterChip(
-                  label: 'Избранное',
-                  selected: favoritesOnly,
-                  onSelected: (_) => _toggleFavoritesFilter(),
-                ),
-              ],
-            ),
-          ),
-        ],
         Expanded(
           child: settlementId == null
               ? emptyState(
@@ -1257,8 +1354,8 @@ class _TransportTabState extends State<_TransportTab> {
                       : error != null && items.isEmpty
                           ? ListView(
                               children: [
-                                SizedBox(
-                                  height: 280,
+                                adaptiveFillMessage(
+                                  context: context,
                                   child: errorState(context: context, message: error!, onRetry: _load),
                                 ),
                               ],
@@ -1266,8 +1363,8 @@ class _TransportTabState extends State<_TransportTab> {
                           : items.isEmpty
                               ? ListView(
                                   children: [
-                                    SizedBox(
-                                      height: 280,
+                                    adaptiveFillMessage(
+                                      context: context,
                                       child: emptyState(
                                         context: context,
                                         title: favoritesOnly ? 'Нет избранных маршрутов' : 'Маршрутов нет',
@@ -1433,73 +1530,85 @@ class _DirectoryTabState extends State<_DirectoryTab> {
     final state = context.watch<AppState>();
     final items = state.directory;
     final scheme = Theme.of(context).colorScheme;
+    final padH = context.isLandscape ? 12.0 : 16.0;
 
     return Column(
       children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-          child: TextField(
-            controller: search,
-            textInputAction: TextInputAction.search,
-            onSubmitted: (v) {
-              state.setDirectoryFilters(
-                category: state.directoryCategory,
-                settlementId: state.directorySettlementId,
-                query: v,
-              );
-            },
-            decoration: InputDecoration(
-              hintText: 'Школа, больница, магазин…',
-              prefixIcon: const Icon(Icons.search),
-              suffixIcon: IconButton(
-                icon: const Icon(Icons.tune),
-                onPressed: () => _openFilters(context, state),
-              ),
-            ),
-          ),
-        ),
-        SizedBox(
-          height: 44,
-          child: ListView(
-            scrollDirection: Axis.horizontal,
-            padding: const EdgeInsets.symmetric(horizontal: 16),
-            children: [
-              Padding(
-                padding: const EdgeInsets.only(right: 8),
-                child: RyadomFilterChip(
-                  label: 'Все',
-                  selected: state.directoryCategory == null,
-                  onSelected: (_) => state.setDirectoryFilters(
-                    category: null,
-                    settlementId: state.directorySettlementId,
-                    query: search.text,
-                  ),
-                ),
-              ),
-              ...dirCategories.map(
-                (c) => Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: RyadomFilterChip(
-                    label: categoryLabels[c] ?? c,
-                    selected: state.directoryCategory == c,
-                    onSelected: (_) => state.setDirectoryFilters(
-                      category: state.directoryCategory == c ? null : c,
-                      settlementId: state.directorySettlementId,
-                      query: search.text,
+        Flexible(
+          fit: FlexFit.loose,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Padding(
+                  padding: EdgeInsets.fromLTRB(padH, context.isLandscape ? 6 : 12, padH, 8),
+                  child: TextField(
+                    controller: search,
+                    textInputAction: TextInputAction.search,
+                    onSubmitted: (v) {
+                      state.setDirectoryFilters(
+                        category: state.directoryCategory,
+                        settlementId: state.directorySettlementId,
+                        query: v,
+                      );
+                    },
+                    decoration: InputDecoration(
+                      isDense: context.isLandscape,
+                      hintText: 'Школа, больница, магазин…',
+                      prefixIcon: const Icon(Icons.search),
+                      suffixIcon: IconButton(
+                        icon: const Icon(Icons.tune),
+                        onPressed: () => _openFilters(context, state),
+                      ),
                     ),
                   ),
                 ),
-              ),
-            ],
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 10, 16, 6),
-          child: Align(
-            alignment: Alignment.centerLeft,
-            child: Text(
-              '${items.length} записей',
-              style: TextStyle(color: scheme.onSurfaceVariant),
+                SizedBox(
+                  height: 40,
+                  child: ListView(
+                    scrollDirection: Axis.horizontal,
+                    padding: EdgeInsets.symmetric(horizontal: padH),
+                    children: [
+                      Padding(
+                        padding: const EdgeInsets.only(right: 8),
+                        child: RyadomFilterChip(
+                          label: 'Все',
+                          selected: state.directoryCategory == null,
+                          onSelected: (_) => state.setDirectoryFilters(
+                            category: null,
+                            settlementId: state.directorySettlementId,
+                            query: search.text,
+                          ),
+                        ),
+                      ),
+                      ...dirCategories.map(
+                        (c) => Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: RyadomFilterChip(
+                            label: categoryLabels[c] ?? c,
+                            selected: state.directoryCategory == c,
+                            onSelected: (_) => state.setDirectoryFilters(
+                              category: state.directoryCategory == c ? null : c,
+                              settlementId: state.directorySettlementId,
+                              query: search.text,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Padding(
+                  padding: EdgeInsets.fromLTRB(padH, 8, padH, 6),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      '${items.length} записей',
+                      style: TextStyle(color: scheme.onSurfaceVariant),
+                    ),
+                  ),
+                ),
+              ],
             ),
           ),
         ),
@@ -1511,8 +1620,8 @@ class _DirectoryTabState extends State<_DirectoryTab> {
                 : state.directoryOffline && items.isEmpty
                     ? ListView(
                         children: [
-                          SizedBox(
-                            height: 280,
+                          adaptiveFillMessage(
+                            context: context,
                             child: errorState(
                               context: context,
                               message: state.error ?? AppState.offlineMessage,
@@ -1524,8 +1633,8 @@ class _DirectoryTabState extends State<_DirectoryTab> {
                     : items.isEmpty
                         ? ListView(
                             children: [
-                              SizedBox(
-                                height: 280,
+                              adaptiveFillMessage(
+                                context: context,
                                 child: emptyState(
                                   context: context,
                                   title: 'Справочник пуст',
@@ -1784,9 +1893,10 @@ class _ProfileTab extends StatelessWidget {
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
     final scheme = Theme.of(context).colorScheme;
+    final pad = context.isLandscape ? 12.0 : 16.0;
     if (user == null) {
       return ListView(
-        padding: const EdgeInsets.all(16),
+        padding: EdgeInsets.all(pad),
         children: [
           Container(
             padding: const EdgeInsets.all(20),
@@ -1879,7 +1989,7 @@ class _ProfileTab extends StatelessWidget {
       );
     }
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: EdgeInsets.all(pad),
       children: [
         Container(
           padding: const EdgeInsets.all(20),

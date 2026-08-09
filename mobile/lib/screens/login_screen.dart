@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
 import '../ui_helpers.dart';
+import 'pin_unlock_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -110,7 +111,7 @@ class _LoginScreenState extends State<LoginScreen> {
                 labelText: 'Пароль',
                 suffixIcon: IconButton(
                   onPressed: busy ? null : () => setState(() => obscure = !obscure),
-                  icon: Icon(obscure ? Icons.visibility_outlined : Icons.visibility_off_outlined),
+                  icon: Icon(obscure ? Icons.visibility : Icons.visibility_off),
                 ),
               ),
             ),
@@ -130,6 +131,21 @@ class _LoginScreenState extends State<LoginScreen> {
               onPressed: busy ? null : _submit,
               child: Text(busy ? 'Вход…' : 'Войти'),
             ),
+            if (context.watch<AppState>().canUnlockWithPin) ...[
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: busy
+                    ? null
+                    : () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(builder: (_) => const PinUnlockScreen(asGate: false)),
+                        );
+                      },
+                icon: const Icon(Icons.pin_outlined),
+                label: const Text('Войти по PIN'),
+              ),
+            ],
             TextButton(
               onPressed: busy ? null : () => Navigator.pushNamed(context, '/register'),
               child: const Text('Создать аккаунт'),
