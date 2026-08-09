@@ -198,16 +198,20 @@ class _HomeShellState extends State<HomeShell> {
     }
   }
 
-  void _openProfile(BuildContext context, AppState state) {
-    Navigator.push(
+  Future<void> _openProfile(BuildContext context) async {
+    await Navigator.push(
       context,
       fastRoute(
         Scaffold(
           appBar: AppBar(title: const Text('Профиль')),
-          body: ProfileScreen(user: state.user),
+          body: const ProfileScreen(),
         ),
       ),
     );
+    if (!context.mounted) return;
+    final state = context.read<AppState>();
+    await state.refreshUnreadNotifications();
+    await state.refreshUnreadChats();
   }
 
   @override
@@ -288,7 +292,7 @@ class _HomeShellState extends State<HomeShell> {
           ),
           IconButton(
             tooltip: 'Профиль',
-            onPressed: () => _openProfile(context, state),
+            onPressed: () => _openProfile(context),
             icon: Badge(
               isLabelVisible: profileBadge,
               label: Text(profileLabel),
@@ -1077,7 +1081,7 @@ class _EventsTabState extends State<_EventsTab> {
                             ],
                           )
                         : ListView.separated(
-                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                            padding: EdgeInsets.fromLTRB(16, 4, 16, context.listBottomPad),
                             itemCount: items.length,
                             separatorBuilder: (_, __) => const SizedBox(height: 12),
                             itemBuilder: (_, i) {
@@ -1402,7 +1406,7 @@ class _TransportTabState extends State<_TransportTab> {
                                   ],
                                 )
                               : ListView.separated(
-                                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                                  padding: EdgeInsets.fromLTRB(16, 4, 16, context.listBottomPad),
                                   itemCount: items.length,
                                   separatorBuilder: (_, __) => const SizedBox(height: 12),
                                   itemBuilder: (_, i) {
@@ -1666,7 +1670,7 @@ class _DirectoryTabState extends State<_DirectoryTab> {
                             ],
                           )
                         : ListView.separated(
-                            padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                            padding: EdgeInsets.fromLTRB(16, 4, 16, context.listBottomPad),
                             itemCount: items.length,
                             separatorBuilder: (_, __) => const SizedBox(height: 12),
                             itemBuilder: (_, i) {
@@ -1914,12 +1918,12 @@ class _DirectoryTabState extends State<_DirectoryTab> {
 }
 
 class ProfileScreen extends StatelessWidget {
-  const ProfileScreen({super.key, required this.user});
-  final Map<String, dynamic>? user;
+  const ProfileScreen({super.key});
 
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
+    final user = state.user;
     final scheme = Theme.of(context).colorScheme;
     final pad = context.isLandscape ? 12.0 : 16.0;
     if (user == null) {
@@ -1952,12 +1956,16 @@ class ProfileScreen extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           FilledButton(
-            onPressed: () => Navigator.pushNamed(context, '/login'),
+            onPressed: () async {
+              await Navigator.pushNamed(context, '/login');
+            },
             child: const Text('Войти'),
           ),
           const SizedBox(height: 8),
           OutlinedButton(
-            onPressed: () => Navigator.pushNamed(context, '/register'),
+            onPressed: () async {
+              await Navigator.pushNamed(context, '/register');
+            },
             child: const Text('Создать аккаунт'),
           ),
           const SizedBox(height: 16),

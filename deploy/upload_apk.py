@@ -15,9 +15,9 @@ if not PASS:
 REMOTE = "/opt/ryadom56"
 REMOTE_APK = f"{REMOTE}/backend/data/releases/ryadom56-latest.apk"
 LOCAL_APK = Path(__file__).resolve().parents[1] / "mobile" / "apk" / "app-release.apk"
-VERSION_NAME = "0.18.0"
-VERSION_CODE = 23
-APK_FILENAME = "ryadom56-0.18.0.apk"
+VERSION_NAME = "0.18.1"
+VERSION_CODE = 24
+APK_FILENAME = "ryadom56-0.18.1.apk"
 
 
 def run(c: paramiko.SSHClient, cmd: str, timeout: int = 120) -> str:

@@ -563,6 +563,7 @@ class AlertOut(BaseModel):
 
 class ListingMessageIn(BaseModel):
     body: str = Field(min_length=1, max_length=2000)
+    peer_id: int | None = None  # id покупателя — обязательно, если пишет продавец
 
 
 class ListingMessageOut(BaseModel):
@@ -570,6 +571,7 @@ class ListingMessageOut(BaseModel):
     listing_id: int
     sender_id: int
     sender_name: str | None = None
+    peer_id: int | None = None
     body: str
     is_read: bool
     created_at: datetime
@@ -578,6 +580,7 @@ class ListingMessageOut(BaseModel):
 
 class ConversationOut(BaseModel):
     listing_id: int
+    peer_id: int
     listing_title: str
     listing_status: str
     peer_name: str | None = None

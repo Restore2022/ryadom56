@@ -130,7 +130,7 @@ class _ChatsTabState extends State<ChatsTab> {
                       ],
                     )
                   : ListView.separated(
-                      padding: EdgeInsets.fromLTRB(pad, 8, pad, 24),
+                      padding: EdgeInsets.fromLTRB(pad, 8, pad, context.listBottomPad),
                       itemCount: items.length,
                       separatorBuilder: (_, __) => const SizedBox(height: 10),
                       itemBuilder: (_, i) {
@@ -140,6 +140,7 @@ class _ChatsTabState extends State<ChatsTab> {
                         final title = item['listing_title']?.toString() ?? 'Объявление';
                         final last = item['last_message']?.toString() ?? '';
                         final isSeller = item['is_seller'] == true;
+                        final peerId = item['peer_id'] as int?;
                         return Material(
                           color: Theme.of(context).cardTheme.color,
                           borderRadius: BorderRadius.circular(16),
@@ -152,6 +153,8 @@ class _ChatsTabState extends State<ChatsTab> {
                                   builder: (_) => ListingChatScreen(
                                     listingId: item['listing_id'] as int,
                                     listingTitle: title,
+                                    peerId: peerId,
+                                    peerName: peer,
                                   ),
                                 ),
                               );

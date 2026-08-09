@@ -679,16 +679,20 @@ class AppState extends ChangeNotifier {
 
   int unreadChats = 0;
 
-  Future<List<dynamic>> loadListingMessages(int listingId) async {
-    return await api.request('/listings/$listingId/messages', auth: true) as List<dynamic>;
+  Future<List<dynamic>> loadListingMessages(int listingId, {int? peerId}) async {
+    final qs = peerId != null ? '?peer_id=$peerId' : '';
+    return await api.request('/listings/$listingId/messages$qs', auth: true) as List<dynamic>;
   }
 
-  Future<Map<String, dynamic>> sendListingMessage(int listingId, String body) async {
+  Future<Map<String, dynamic>> sendListingMessage(int listingId, String body, {int? peerId}) async {
     return await api.request(
       '/listings/$listingId/messages',
       method: 'POST',
       auth: true,
-      body: {'body': body},
+      body: {
+        'body': body,
+        if (peerId != null) 'peer_id': peerId,
+      },
     ) as Map<String, dynamic>;
   }
 
@@ -1088,6 +1092,7 @@ class AppState extends ChangeNotifier {
     await reportDeviceInfo();
     await refreshPublic();
     await refreshUnreadNotifications();
+    await refreshUnreadChats();
     notifyListeners();
   }
 
@@ -1102,6 +1107,7 @@ class AppState extends ChangeNotifier {
     await reportDeviceInfo();
     await refreshPublic();
     await refreshUnreadNotifications();
+    await refreshUnreadChats();
     notifyListeners();
   }
 

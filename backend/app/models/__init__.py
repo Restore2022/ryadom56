@@ -280,13 +280,14 @@ class DistrictAlert(Base):
 
 
 class ListingMessage(Base):
-    """Переписка по объявлению без показа телефона сразу."""
+    """Личная переписка покупатель↔продавец по объявлению (тред = listing_id + buyer_id)."""
 
     __tablename__ = "listing_messages"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     listing_id: Mapped[int] = mapped_column(ForeignKey("listings.id"), nullable=False, index=True)
     sender_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    buyer_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

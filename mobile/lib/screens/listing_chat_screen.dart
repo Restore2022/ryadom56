@@ -11,11 +11,16 @@ class ListingChatScreen extends StatefulWidget {
     super.key,
     required this.listingId,
     required this.listingTitle,
+    this.peerId,
+    this.peerName,
     this.initialMessage,
   });
 
   final int listingId;
   final String listingTitle;
+  /// Id собеседника. Для продавца обязателен (id покупателя).
+  final int? peerId;
+  final String? peerName;
   final String? initialMessage;
 
   @override
@@ -57,7 +62,10 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
       error = null;
     });
     try {
-      final rows = await context.read<AppState>().loadListingMessages(widget.listingId);
+      final rows = await context.read<AppState>().loadListingMessages(
+            widget.listingId,
+            peerId: widget.peerId,
+          );
       if (mounted) {
         setState(() {
           messages = rows;
@@ -91,7 +99,11 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
     if (body.isEmpty || sending) return;
     setState(() => sending = true);
     try {
-      final msg = await context.read<AppState>().sendListingMessage(widget.listingId, body);
+      final msg = await context.read<AppState>().sendListingMessage(
+            widget.listingId,
+            body,
+            peerId: widget.peerId,
+          );
       if (mounted) {
         setState(() {
           messages = [...messages, msg];
@@ -117,6 +129,9 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
+    final subtitle = widget.peerName?.isNotEmpty == true
+        ? '${widget.peerName} · ${widget.listingTitle}'
+        : widget.listingTitle;
     return Scaffold(
       appBar: AppBar(
         title: Column(
@@ -124,7 +139,7 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
           children: [
             const Text('Сообщения', style: TextStyle(fontSize: 16)),
             Text(
-              widget.listingTitle,
+              subtitle,
               style: TextStyle(fontSize: 12, color: scheme.onSurfaceVariant, fontWeight: FontWeight.w500),
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
@@ -144,7 +159,7 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
                             child: Padding(
                               padding: const EdgeInsets.all(24),
                               child: Text(
-                                'Напишите автору — он получит уведомление в приложении',
+                                'Это личный чат. Сообщения видите только вы и собеседник.',
                                 textAlign: TextAlign.center,
                                 style: TextStyle(color: scheme.onSurfaceVariant, height: 1.4),
                               ),

@@ -288,34 +288,49 @@ def list_conversations(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """Чаты по объявлениям: как покупатель и как продавец."""
-    as_sender = select(ListingMessage.listing_id).where(ListingMessage.sender_id == user.id)
-    as_author = (
-        select(ListingMessage.listing_id)
-        .join(Listing, Listing.id == ListingMessage.listing_id)
-        .where(Listing.author_id == user.id)
+    """Личные чаты 1-на-1: тред = объявление + покупатель."""
+    as_buyer = (
+        select(ListingMessage.listing_id, ListingMessage.buyer_id)
+        .where(ListingMessage.buyer_id == user.id)
+        .distinct()
     )
-    listing_ids = list({*db.execute(as_sender).scalars().all(), *db.execute(as_author).scalars().all()})
-    if not listing_ids:
+    as_seller = (
+        select(ListingMessage.listing_id, ListingMessage.buyer_id)
+        .join(Listing, Listing.id == ListingMessage.listing_id)
+        .where(Listing.author_id == user.id, ListingMessage.buyer_id.is_not(None))
+        .distinct()
+    )
+    pairs: set[tuple[int, int]] = set()
+    for lid, bid in db.execute(as_buyer).all():
+        if lid is not None and bid is not None:
+            pairs.add((int(lid), int(bid)))
+    for lid, bid in db.execute(as_seller).all():
+        if lid is not None and bid is not None:
+            pairs.add((int(lid), int(bid)))
+    if not pairs:
         return []
 
+    listing_ids = {lid for lid, _ in pairs}
     listings = {
         row.id: row
         for row in db.execute(
-            select(Listing)
-            .options(selectinload(Listing.author))
-            .where(Listing.id.in_(listing_ids))
+            select(Listing).options(selectinload(Listing.author)).where(Listing.id.in_(listing_ids))
         ).scalars().all()
+    }
+    peer_ids = {bid for _, bid in pairs} | {listings[lid].author_id for lid in listing_ids if lid in listings}
+    peers = {
+        u.id: u
+        for u in db.execute(select(User).where(User.id.in_(peer_ids))).scalars().all()
     }
 
     result: list[ConversationOut] = []
-    for lid in listing_ids:
+    for lid, buyer_id in pairs:
         item = listings.get(lid)
         if not item:
             continue
         msgs = db.execute(
             select(ListingMessage)
-            .where(ListingMessage.listing_id == lid)
+            .where(ListingMessage.listing_id == lid, ListingMessage.buyer_id == buyer_id)
             .order_by(ListingMessage.created_at.desc())
         ).scalars().all()
         if not msgs:
@@ -323,22 +338,15 @@ def list_conversations(
         last = msgs[0]
         unread = sum(1 for m in msgs if m.sender_id != user.id and not m.is_read)
         is_seller = item.author_id == user.id
-        if is_seller:
-            other_id = next((m.sender_id for m in msgs if m.sender_id != user.id), None)
-        else:
-            other_id = item.author_id
-        peer_name = None
-        if other_id:
-            peer = db.execute(select(User).where(User.id == other_id)).scalar_one_or_none()
-            peer_name = peer.full_name if peer else None
-            if not peer_name and not is_seller and item.author:
-                peer_name = item.author.full_name
+        peer_id = buyer_id if is_seller else item.author_id
+        peer = peers.get(peer_id)
         result.append(
             ConversationOut(
                 listing_id=item.id,
+                peer_id=peer_id,
                 listing_title=item.title,
                 listing_status=item.status.value if hasattr(item.status, "value") else str(item.status),
-                peer_name=peer_name,
+                peer_name=peer.full_name if peer else None,
                 last_message=last.body,
                 last_message_at=last.created_at,
                 unread_count=unread,
@@ -745,40 +753,59 @@ def report_listing(
     return {"ok": True}
 
 
+def _resolve_thread_buyer_id(item: Listing, user: User, peer_id: int | None) -> int:
+    """buyer_id треда: покупатель всегда не автор объявления."""
+    if user.id == item.author_id:
+        if peer_id is None:
+            raise HTTPException(status_code=400, detail="Укажите собеседника (peer_id)")
+        if peer_id == item.author_id:
+            raise HTTPException(status_code=400, detail="Нельзя писать самому себе")
+        return peer_id
+    return user.id
+
+
 @router.get("/{listing_id}/messages", response_model=list[ListingMessageOut])
 def list_messages(
     listing_id: int,
+    peer_id: int | None = Query(default=None),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
     item = load_listing(db, listing_id)
     if not item:
         raise HTTPException(status_code=404, detail="Объявление не найдено")
-    # доступ: автор или участник переписки
-    msgs = db.execute(
-        select(ListingMessage).where(ListingMessage.listing_id == listing_id).order_by(ListingMessage.created_at.asc())
-    ).scalars().all()
-    participant_ids = {m.sender_id for m in msgs} | {item.author_id}
-    if user.id not in participant_ids and user.role not in (UserRole.admin, UserRole.moderator):
-        # новый собеседник может открыть пустой чат
-        if item.author_id != user.id and item.status != ListingStatus.approved:
+    if user.id != item.author_id and user.role not in (UserRole.admin, UserRole.moderator):
+        if item.status != ListingStatus.approved and user.id != item.author_id:
             raise HTTPException(status_code=403, detail="Нет доступа")
-    # отметить прочитанным для получателя (не свои)
+    buyer_id = _resolve_thread_buyer_id(item, user, peer_id)
+    # продавец видит тред только если он автор
+    if user.id != item.author_id and buyer_id != user.id and user.role not in (UserRole.admin, UserRole.moderator):
+        raise HTTPException(status_code=403, detail="Нет доступа")
+    if user.id == item.author_id and buyer_id == item.author_id:
+        raise HTTPException(status_code=400, detail="Некорректный собеседник")
+
+    msgs = db.execute(
+        select(ListingMessage)
+        .where(ListingMessage.listing_id == listing_id, ListingMessage.buyer_id == buyer_id)
+        .order_by(ListingMessage.created_at.asc())
+    ).scalars().all()
     for m in msgs:
         if m.sender_id != user.id and not m.is_read:
             m.is_read = True
     db.commit()
-    names = {}
+    names: dict[int, str | None] = {}
     for m in msgs:
         if m.sender_id not in names:
             u = db.execute(select(User).where(User.id == m.sender_id)).scalar_one_or_none()
             names[m.sender_id] = u.full_name if u else None
+    peer_for_client = buyer_id if user.id == item.author_id else item.author_id
     return [
         ListingMessageOut(
             id=m.id,
             listing_id=m.listing_id,
             sender_id=m.sender_id,
             sender_name=names.get(m.sender_id),
+            peer_id=peer_for_client,
             body=m.body,
             is_read=m.is_read,
             created_at=m.created_at,
@@ -801,20 +828,22 @@ def post_message(
     body = payload.body.strip()
     if not body:
         raise HTTPException(status_code=400, detail="Пустое сообщение")
-    msg = ListingMessage(listing_id=listing_id, sender_id=user.id, body=body)
+    buyer_id = _resolve_thread_buyer_id(item, user, payload.peer_id)
+    if user.id == item.author_id:
+        # продавец отвечает только в существующий или явный тред с покупателем
+        exists_buyer = db.execute(select(User.id).where(User.id == buyer_id)).scalar_one_or_none()
+        if not exists_buyer:
+            raise HTTPException(status_code=404, detail="Собеседник не найден")
+    msg = ListingMessage(
+        listing_id=listing_id,
+        sender_id=user.id,
+        buyer_id=buyer_id,
+        body=body,
+    )
     db.add(msg)
     db.flush()
-    target = item.author_id if user.id != item.author_id else None
-    # уведомить другую сторону: автора или последнего собеседника
-    if user.id == item.author_id:
-        other = db.execute(
-            select(ListingMessage.sender_id)
-            .where(ListingMessage.listing_id == listing_id, ListingMessage.sender_id != user.id)
-            .order_by(ListingMessage.created_at.desc())
-            .limit(1)
-        ).scalar_one_or_none()
-        target = other
-    if target:
+    target = item.author_id if user.id == buyer_id else buyer_id
+    if target and target != user.id:
         notify_user(
             db,
             user_id=target,
@@ -825,11 +854,13 @@ def post_message(
         )
     db.commit()
     db.refresh(msg)
+    peer_for_client = buyer_id if user.id == item.author_id else item.author_id
     return ListingMessageOut(
         id=msg.id,
         listing_id=msg.listing_id,
         sender_id=msg.sender_id,
         sender_name=user.full_name,
+        peer_id=peer_for_client,
         body=msg.body,
         is_read=msg.is_read,
         created_at=msg.created_at,

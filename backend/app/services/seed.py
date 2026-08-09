@@ -79,6 +79,10 @@ ALERT_COLUMNS = {
     "priority": "INTEGER DEFAULT 0",
 }
 
+MESSAGE_COLUMNS = {
+    "buyer_id": "INTEGER",
+}
+
 
 def init_db() -> None:
     Path("data").mkdir(exist_ok=True)
@@ -95,6 +99,7 @@ def init_db() -> None:
     _migrate_transport_columns()
     _migrate_news_columns()
     _migrate_alert_columns()
+    _migrate_message_columns()
 
 
 def _migrate_user_columns() -> None:
@@ -183,6 +188,51 @@ def _migrate_alert_columns() -> None:
         for name, sql_type in ALERT_COLUMNS.items():
             if name not in existing:
                 conn.execute(text(f"ALTER TABLE district_alerts ADD COLUMN {name} {sql_type}"))
+
+
+def _migrate_message_columns() -> None:
+    inspector = inspect(engine)
+    if "listing_messages" not in inspector.get_table_names():
+        return
+    existing = {col["name"] for col in inspector.get_columns("listing_messages")}
+    with engine.begin() as conn:
+        for name, sql_type in MESSAGE_COLUMNS.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE listing_messages ADD COLUMN {name} {sql_type}"))
+        # Покупательские сообщения → buyer_id = sender_id
+        conn.execute(
+            text(
+                """
+                UPDATE listing_messages
+                SET buyer_id = sender_id
+                WHERE buyer_id IS NULL
+                  AND sender_id != (
+                    SELECT author_id FROM listings WHERE listings.id = listing_messages.listing_id
+                  )
+                """
+            )
+        )
+        # Сообщения продавца без buyer_id — к последнему покупателю по этому объявлению
+        conn.execute(
+            text(
+                """
+                UPDATE listing_messages
+                SET buyer_id = (
+                    SELECT m2.sender_id FROM listing_messages m2
+                    JOIN listings l ON l.id = m2.listing_id
+                    WHERE m2.listing_id = listing_messages.listing_id
+                      AND m2.sender_id != l.author_id
+                      AND m2.id < listing_messages.id
+                    ORDER BY m2.id DESC
+                    LIMIT 1
+                )
+                WHERE buyer_id IS NULL
+                  AND sender_id = (
+                    SELECT author_id FROM listings WHERE listings.id = listing_messages.listing_id
+                  )
+                """
+            )
+        )
 
 
 def seed_db(session: Session) -> None:

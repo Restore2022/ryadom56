@@ -22,7 +22,12 @@ extension RyadomResponsive on BuildContext {
     return EdgeInsets.fromLTRB(h, v, h, v);
   }
 
-  double get listBottomPad => useNavigationRail ? 24 : (isLandscape ? 72 : 100);
+  /// Запас снизу, чтобы последняя карточка не уезжала под NavigationBar.
+  double get listBottomPad {
+    final safe = MediaQuery.paddingOf(this).bottom;
+    if (useNavigationRail) return 28 + safe;
+    return (isLandscape ? 88 : 112) + safe;
+  }
 
   /// Ограничение ширины контента на больших экранах.
   Widget constrainContent(Widget child) {

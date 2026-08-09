@@ -284,12 +284,15 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
       final loggedIn = await ensureLoggedIn(context, message: 'Войдите, чтобы написать автору');
       if (!loggedIn || !mounted) return;
       final template = 'Здравствуйте! Интересует объявление «${data!['title']}».';
+      final authorName = data['author_name']?.toString();
       await Navigator.push(
         context,
         fastRoute(
           ListingChatScreen(
             listingId: widget.listingId,
             listingTitle: data['title'] as String,
+            // покупатель: тред = он сам; продавец отвечает из вкладки «Чаты» с peerId
+            peerName: authorName,
             initialMessage: template,
           ),
         ),
