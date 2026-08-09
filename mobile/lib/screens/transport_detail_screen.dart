@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../auth_prompt.dart';
 import '../state/app_state.dart';
@@ -18,7 +19,7 @@ class TransportDetailScreen extends StatefulWidget {
 class _TransportDetailScreenState extends State<TransportDetailScreen> {
   late Map<String, dynamic> item;
   bool togglingFavorite = false;
-
+  bool reportingOutdated = false;
   @override
   void initState() {
     super.initState();
@@ -42,6 +43,27 @@ class _TransportDetailScreenState extends State<TransportDetailScreen> {
     return '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}';
   }
 
+  Future<void> _reportOutdated() async {
+    final id = item['id'];
+    if (id is! int || reportingOutdated) return;
+    final loggedIn = await ensureLoggedIn(context, message: 'Войдите, чтобы сообщить об ошибке');
+    if (!loggedIn || !mounted) return;
+    setState(() => reportingOutdated = true);
+    try {
+      await context.read<AppState>().reportTransportOutdated(id);
+      if (mounted) showAppSnack(context, 'Спасибо! Модераторы проверят расписание');
+    } catch (e) {
+      if (mounted) showAppSnack(context, AppState.userFriendlyError(e), error: true);
+    } finally {
+      if (mounted) setState(() => reportingOutdated = false);
+    }
+  }
+
+  Future<void> _call(String? phone) async {
+    final cleaned = (phone ?? '').replaceAll(RegExp(r'[\s\-()]'), '');
+    if (cleaned.isEmpty) return;
+    await launchUrl(Uri(scheme: 'tel', path: cleaned));
+  }
   Future<void> _toggleFavorite() async {
     final id = item['id'];
     if (id is! int) return;
@@ -86,6 +108,9 @@ class _TransportDetailScreenState extends State<TransportDetailScreen> {
     final scheme = Theme.of(context).colorScheme;
     final state = context.watch<AppState>();
     final number = item['route_number']?.toString();
+    final nextDeparture = item['next_departure']?.toString();
+    final fareText = item['fare_text']?.toString();
+    final phone = item['phone']?.toString();
     final notes = item['notes']?.toString();
     final description = item['description']?.toString();
     final weekdays = item['schedule_weekdays']?.toString();
@@ -130,6 +155,46 @@ class _TransportDetailScreenState extends State<TransportDetailScreen> {
             'Обновлено: ${_fmtUpdated(item['updated_at']?.toString())}',
             style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
           ),
+          if (nextDeparture != null && nextDeparture.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: scheme.primaryContainer,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.schedule, color: scheme.onPrimaryContainer),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Ближайший рейс', style: TextStyle(color: scheme.onPrimaryContainer, fontSize: 12, fontWeight: FontWeight.w700)),
+                        Text(nextDeparture, style: TextStyle(color: scheme.onPrimaryContainer, fontWeight: FontWeight.w800, fontSize: 16)),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+          if (fareText != null && fareText.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            _InfoLine(icon: Icons.payments_outlined, label: 'Стоимость', value: fareText),
+          ],
+          if (phone != null && phone.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            _InfoLine(icon: Icons.phone_outlined, label: 'Телефон', value: phone),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: () => _call(phone),
+              icon: const Icon(Icons.phone),
+              label: const Text('Позвонить'),
+            ),
+          ],
           if (description != null && description.isNotEmpty) ...[
             const SizedBox(height: 16),
             Text(description, style: const TextStyle(height: 1.4)),
@@ -193,8 +258,43 @@ class _TransportDetailScreenState extends State<TransportDetailScreen> {
             const SizedBox(height: 8),
             Text(notes, style: TextStyle(color: scheme.onSurfaceVariant, height: 1.4)),
           ],
+          const SizedBox(height: 20),
+          OutlinedButton.icon(
+            onPressed: reportingOutdated ? null : _reportOutdated,
+            icon: reportingOutdated
+                ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.report_outlined),
+            label: Text(reportingOutdated ? 'Отправка…' : 'Расписание устарело'),
+          ),
         ],
       ),
+    );
+  }
+}
+
+class _InfoLine extends StatelessWidget {
+  const _InfoLine({required this.icon, required this.label, required this.value});
+  final IconData icon;
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Icon(icon, size: 20),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: TextStyle(fontSize: 12, color: Theme.of(context).colorScheme.onSurfaceVariant)),
+              Text(value, style: const TextStyle(fontWeight: FontWeight.w600)),
+            ],
+          ),
+        ),
+      ],
     );
   }
 }

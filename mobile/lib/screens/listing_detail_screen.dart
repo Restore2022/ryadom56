@@ -10,6 +10,7 @@ import '../ui_helpers.dart';
 import 'author_listings_screen.dart';
 import 'create_listing_screen.dart';
 import 'home_shell.dart';
+import 'listing_chat_screen.dart';
 import 'my_listings_screen.dart';
 
 const reportReasons = {
@@ -285,8 +286,31 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
     final data = item;
     final images = ((data?['images'] as List?) ?? []).cast<dynamic>();
     final isOwner = data != null && state.user != null && data['author_id'] == state.user!['id'];
-    final canClose = isOwner && (data['status'] == 'approved' || data['status'] == 'pending');
+    final role = state.user?['role']?.toString();
+    final isStaff = role == 'admin' || role == 'moderator' || role == 'editor';
+    final phoneHidden = data?['phone_hidden'] == true;
+    final contactPhone = data?['contact_phone']?.toString();
+    final hasPhone = contactPhone != null && contactPhone.isNotEmpty;
+    final canSeePhone = isOwner || isStaff || (!phoneHidden && hasPhone);
+    final showChatPrimary = !isOwner;
+    final canClose = isOwner && (data!['status'] == 'approved' || data['status'] == 'pending');
     final favorited = data != null && state.isFavorited(widget.listingId, item: data);
+
+    Future<void> openChat() async {
+      final loggedIn = await ensureLoggedIn(context, message: 'Войдите, чтобы написать автору');
+      if (!loggedIn || !mounted) return;
+      final template = 'Здравствуйте! Интересует объявление «${data!['title']}».';
+      await Navigator.push(
+        context,
+        fastRoute(
+          ListingChatScreen(
+            listingId: widget.listingId,
+            listingTitle: data['title'] as String,
+            initialMessage: template,
+          ),
+        ),
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(
@@ -423,8 +447,8 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                               value: '${data['author_name'] ?? '—'} · другие объявления',
                             ),
                           ),
-                          if (data['contact_phone'] != null && (isOwner || phoneRevealed))
-                            _InfoRow(icon: Icons.phone_outlined, label: 'Телефон', value: '${data['contact_phone']}'),
+                          if (canSeePhone && hasPhone && (isOwner || isStaff || phoneRevealed))
+                            _InfoRow(icon: Icons.phone_outlined, label: 'Телефон', value: contactPhone!),
                           _InfoRow(
                             icon: Icons.schedule_outlined,
                             label: 'Опубликовано',
@@ -445,27 +469,40 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                         ],
                       ),
                     ),
-                    if (data['contact_phone'] != null) ...[
+                    if (showChatPrimary) ...[
                       const SizedBox(height: 16),
                       FilledButton.icon(
+                        onPressed: openChat,
+                        icon: const Icon(Icons.chat_bubble_outline),
+                        label: const Text('Написать в приложении'),
+                      ),
+                    ],
+                    if (canSeePhone && hasPhone && !isOwner) ...[
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
                         onPressed: () async {
-                          if (!phoneRevealed) {
+                          if (!phoneRevealed && !phoneHidden) {
                             final loggedIn = await ensureLoggedIn(context, message: 'Войдите, чтобы увидеть телефон');
                             if (!loggedIn || !mounted) return;
                             setState(() => phoneRevealed = true);
+                          } else if (phoneHidden && !phoneRevealed) {
+                            if (mounted) {
+                              showAppSnack(context, 'Автор скрыл номер — напишите в чат', error: true);
+                            }
+                            return;
                           }
-                          await _call(data['contact_phone'] as String);
+                          await _call(contactPhone);
                         },
-                        icon: const Icon(Icons.phone),
-                        label: Text(phoneRevealed || isOwner ? 'Позвонить' : 'Показать / Позвонить'),
+                        icon: const Icon(Icons.phone_outlined),
+                        label: Text(phoneRevealed && !phoneHidden ? 'Позвонить' : 'Показать телефон'),
                       ),
-                      if (phoneRevealed || isOwner) ...[
+                      if (phoneRevealed && !phoneHidden) ...[
                         const SizedBox(height: 8),
                         Row(
                           children: [
                             Expanded(
                               child: OutlinedButton.icon(
-                                onPressed: () => _message(data['contact_phone'] as String?, whatsapp: false),
+                                onPressed: () => _message(contactPhone, whatsapp: false),
                                 icon: const Icon(Icons.sms_outlined),
                                 label: const Text('SMS'),
                               ),
@@ -473,7 +510,7 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                             const SizedBox(width: 8),
                             Expanded(
                               child: OutlinedButton.icon(
-                                onPressed: () => _message(data['contact_phone'] as String?, whatsapp: true),
+                                onPressed: () => _message(contactPhone, whatsapp: true),
                                 icon: const Icon(Icons.chat_outlined),
                                 label: const Text('WhatsApp'),
                               ),
@@ -481,6 +518,14 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                           ],
                         ),
                       ],
+                    ],
+                    if ((isOwner || isStaff) && hasPhone) ...[
+                      const SizedBox(height: 8),
+                      FilledButton.icon(
+                        onPressed: () => _call(contactPhone!),
+                        icon: const Icon(Icons.phone),
+                        label: const Text('Позвонить'),
+                      ),
                     ],
                     if (!isOwner) ...[
                       const SizedBox(height: 12),

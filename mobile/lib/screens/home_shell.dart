@@ -11,6 +11,7 @@ import '../update_service.dart';
 import 'about_screen.dart';
 import 'create_listing_screen.dart';
 import 'directory_detail_screen.dart';
+import 'district_hub_screen.dart';
 import 'directory_favorites_screen.dart';
 import 'edit_profile_screen.dart';
 import 'event_detail_screen.dart';
@@ -18,6 +19,7 @@ import 'favorites_screen.dart';
 import 'legal_doc_screen.dart';
 import 'listing_detail_screen.dart';
 import 'my_listings_screen.dart';
+import 'my_reports_screen.dart';
 import 'news_list_screen.dart';
 import 'notifications_screen.dart';
 import 'transport_detail_screen.dart';
@@ -62,6 +64,13 @@ const sortLabels = {
   'oldest': 'Сначала старые',
   'price_asc': 'Цена ↑',
   'price_desc': 'Цена ↓',
+};
+
+const badgeLabels = {
+  'verified': 'Проверенный',
+  'trusted': 'Надёжный',
+  'caution': 'Осторожно',
+  'new': 'Новичок',
 };
 
 class RyadomFilterChip extends StatelessWidget {
@@ -203,7 +212,7 @@ class _HomeShellState extends State<HomeShell> {
             selectedIcon: Icon(Icons.directions_bus),
             label: 'Транспорт',
           ),
-          const NavigationDestination(icon: Icon(Icons.map_outlined), selectedIcon: Icon(Icons.map), label: 'Справочник'),
+          const NavigationDestination(icon: Icon(Icons.map_outlined), selectedIcon: Icon(Icons.map), label: 'Места'),
           NavigationDestination(
             icon: Badge(
               isLabelVisible: state.user != null && state.unreadNotifications > 0,
@@ -245,12 +254,17 @@ class _ListingsTab extends StatefulWidget {
 
 class _ListingsTabState extends State<_ListingsTab> {
   final search = TextEditingController();
-  Map<String, dynamic>? activeAlert;
+  List<Map<String, dynamic>> activeAlerts = [];
+  final Set<int> dismissedAlertIds = {};
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadAlert());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final q = context.read<AppState>().filterQuery;
+      if (q.isNotEmpty) search.text = q;
+      _loadAlert();
+    });
   }
 
   @override
@@ -261,10 +275,10 @@ class _ListingsTabState extends State<_ListingsTab> {
 
   Future<void> _loadAlert() async {
     try {
-      final alert = await context.read<AppState>().loadActiveAlert();
-      if (mounted) setState(() => activeAlert = alert);
+      final alerts = await context.read<AppState>().loadActiveAlerts(limit: 5);
+      if (mounted) setState(() => activeAlerts = alerts);
     } catch (_) {
-      if (mounted) setState(() => activeAlert = null);
+      if (mounted) setState(() => activeAlerts = []);
     }
   }
 
@@ -334,45 +348,63 @@ class _ListingsTabState extends State<_ListingsTab> {
               ),
             ),
           ),
-        if (activeAlert != null)
-          Material(
-            color: _alertBg(context, activeAlert!['kind']?.toString()),
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Icon(
-                    activeAlert!['kind'] == 'danger'
-                        ? Icons.warning_amber_rounded
-                        : activeAlert!['kind'] == 'warn'
-                            ? Icons.info_outline
-                            : Icons.campaign_outlined,
-                    color: _alertFg(context, activeAlert!['kind']?.toString()),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Text(
-                      '${activeAlert!['message']}',
-                      style: TextStyle(
-                        color: _alertFg(context, activeAlert!['kind']?.toString()),
-                        fontWeight: FontWeight.w600,
-                        height: 1.35,
+        if (activeAlerts.isNotEmpty)
+          ...activeAlerts.where((a) => !dismissedAlertIds.contains(a['id'] as int?)).map(
+            (alert) => Material(
+              color: _alertBg(context, alert['kind']?.toString()),
+              child: Padding(
+                padding: const EdgeInsets.fromLTRB(16, 10, 8, 10),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(
+                      alert['kind'] == 'danger'
+                          ? Icons.warning_amber_rounded
+                          : alert['kind'] == 'warn'
+                              ? Icons.info_outline
+                              : Icons.campaign_outlined,
+                      color: _alertFg(context, alert['kind']?.toString()),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        '${alert['message']}',
+                        style: TextStyle(
+                          color: _alertFg(context, alert['kind']?.toString()),
+                          fontWeight: FontWeight.w600,
+                          height: 1.35,
+                        ),
                       ),
                     ),
-                  ),
-                  IconButton(
-                    visualDensity: VisualDensity.compact,
-                    onPressed: () => setState(() => activeAlert = null),
-                    icon: Icon(
-                      Icons.close,
-                      color: _alertFg(context, activeAlert!['kind']?.toString()),
+                    IconButton(
+                      visualDensity: VisualDensity.compact,
+                      onPressed: () {
+                        final id = alert['id'];
+                        if (id is int) setState(() => dismissedAlertIds.add(id));
+                      },
+                      icon: Icon(
+                        Icons.close,
+                        color: _alertFg(context, alert['kind']?.toString()),
+                      ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
           ),
+        ListTile(
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+          leading: Icon(Icons.location_city_outlined, color: scheme.primary),
+          title: Text(
+            'Район',
+            style: GoogleFonts.manrope(fontWeight: FontWeight.w700),
+          ),
+          subtitle: const Text('Оповещения, новости и события'),
+          trailing: const Icon(Icons.chevron_right),
+          onTap: () {
+            Navigator.push(context, fastRoute(const DistrictHubScreen()));
+          },
+        ),
         ListTile(
           contentPadding: const EdgeInsets.symmetric(horizontal: 16),
           leading: Icon(Icons.newspaper_outlined, color: scheme.primary),
@@ -546,6 +578,13 @@ class _ListingsTabState extends State<_ListingsTab> {
     String? category = state.filterCategory;
     int? settlementId = state.filterSettlementId;
     String sort = state.sort;
+    bool hasPhotos = state.filterHasPhotos;
+    final priceMinCtrl = TextEditingController(
+      text: state.filterPriceMin != null ? state.filterPriceMin!.toStringAsFixed(state.filterPriceMin! % 1 == 0 ? 0 : 2) : '',
+    );
+    final priceMaxCtrl = TextEditingController(
+      text: state.filterPriceMax != null ? state.filterPriceMax!.toStringAsFixed(state.filterPriceMax! % 1 == 0 ? 0 : 2) : '',
+    );
 
     await showModalBottomSheet<void>(
       context: context,
@@ -585,6 +624,33 @@ class _ListingsTabState extends State<_ListingsTab> {
                     onChanged: (v) => setModal(() => settlementId = v),
                   ),
                   const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: priceMinCtrl,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(labelText: 'Цена от, ₽'),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: TextField(
+                          controller: priceMaxCtrl,
+                          keyboardType: TextInputType.number,
+                          decoration: const InputDecoration(labelText: 'Цена до, ₽'),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  SwitchListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: const Text('Только с фото'),
+                    value: hasPhotos,
+                    onChanged: (v) => setModal(() => hasPhotos = v),
+                  ),
+                  const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
                     value: sort,
                     decoration: const InputDecoration(labelText: 'Сортировка'),
@@ -596,12 +662,21 @@ class _ListingsTabState extends State<_ListingsTab> {
                   const SizedBox(height: 18),
                   FilledButton(
                     onPressed: () async {
+                      double? parsePrice(String raw) {
+                        final t = raw.trim().replaceAll(',', '.');
+                        if (t.isEmpty) return null;
+                        return double.tryParse(t);
+                      }
+
                       Navigator.pop(ctx);
                       await state.setListingFilters(
                         category: category,
                         settlementId: settlementId,
                         sortBy: sort,
                         query: search.text.trim(),
+                        hasPhotos: hasPhotos,
+                        priceMin: parsePrice(priceMinCtrl.text),
+                        priceMax: parsePrice(priceMaxCtrl.text),
                       );
                     },
                     child: const Text('Применить'),
@@ -610,11 +685,16 @@ class _ListingsTabState extends State<_ListingsTab> {
                     onPressed: () async {
                       Navigator.pop(ctx);
                       search.clear();
+                      priceMinCtrl.clear();
+                      priceMaxCtrl.clear();
                       await state.setListingFilters(
                         category: null,
                         settlementId: null,
                         query: '',
                         sortBy: 'newest',
+                        hasPhotos: false,
+                        priceMin: null,
+                        priceMax: null,
                       );
                     },
                     child: const Text('Сбросить'),
@@ -626,6 +706,8 @@ class _ListingsTabState extends State<_ListingsTab> {
         );
       },
     );
+    priceMinCtrl.dispose();
+    priceMaxCtrl.dispose();
   }
 }
 
@@ -1007,8 +1089,9 @@ class _TransportTabState extends State<_TransportTab> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final user = context.read<AppState>().user;
-      final sid = user?['settlement_id'] as int?;
+      final state = context.read<AppState>();
+      final user = state.user;
+      final sid = user?['settlement_id'] as int? ?? state.preferredSettlementId;
       if (sid != null) {
         setState(() => settlementId = sid);
         _load();
@@ -1097,6 +1180,25 @@ class _TransportTabState extends State<_TransportTab> {
 
     return Column(
       children: [
+        if (state.lastTransportFromCache)
+          Material(
+            color: scheme.secondaryContainer,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+              child: Row(
+                children: [
+                  Icon(Icons.offline_bolt, size: 18, color: scheme.onSecondaryContainer),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Показано сохранённое расписание — нет связи с сервером',
+                      style: TextStyle(color: scheme.onSecondaryContainer, fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
           child: DropdownButtonFormField<int>(
@@ -1347,6 +1449,35 @@ class _DirectoryTabState extends State<_DirectoryTab> {
     await launchUrl(uri);
   }
 
+  Future<void> _openMaps(String? mapsUrl, Map<String, dynamic> item) async {
+    if (mapsUrl != null && mapsUrl.trim().isNotEmpty) {
+      var url = mapsUrl.trim();
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        url = 'https://$url';
+      }
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      return;
+    }
+    final lat = item['lat'];
+    final lon = item['lon'];
+    final address = item['address']?.toString();
+    Uri uri;
+    if (lat is num && lon is num) {
+      uri = Uri.parse('geo:$lat,$lon?q=$lat,$lon(${Uri.encodeComponent(item['title'] as String)})');
+    } else if (address != null && address.isNotEmpty) {
+      uri = Uri.parse('geo:0,0?q=${Uri.encodeComponent(address)}');
+    } else {
+      return;
+    }
+    if (!await launchUrl(uri)) {
+      final q = address ?? '${item['title']}';
+      await launchUrl(
+        Uri.parse('https://yandex.ru/maps/?text=${Uri.encodeComponent(q)}'),
+        mode: LaunchMode.externalApplication,
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
@@ -1464,6 +1595,12 @@ class _DirectoryTabState extends State<_DirectoryTab> {
                               final item = items[i] as Map<String, dynamic>;
                               final phone = item['phone']?.toString();
                               final dirFav = item['is_favorited'] == true;
+                              final openNow = item['is_open_now'] == true;
+                              final closedNow = item['is_open_now'] == false;
+                              final mapsUrl = item['maps_url']?.toString();
+                              final hasMap = (mapsUrl != null && mapsUrl.isNotEmpty) ||
+                                  (item['lat'] is num && item['lon'] is num) ||
+                                  (item['address'] != null && '${item['address']}'.isNotEmpty);
                               return Material(
                                 color: Theme.of(context).cardTheme.color,
                                 borderRadius: BorderRadius.circular(18),
@@ -1496,6 +1633,40 @@ class _DirectoryTabState extends State<_DirectoryTab> {
                                                 ),
                                               ),
                                             ),
+                                            if (openNow)
+                                              Container(
+                                                margin: const EdgeInsets.only(right: 4),
+                                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                                decoration: BoxDecoration(
+                                                  color: scheme.primaryContainer,
+                                                  borderRadius: BorderRadius.circular(999),
+                                                ),
+                                                child: Text(
+                                                  'Открыто',
+                                                  style: TextStyle(
+                                                    color: scheme.onPrimaryContainer,
+                                                    fontWeight: FontWeight.w800,
+                                                    fontSize: 11,
+                                                  ),
+                                                ),
+                                              )
+                                            else if (closedNow)
+                                              Container(
+                                                margin: const EdgeInsets.only(right: 4),
+                                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                                decoration: BoxDecoration(
+                                                  color: scheme.surfaceContainerHighest,
+                                                  borderRadius: BorderRadius.circular(999),
+                                                ),
+                                                child: Text(
+                                                  'Закрыто',
+                                                  style: TextStyle(
+                                                    color: scheme.onSurfaceVariant,
+                                                    fontWeight: FontWeight.w700,
+                                                    fontSize: 11,
+                                                  ),
+                                                ),
+                                              ),
                                             IconButton(
                                               visualDensity: VisualDensity.compact,
                                               tooltip: dirFav ? 'Убрать из избранного' : 'В избранное',
@@ -1560,6 +1731,14 @@ class _DirectoryTabState extends State<_DirectoryTab> {
                                                 icon: const Icon(Icons.phone, size: 18),
                                                 label: const Text('Позвонить'),
                                               ),
+                                            if (hasMap) ...[
+                                              if (phone != null && phone.isNotEmpty) const SizedBox(width: 8),
+                                              OutlinedButton.icon(
+                                                onPressed: () => _openMaps(mapsUrl, item),
+                                                icon: const Icon(Icons.map_outlined, size: 18),
+                                                label: const Text('Карта'),
+                                              ),
+                                            ],
                                             const Spacer(),
                                             Text(
                                               'Подробнее',
@@ -1780,6 +1959,14 @@ class _ProfileTab extends StatelessWidget {
           trailing: const Icon(Icons.chevron_right),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           onTap: () => Navigator.push(context, fastRoute(const MyListingsScreen())),
+        ),
+        ListTile(
+          leading: const Icon(Icons.flag_outlined),
+          title: const Text('Жалобы на мои объявления'),
+          subtitle: const Text('Статус и ответ модератора'),
+          trailing: const Icon(Icons.chevron_right),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          onTap: () => Navigator.push(context, fastRoute(const MyReportsScreen())),
         ),
         ListTile(
           leading: const Icon(Icons.favorite_outline),

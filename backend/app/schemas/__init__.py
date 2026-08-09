@@ -76,9 +76,25 @@ class UserOut(BaseModel):
     app_version: str | None = None
     device_info: str | None = None
     last_seen_at: datetime | None = None
+    badge: str | None = None
+    rating_score: float | None = None
+    listings_count: int = 0
+    reports_against: int = 0
 
     class Config:
         from_attributes = True
+
+
+class PublicUserOut(BaseModel):
+    id: int
+    full_name: str
+    settlement_name: str | None = None
+    badge: str | None = None
+    rating_score: float | None = None
+    listings_count: int = 0
+    reports_against: int = 0
+    member_since: datetime | None = None
+    is_active: bool = True
 
 
 class RegisterIn(BaseModel):
@@ -158,6 +174,8 @@ class ListingOut(BaseModel):
     id: int
     author_id: int
     author_name: str | None = None
+    author_badge: str | None = None
+    author_rating: float | None = None
     settlement_id: int
     settlement_name: str | None = None
     category: ListingCategory
@@ -165,6 +183,7 @@ class ListingOut(BaseModel):
     description: str
     price: float | None
     contact_phone: str | None
+    phone_hidden: bool = False
     status: ListingStatus
     moderation_note: str | None
     close_reason: str | None = None
@@ -279,6 +298,8 @@ class DirectoryOut(BaseModel):
     phone: str | None
     website: str | None
     hours: str | None = None
+    is_open_now: bool | None = None
+    maps_url: str | None = None
     lat: float | None
     lon: float | None
     is_published: bool
@@ -392,6 +413,8 @@ class TransportCreate(BaseModel):
     stops_text: str | None = Field(default=None, max_length=8000)
     days_mode: str = Field(default="all", pattern="^(all|weekdays|weekends)$")
     notes: str | None = Field(default=None, max_length=2000)
+    fare_text: str | None = Field(default=None, max_length=120)
+    phone: str | None = Field(default=None, max_length=32)
     settlement_id: int | None = None
     is_published: bool = True
 
@@ -406,6 +429,8 @@ class TransportUpdate(BaseModel):
     stops_text: str | None = Field(default=None, max_length=8000)
     days_mode: str | None = Field(default=None, pattern="^(all|weekdays|weekends)$")
     notes: str | None = Field(default=None, max_length=2000)
+    fare_text: str | None = Field(default=None, max_length=120)
+    phone: str | None = Field(default=None, max_length=32)
     settlement_id: int | None = None
     is_published: bool | None = None
 
@@ -422,11 +447,16 @@ class TransportOut(BaseModel):
     stops: list[str] = []
     days_mode: str = "all"
     notes: str | None
+    fare_text: str | None = None
+    phone: str | None = None
+    next_departure: str | None = None
     settlement_id: int | None
     settlement_name: str | None = None
     is_published: bool
     is_favorited: bool = False
     view_count: int = 0
+    favorite_count: int = 0
+    outdated_reports: int = 0
     created_at: datetime
     updated_at: datetime
 
@@ -439,6 +469,7 @@ class NewsCreate(BaseModel):
     body: str = Field(min_length=3, max_length=12000)
     settlement_id: int | None = None
     is_published: bool = True
+    is_pinned: bool = False
     published_at: datetime | None = None
 
 
@@ -447,6 +478,7 @@ class NewsUpdate(BaseModel):
     body: str | None = Field(default=None, min_length=3, max_length=12000)
     settlement_id: int | None = None
     is_published: bool | None = None
+    is_pinned: bool | None = None
     published_at: datetime | None = None
 
 
@@ -454,9 +486,11 @@ class NewsOut(BaseModel):
     id: int
     title: str
     body: str
+    cover_url: str | None = None
     settlement_id: int | None
     settlement_name: str | None = None
     is_published: bool
+    is_pinned: bool = False
     published_at: datetime | None
     created_at: datetime
     updated_at: datetime
@@ -468,6 +502,7 @@ class NewsOut(BaseModel):
 class AlertCreate(BaseModel):
     message: str = Field(min_length=3, max_length=280)
     kind: str = Field(default="info", pattern="^(info|warn|danger)$")
+    priority: int = Field(default=0, ge=0, le=100)
     is_active: bool = True
     starts_at: datetime | None = None
     ends_at: datetime | None = None
@@ -476,6 +511,7 @@ class AlertCreate(BaseModel):
 class AlertUpdate(BaseModel):
     message: str | None = Field(default=None, min_length=3, max_length=280)
     kind: str | None = Field(default=None, pattern="^(info|warn|danger)$")
+    priority: int | None = Field(default=None, ge=0, le=100)
     is_active: bool | None = None
     starts_at: datetime | None = None
     ends_at: datetime | None = None
@@ -485,6 +521,7 @@ class AlertOut(BaseModel):
     id: int
     message: str
     kind: str
+    priority: int = 0
     is_active: bool
     starts_at: datetime | None
     ends_at: datetime | None
@@ -493,6 +530,33 @@ class AlertOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ListingMessageIn(BaseModel):
+    body: str = Field(min_length=1, max_length=2000)
+
+
+class ListingMessageOut(BaseModel):
+    id: int
+    listing_id: int
+    sender_id: int
+    sender_name: str | None = None
+    body: str
+    is_read: bool
+    created_at: datetime
+    is_mine: bool = False
+
+
+class AuthorReportOut(BaseModel):
+    id: int
+    listing_id: int
+    listing_title: str | None = None
+    reason: str
+    note: str | None
+    status: str
+    moderator_reply: str | None
+    created_at: datetime
+    reviewed_at: datetime | None = None
 
 
 class StatsOut(BaseModel):
@@ -515,6 +579,10 @@ class StatsOut(BaseModel):
     active_alerts: int = 0
     top_events: list[dict] = []
     top_routes: list[dict] = []
+    transport_favorites_total: int = 0
+    listing_favorites_total: int = 0
+    directory_favorites_total: int = 0
+    event_favorite_adds_total: int = 0
 
 
 class AdminAlertsOut(BaseModel):

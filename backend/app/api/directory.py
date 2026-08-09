@@ -1,3 +1,7 @@
+from datetime import datetime
+import re
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -9,12 +13,50 @@ from app.schemas import DirectoryCreate, DirectoryOut, DirectoryUpdate
 
 router = APIRouter(prefix="/directory", tags=["directory"])
 
+_RANGE_RE = re.compile(
+    r"(?P<h1>\d{1,2})(?::(?P<m1>\d{2}))?\s*[-–—]\s*(?P<h2>\d{1,2})(?::(?P<m2>\d{2}))?"
+)
+
 
 def favorite_ids_for(db: Session, user: User | None) -> set[int]:
     if not user:
         return set()
     rows = db.execute(select(DirectoryFavorite.directory_id).where(DirectoryFavorite.user_id == user.id)).scalars().all()
     return set(rows)
+
+
+def is_open_now(hours: str | None, now: datetime | None = None) -> bool | None:
+    if not hours or not hours.strip():
+        return None
+    text = hours.lower().replace("ё", "е")
+    if "круглосуточ" in text or "24/7" in text or "24 часа" in text:
+        return True
+    if "выходн" in text and "без выход" not in text:
+        # не парсим сложные исключения — только явные диапазоны времени
+        pass
+    now = now or datetime.now()
+    match = _RANGE_RE.search(text)
+    if not match:
+        return None
+    h1 = int(match.group("h1"))
+    m1 = int(match.group("m1") or 0)
+    h2 = int(match.group("h2"))
+    m2 = int(match.group("m2") or 0)
+    start = now.replace(hour=h1, minute=m1, second=0, microsecond=0)
+    end = now.replace(hour=h2, minute=m2, second=0, microsecond=0)
+    if end <= start:
+        # через полночь
+        return now >= start or now <= end
+    return start <= now <= end
+
+
+def maps_url(item: DirectoryItem) -> str | None:
+    if item.lat is not None and item.lon is not None:
+        return f"https://yandex.ru/maps/?pt={item.lon},{item.lat}&z=16&l=map"
+    if item.address:
+        q = quote(item.address)
+        return f"https://yandex.ru/maps/?text={q}"
+    return None
 
 
 def to_out(item: DirectoryItem, favorited_ids: set[int] | None = None) -> DirectoryOut:
@@ -29,6 +71,8 @@ def to_out(item: DirectoryItem, favorited_ids: set[int] | None = None) -> Direct
         phone=item.phone,
         website=item.website,
         hours=item.hours,
+        is_open_now=is_open_now(item.hours),
+        maps_url=maps_url(item),
         lat=item.lat,
         lon=item.lon,
         is_published=item.is_published,

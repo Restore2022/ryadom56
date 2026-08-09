@@ -15,14 +15,17 @@ from app.core.database import get_db
 from app.models import (
     AuditLog,
     BlacklistEntry,
+    DirectoryFavorite,
     DirectoryItem,
     DistrictAlert,
     DistrictNews,
     Event,
+    Favorite,
     Listing,
     ListingReport,
     ListingStatus,
     Settlement,
+    TransportFavorite,
     TransportRoute,
     User,
     UserRole,
@@ -141,21 +144,42 @@ def stats(
             db.execute(select(func.count(DistrictAlert.id)).where(DistrictAlert.is_active.is_(True))).scalar_one()
         ),
         top_events=[
-            {"id": eid, "title": title, "views": int(views or 0)}
-            for eid, title, views in db.execute(
-                select(Event.id, Event.title, Event.view_count)
+            {
+                "id": eid,
+                "title": title,
+                "views": int(views or 0),
+                "favorites": int(favs or 0),
+            }
+            for eid, title, views, favs in db.execute(
+                select(Event.id, Event.title, Event.view_count, Event.favorite_add_count)
                 .order_by(Event.view_count.desc())
                 .limit(5)
             ).all()
         ],
         top_routes=[
-            {"id": rid, "title": title, "views": int(views or 0)}
-            for rid, title, views in db.execute(
-                select(TransportRoute.id, TransportRoute.title, TransportRoute.view_count)
+            {
+                "id": rid,
+                "title": title,
+                "views": int(views or 0),
+                "favorites": int(favs or 0),
+            }
+            for rid, title, views, favs in db.execute(
+                select(
+                    TransportRoute.id,
+                    TransportRoute.title,
+                    TransportRoute.view_count,
+                    TransportRoute.favorite_count,
+                )
                 .order_by(TransportRoute.view_count.desc())
                 .limit(5)
             ).all()
         ],
+        transport_favorites_total=int(db.execute(select(func.count(TransportFavorite.id))).scalar_one()),
+        listing_favorites_total=int(db.execute(select(func.count(Favorite.id))).scalar_one()),
+        directory_favorites_total=int(db.execute(select(func.count(DirectoryFavorite.id))).scalar_one()),
+        event_favorite_adds_total=int(
+            db.execute(select(func.coalesce(func.sum(Event.favorite_add_count), 0))).scalar_one()
+        ),
     )
 
 

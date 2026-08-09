@@ -243,8 +243,12 @@ export type Stats = {
   transport_routes?: number;
   news_total?: number;
   active_alerts?: number;
-  top_events?: { id: number; title: string; views: number }[];
-  top_routes?: { id: number; title: string; views: number }[];
+  top_events?: { id: number; title: string; views: number; favorites?: number }[];
+  top_routes?: { id: number; title: string; views: number; favorites?: number }[];
+  transport_favorites_total?: number;
+  listing_favorites_total?: number;
+  directory_favorites_total?: number;
+  event_favorite_adds_total?: number;
 };
 
 export type EventItem = {
@@ -280,10 +284,15 @@ export type TransportRoute = {
   stops?: string[];
   days_mode?: 'all' | 'weekdays' | 'weekends' | string;
   notes?: string | null;
+  fare_text?: string | null;
+  phone?: string | null;
+  next_departure?: string | null;
   settlement_id?: number | null;
   settlement_name?: string | null;
   is_published: boolean;
   view_count?: number;
+  favorite_count?: number;
+  outdated_reports?: number;
   created_at: string;
   updated_at: string;
 };
@@ -292,9 +301,11 @@ export type NewsItem = {
   id: number;
   title: string;
   body: string;
+  cover_url?: string | null;
   settlement_id?: number | null;
   settlement_name?: string | null;
   is_published: boolean;
+  is_pinned?: boolean;
   published_at?: string | null;
   created_at: string;
   updated_at: string;
@@ -304,6 +315,7 @@ export type DistrictAlert = {
   id: number;
   message: string;
   kind: 'info' | 'warn' | 'danger' | string;
+  priority?: number;
   is_active: boolean;
   starts_at?: string | null;
   ends_at?: string | null;

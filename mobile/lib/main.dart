@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'api.dart';
 import 'screens/home_shell.dart';
 import 'screens/login_screen.dart';
+import 'screens/onboarding_screen.dart';
 import 'screens/register_screen.dart';
 import 'state/app_state.dart';
 import 'theme.dart';
@@ -71,6 +72,7 @@ class RootGate extends StatelessWidget {
         ),
       );
     }
+    if (!state.onboardingDone) return const OnboardingScreen();
     return const HomeShell();
   }
 }

@@ -26,6 +26,15 @@ class DirectoryDetailScreen extends StatelessWidget {
   }
 
   Future<void> _openMaps() async {
+    final mapsUrl = item['maps_url']?.toString();
+    if (mapsUrl != null && mapsUrl.trim().isNotEmpty) {
+      var url = mapsUrl.trim();
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        url = 'https://$url';
+      }
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      return;
+    }
     final lat = item['lat'];
     final lon = item['lon'];
     final address = item['address']?.toString();
@@ -52,7 +61,11 @@ class DirectoryDetailScreen extends StatelessWidget {
     final phone = item['phone']?.toString();
     final website = item['website']?.toString();
     final address = item['address']?.toString();
-    final hasMap = (item['lat'] is num && item['lon'] is num) || (address != null && address.isNotEmpty);
+    final hasMap = (item['maps_url']?.toString().isNotEmpty == true) ||
+        (item['lat'] is num && item['lon'] is num) ||
+        (address != null && address.isNotEmpty);
+    final openNow = item['is_open_now'] == true;
+    final closedNow = item['is_open_now'] == false;
 
     return Scaffold(
       appBar: AppBar(
@@ -102,6 +115,8 @@ class DirectoryDetailScreen extends StatelessWidget {
                   children: [
                     _Pill(categoryLabels[item['category']] ?? '${item['category']}'),
                     if (item['settlement_name'] != null) _Pill('${item['settlement_name']}', muted: true),
+                    if (openNow) _Pill('Открыто', highlight: true),
+                    if (closedNow) _Pill('Закрыто', muted: true),
                   ],
                 ),
                 const SizedBox(height: 14),
@@ -155,9 +170,10 @@ class DirectoryDetailScreen extends StatelessWidget {
 }
 
 class _Pill extends StatelessWidget {
-  const _Pill(this.text, {this.muted = false});
+  const _Pill(this.text, {this.muted = false, this.highlight = false});
   final String text;
   final bool muted;
+  final bool highlight;
 
   @override
   Widget build(BuildContext context) {
@@ -165,7 +181,11 @@ class _Pill extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
       decoration: BoxDecoration(
-        color: muted ? scheme.surfaceContainerHighest : scheme.primary.withValues(alpha: 0.15),
+        color: highlight
+            ? scheme.primaryContainer
+            : muted
+                ? scheme.surfaceContainerHighest
+                : scheme.primary.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(999),
       ),
       child: Text(
@@ -173,7 +193,11 @@ class _Pill extends StatelessWidget {
         style: GoogleFonts.manrope(
           fontSize: 12,
           fontWeight: FontWeight.w700,
-          color: muted ? scheme.onSurfaceVariant : scheme.primary,
+          color: highlight
+              ? scheme.onPrimaryContainer
+              : muted
+                  ? scheme.onSurfaceVariant
+                  : scheme.primary,
         ),
       ),
     );

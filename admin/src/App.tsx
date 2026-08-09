@@ -415,6 +415,11 @@ function Shell({
             </NavLink>
           )}
           {directory && (
+            <NavLink to="/calendar">
+              <span className="nav-ico">▦</span> Календарь
+            </NavLink>
+          )}
+          {directory && (
             <NavLink to="/transport">
               <span className="nav-ico">→</span> Транспорт
             </NavLink>
@@ -612,19 +617,28 @@ function Dashboard({ isAdmin }: { isAdmin?: boolean }) {
             {(stats.top_events || []).map((e) => (
               <li key={`ev-${e.id}`}>
                 <span>{e.title}</span>
-                <strong>{e.views}</strong>
+                <strong>
+                  {e.views} откр. / {e.favorites ?? 0} избр.
+                </strong>
               </li>
             ))}
             {(stats.top_routes || []).map((r) => (
               <li key={`rt-${r.id}`}>
                 <span>{r.title}</span>
-                <strong>{r.views}</strong>
+                <strong>
+                  {r.views} откр. / {r.favorites ?? 0} избр.
+                </strong>
               </li>
             ))}
             {!stats.top_events?.length && !stats.top_routes?.length && (
               <li className="muted">Пока нет просмотров</li>
             )}
           </ul>
+          <p className="muted" style={{ marginTop: 12 }}>
+            Избранное: объявления {stats.listing_favorites_total ?? 0} · справочник{' '}
+            {stats.directory_favorites_total ?? 0} · транспорт {stats.transport_favorites_total ?? 0} · афиша{' '}
+            {stats.event_favorite_adds_total ?? 0}
+          </p>
         </div>
       </div>
     </div>
@@ -840,6 +854,26 @@ function ModerationPage() {
   const pendingChecked = checked.filter((id) => items.find((x) => x.id === id && needsModeration(x)));
   const over24 = items.filter((i) => needsModeration(i) && hoursWaiting(i.created_at) >= 24).length;
 
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const tag = (e.target as HTMLElement | null)?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select' || (e.target as HTMLElement)?.isContentEditable) {
+        return;
+      }
+      if (!selected || !needsModeration(selected) || busyId != null) return;
+      if (e.key === 'a' || e.key === 'A' || e.key === 'ф' || e.key === 'Ф') {
+        e.preventDefault();
+        void moderate(selected.id, 'approved');
+      }
+      if (e.key === 'r' || e.key === 'R' || e.key === 'к' || e.key === 'К') {
+        e.preventDefault();
+        void moderate(selected.id, 'rejected');
+      }
+    }
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selected, busyId, moderationNote]);
+
   return (
     <div className="moderation-page">
       <div className="page-head compact">
@@ -848,6 +882,8 @@ function ModerationPage() {
           <p>
             Очередь по SLA (дольше ждут сверху)
             {over24 > 0 ? ` · старше 24 ч: ${over24}` : ''}
+            {' · '}
+            <span className="muted">клавиши: A — одобрить, R — отклонить</span>
           </p>
         </div>
       </div>
@@ -2470,6 +2506,8 @@ type TransportForm = {
   stops_text: string;
   days_mode: 'all' | 'weekdays' | 'weekends';
   notes: string;
+  fare_text: string;
+  phone: string;
   settlement_id: number | '';
   is_published: boolean;
 };
@@ -2484,6 +2522,8 @@ const EMPTY_TRANSPORT: TransportForm = {
   stops_text: '',
   days_mode: 'all',
   notes: '',
+  fare_text: '',
+  phone: '',
   settlement_id: '',
   is_published: true,
 };
@@ -2531,6 +2571,8 @@ function TransportPage() {
       stops_text: item.stops_text || '',
       days_mode: (item.days_mode as TransportForm['days_mode']) || 'all',
       notes: item.notes || '',
+      fare_text: item.fare_text || '',
+      phone: item.phone || '',
       settlement_id: item.settlement_id ?? '',
       is_published: item.is_published,
     });
@@ -2563,6 +2605,8 @@ function TransportPage() {
       stops_text: form.stops_text.trim() || null,
       days_mode: form.days_mode,
       notes: form.notes.trim() || null,
+      fare_text: form.fare_text.trim() || null,
+      phone: form.phone.trim() || null,
       settlement_id: form.settlement_id === '' ? null : Number(form.settlement_id),
       is_published: form.is_published,
     };
@@ -2755,6 +2799,22 @@ function TransportPage() {
                     onChange={(e) => setForm({ ...form, schedule_weekends: e.target.value })}
                   />
                 </label>
+                <label className="field">
+                  Цена проезда
+                  <input
+                    value={form.fare_text}
+                    onChange={(e) => setForm({ ...form, fare_text: e.target.value })}
+                    placeholder="напр. 45 ₽"
+                  />
+                </label>
+                <label className="field">
+                  Телефон перевозчика
+                  <input
+                    value={form.phone}
+                    onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                    placeholder="+7…"
+                  />
+                </label>
                 <label className="field full">
                   Заметки
                   <textarea rows={3} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
@@ -2782,6 +2842,7 @@ type NewsForm = {
   body: string;
   settlement_id: number | '';
   is_published: boolean;
+  is_pinned: boolean;
 };
 
 const EMPTY_NEWS: NewsForm = {
@@ -2789,6 +2850,7 @@ const EMPTY_NEWS: NewsForm = {
   body: '',
   settlement_id: '',
   is_published: true,
+  is_pinned: false,
 };
 
 function NewsPage() {
@@ -2801,6 +2863,7 @@ function NewsPage() {
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
   const [publishedFilter, setPublishedFilter] = useState<'all' | 'published' | 'hidden'>('all');
+  const [coverFile, setCoverFile] = useState<File | null>(null);
 
   async function load() {
     const [news, s] = await Promise.all([
@@ -2818,6 +2881,7 @@ function NewsPage() {
   function openCreate() {
     setEditingId(null);
     setForm(EMPTY_NEWS);
+    setCoverFile(null);
     setError('');
     setModalOpen(true);
   }
@@ -2829,7 +2893,9 @@ function NewsPage() {
       body: item.body,
       settlement_id: item.settlement_id ?? '',
       is_published: item.is_published,
+      is_pinned: !!item.is_pinned,
     });
+    setCoverFile(null);
     setError('');
     setModalOpen(true);
   }
@@ -2854,12 +2920,20 @@ function NewsPage() {
       body: form.body.trim(),
       settlement_id: form.settlement_id === '' ? null : Number(form.settlement_id),
       is_published: form.is_published,
+      is_pinned: form.is_pinned,
     };
     try {
+      let id = editingId;
       if (editingId) {
         await api(`/news/${editingId}`, { method: 'PATCH', body: JSON.stringify(body) });
       } else {
-        await api('/news', { method: 'POST', body: JSON.stringify(body) });
+        const created = await api<NewsItem>('/news', { method: 'POST', body: JSON.stringify(body) });
+        id = created.id;
+      }
+      if (coverFile && id) {
+        const fd = new FormData();
+        fd.append('file', coverFile);
+        await api(`/news/${id}/cover`, { method: 'POST', body: fd });
       }
       setModalOpen(false);
       await load();
@@ -2979,6 +3053,20 @@ function NewsPage() {
                     <option value="0">Скрыто</option>
                   </select>
                 </label>
+                <label className="field">
+                  Закрепить
+                  <select
+                    value={form.is_pinned ? '1' : '0'}
+                    onChange={(e) => setForm({ ...form, is_pinned: e.target.value === '1' })}
+                  >
+                    <option value="0">Нет</option>
+                    <option value="1">Да</option>
+                  </select>
+                </label>
+                <label className="field full">
+                  Обложка
+                  <input type="file" accept="image/*" onChange={(e) => setCoverFile(e.target.files?.[0] || null)} />
+                </label>
                 <label className="field full">
                   Текст
                   <textarea
@@ -3015,17 +3103,25 @@ const ALERT_KIND_LABELS: Record<string, string> = {
 type AlertForm = {
   message: string;
   kind: 'info' | 'warn' | 'danger';
+  priority: number;
   is_active: boolean;
+  starts_at: string;
+  ends_at: string;
 };
 
 const EMPTY_ALERT: AlertForm = {
   message: '',
   kind: 'info',
+  priority: 0,
   is_active: true,
+  starts_at: '',
+  ends_at: '',
 };
 
 function AlertsPage() {
   const [items, setItems] = useState<DistrictAlert[]>([]);
+  const [history, setHistory] = useState<DistrictAlert[]>([]);
+  const [tab, setTab] = useState<'active' | 'history'>('active');
   const [form, setForm] = useState<AlertForm>(EMPTY_ALERT);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
@@ -3033,7 +3129,12 @@ function AlertsPage() {
   const [busy, setBusy] = useState(false);
 
   async function load() {
-    setItems(await api<DistrictAlert[]>('/alerts'));
+    const [all, hist] = await Promise.all([
+      api<DistrictAlert[]>('/alerts'),
+      api<DistrictAlert[]>('/alerts?history=1'),
+    ]);
+    setItems(all);
+    setHistory(hist);
   }
 
   useEffect(() => {
@@ -3052,7 +3153,10 @@ function AlertsPage() {
     setForm({
       message: item.message,
       kind: (item.kind as AlertForm['kind']) || 'info',
+      priority: item.priority ?? 0,
       is_active: item.is_active,
+      starts_at: toDatetimeLocal(item.starts_at),
+      ends_at: toDatetimeLocal(item.ends_at),
     });
     setError('');
     setModalOpen(true);
@@ -3076,7 +3180,10 @@ function AlertsPage() {
     const body = {
       message: form.message.trim(),
       kind: form.kind,
+      priority: Number(form.priority) || 0,
       is_active: form.is_active,
+      starts_at: form.starts_at ? new Date(form.starts_at).toISOString() : null,
+      ends_at: form.ends_at ? new Date(form.ends_at).toISOString() : null,
     };
     try {
       if (editingId) {
@@ -3102,22 +3209,30 @@ function AlertsPage() {
     pushToast('Объявление удалено');
   }
 
+  const shown = tab === 'history' ? history : items;
+
   return (
     <div>
       <div className="page-head">
         <div>
           <h1>Срочное</h1>
-          <p>
-            Районные оповещения. Активное объявление доступно публично: <code>GET /alerts/active</code>
-          </p>
+          <p>Несколько баннеров по приоритету. Срок действия и история прошлых оповещений.</p>
         </div>
         <button className="btn" type="button" onClick={openCreate}>
           Добавить объявление
         </button>
       </div>
+      <div className="toolbar compact">
+        <button type="button" className={`btn ${tab === 'active' ? '' : 'secondary'}`} onClick={() => setTab('active')}>
+          Все / текущие
+        </button>
+        <button type="button" className={`btn ${tab === 'history' ? '' : 'secondary'}`} onClick={() => setTab('history')}>
+          История
+        </button>
+      </div>
       {error && !modalOpen && <p className="error">{error}</p>}
       <div className="list">
-        {items.map((item) => (
+        {shown.map((item) => (
           <article key={item.id} className="row-card">
             <div className="row-main">
               <h3 className="row-title">{item.message}</h3>
@@ -3127,11 +3242,13 @@ function AlertsPage() {
                 >
                   {ALERT_KIND_LABELS[item.kind] || item.kind}
                 </span>
+                <span className="chip neutral">приоритет {item.priority ?? 0}</span>
                 {item.is_active ? (
                   <span className="chip ok">Активно</span>
                 ) : (
                   <span className="chip neutral">Выкл.</span>
                 )}
+                {item.ends_at && <span className="chip neutral">до {formatDate(item.ends_at)}</span>}
                 <span className="chip neutral">{formatDate(item.updated_at)}</span>
               </div>
             </div>
@@ -3145,7 +3262,7 @@ function AlertsPage() {
             </div>
           </article>
         ))}
-        {!items.length && <div className="empty">Срочных объявлений пока нет</div>}
+        {!shown.length && <div className="empty">{tab === 'history' ? 'История пуста' : 'Срочных объявлений пока нет'}</div>}
       </div>
 
       {modalOpen && (
@@ -3185,6 +3302,32 @@ function AlertsPage() {
                     <option value="0">Выкл.</option>
                   </select>
                 </label>
+                <label className="field">
+                  Приоритет (выше = важнее)
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={form.priority}
+                    onChange={(e) => setForm({ ...form, priority: Number(e.target.value) || 0 })}
+                  />
+                </label>
+                <label className="field">
+                  Начало показа
+                  <input
+                    type="datetime-local"
+                    value={form.starts_at}
+                    onChange={(e) => setForm({ ...form, starts_at: e.target.value })}
+                  />
+                </label>
+                <label className="field">
+                  Окончание показа
+                  <input
+                    type="datetime-local"
+                    value={form.ends_at}
+                    onChange={(e) => setForm({ ...form, ends_at: e.target.value })}
+                  />
+                </label>
               </div>
               {error && <p className="error">{error}</p>}
               <div className="modal-actions">
@@ -3199,6 +3342,121 @@ function AlertsPage() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function EditorialCalendarPage() {
+  const [month, setMonth] = useState(() => {
+    const d = new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+  const [events, setEvents] = useState<EventItem[]>([]);
+  const [news, setNews] = useState<NewsItem[]>([]);
+  const [alerts, setAlerts] = useState<DistrictAlert[]>([]);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    Promise.all([
+      api<EventItem[]>('/events'),
+      api<NewsItem[]>('/news'),
+      api<DistrictAlert[]>('/alerts'),
+    ])
+      .then(([ev, n, a]) => {
+        setEvents(ev);
+        setNews(n);
+        setAlerts(a);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+  }, []);
+
+  const year = month.getFullYear();
+  const mon = month.getMonth();
+  const daysInMonth = new Date(year, mon + 1, 0).getDate();
+  const startWeekday = (new Date(year, mon, 1).getDay() + 6) % 7; // пн=0
+
+  function itemsForDay(day: number) {
+    const key = `${year}-${String(mon + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
+    const dayEvents = events.filter((e) => (e.publish_at || e.starts_at || '').startsWith(key));
+    const dayNews = news.filter((n) => (n.published_at || n.created_at || '').startsWith(key));
+    const dayAlerts = alerts.filter((a) => (a.starts_at || a.created_at || '').startsWith(key));
+    return { dayEvents, dayNews, dayAlerts };
+  }
+
+  return (
+    <div>
+      <div className="page-head compact">
+        <div>
+          <h1>Редакторский календарь</h1>
+          <p>Сетка месяца: события, новости и срочные по дате публикации / старта</p>
+        </div>
+        <div className="toolbar compact">
+          <button
+            type="button"
+            className="btn secondary"
+            onClick={() => setMonth(new Date(year, mon - 1, 1))}
+          >
+            ←
+          </button>
+          <strong>
+            {month.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' })}
+          </strong>
+          <button
+            type="button"
+            className="btn secondary"
+            onClick={() => setMonth(new Date(year, mon + 1, 1))}
+          >
+            →
+          </button>
+        </div>
+      </div>
+      {error && <p className="error">{error}</p>}
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(7, 1fr)',
+          gap: 6,
+        }}
+      >
+        {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((d) => (
+          <div key={d} className="muted" style={{ textAlign: 'center', fontSize: 12 }}>
+            {d}
+          </div>
+        ))}
+        {Array.from({ length: startWeekday }).map((_, i) => (
+          <div key={`e-${i}`} />
+        ))}
+        {Array.from({ length: daysInMonth }).map((_, i) => {
+          const day = i + 1;
+          const { dayEvents, dayNews, dayAlerts } = itemsForDay(day);
+          return (
+            <div
+              key={day}
+              className="panel"
+              style={{ minHeight: 88, padding: 8, margin: 0 }}
+            >
+              <strong style={{ fontSize: 13 }}>{day}</strong>
+              <ul style={{ margin: '6px 0 0', padding: 0, listStyle: 'none', fontSize: 11 }}>
+                {dayEvents.map((e) => (
+                  <li key={`e-${e.id}`} title={e.title}>
+                    Аф: {e.title.slice(0, 28)}
+                  </li>
+                ))}
+                {dayNews.map((n) => (
+                  <li key={`n-${n.id}`} title={n.title}>
+                    Нов: {n.title.slice(0, 28)}
+                  </li>
+                ))}
+                {dayAlerts.map((a) => (
+                  <li key={`a-${a.id}`} title={a.message}>
+                    Ср: {a.message.slice(0, 28)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -3540,6 +3798,7 @@ export default function App() {
         <Route path="/audit" element={<AuditPage />} />
         {canEditDirectory(user!.role) && <Route path="/directory" element={<DirectoryPage />} />}
         {canEditDirectory(user!.role) && <Route path="/events" element={<EventsPage />} />}
+        {canEditDirectory(user!.role) && <Route path="/calendar" element={<EditorialCalendarPage />} />}
         {canEditDirectory(user!.role) && <Route path="/transport" element={<TransportPage />} />}
         {canEditDirectory(user!.role) && <Route path="/news" element={<NewsPage />} />}
         {canEditDirectory(user!.role) && <Route path="/alerts" element={<AlertsPage />} />}

@@ -1,17 +1,42 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user
 from app.core.database import get_db
 from app.core.security import create_access_token, hash_password, verify_password
-from app.models import Settlement, User
-from app.schemas import DeviceInfoIn, LoginIn, ProfileUpdateIn, RegisterIn, TokenOut, UserOut
+from app.models import Listing, ListingReport, ListingStatus, Settlement, User
+from app.schemas import DeviceInfoIn, LoginIn, ProfileUpdateIn, PublicUserOut, RegisterIn, TokenOut, UserOut
 from app.services.rate_limit import limiter
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def enrich_user_out(db: Session, user: User) -> UserOut:
+    listings_count = int(
+        db.execute(
+            select(func.count(Listing.id)).where(
+                Listing.author_id == user.id,
+                Listing.status == ListingStatus.approved,
+            )
+        ).scalar_one()
+    )
+    reports_against = int(
+        db.execute(
+            select(func.count(ListingReport.id))
+            .join(Listing, Listing.id == ListingReport.listing_id)
+            .where(
+                Listing.author_id == user.id,
+                ListingReport.status.in_(["open", "reviewed"]),
+            )
+        ).scalar_one()
+    )
+    data = UserOut.model_validate(user)
+    data.listings_count = listings_count
+    data.reports_against = reports_against
+    return data
 
 
 def client_ip(request: Request) -> str | None:
@@ -91,8 +116,49 @@ def login(payload: LoginIn, request: Request, db: Session = Depends(get_db)):
 
 
 @router.get("/me", response_model=UserOut)
-def me(user: User = Depends(get_current_user)):
-    return user
+def me(db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    db_user = db.execute(
+        select(User).options(selectinload(User.settlement)).where(User.id == user.id)
+    ).scalar_one()
+    return enrich_user_out(db, db_user)
+
+
+@router.get("/users/{user_id}/public", response_model=PublicUserOut)
+def public_profile(user_id: int, db: Session = Depends(get_db)):
+    u = db.execute(
+        select(User).options(selectinload(User.settlement)).where(User.id == user_id)
+    ).scalar_one_or_none()
+    if not u or not u.is_active:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    listings_count = int(
+        db.execute(
+            select(func.count(Listing.id)).where(
+                Listing.author_id == u.id,
+                Listing.status == ListingStatus.approved,
+            )
+        ).scalar_one()
+    )
+    reports_against = int(
+        db.execute(
+            select(func.count(ListingReport.id))
+            .join(Listing, Listing.id == ListingReport.listing_id)
+            .where(
+                Listing.author_id == u.id,
+                ListingReport.status.in_(["open", "reviewed"]),
+            )
+        ).scalar_one()
+    )
+    return PublicUserOut(
+        id=u.id,
+        full_name=u.full_name,
+        settlement_name=u.settlement.display_name if u.settlement else None,
+        badge=u.badge,
+        rating_score=u.rating_score,
+        listings_count=listings_count,
+        reports_against=reports_against,
+        member_since=u.created_at,
+        is_active=u.is_active,
+    )
 
 
 @router.patch("/me", response_model=UserOut)

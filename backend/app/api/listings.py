@@ -2,7 +2,7 @@ from pathlib import Path
 import json
 import uuid
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
-from sqlalchemy import exists, func, or_, select
+from sqlalchemy import case, exists, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, get_optional_user, require_roles
@@ -12,16 +12,20 @@ from app.models import (
     Listing,
     ListingCategory,
     ListingImage,
+    ListingMessage,
     ListingReport,
     ListingStatus,
     User,
     UserRole,
 )
 from app.schemas import (
+    AuthorReportOut,
     ListingCloseIn,
     ListingCreate,
     ListingImageOut,
     ListingImagesReorderIn,
+    ListingMessageIn,
+    ListingMessageOut,
     ListingModerationIn,
     ListingOut,
     ListingPageOut,
@@ -126,22 +130,34 @@ def apply_blacklist_flag(db: Session, item: Listing) -> list[str]:
     return hits
 
 
-def to_out(item: Listing, favorited_ids: set[int] | None = None) -> ListingOut:
+def to_out(
+    item: Listing,
+    favorited_ids: set[int] | None = None,
+    viewer: User | None = None,
+    reveal_phone: bool = False,
+) -> ListingOut:
     images = [
         ListingImageOut(id=img.id, url=image_url(img.path), sort_order=img.sort_order)
         for img in (item.images or [])
     ]
+    raw_phone = item.contact_phone or (item.author.phone if item.author else None)
+    is_staff = bool(viewer and viewer.role in (UserRole.admin, UserRole.moderator))
+    is_author = bool(viewer and viewer.id == item.author_id)
+    show_phone = bool(raw_phone) and (reveal_phone or is_staff or is_author)
     return ListingOut(
         id=item.id,
         author_id=item.author_id,
         author_name=item.author.full_name if item.author else None,
+        author_badge=getattr(item.author, "badge", None) if item.author else None,
+        author_rating=getattr(item.author, "rating_score", None) if item.author else None,
         settlement_id=item.settlement_id,
         settlement_name=item.settlement.display_name if item.settlement else None,
         category=item.category,
         title=item.title,
         description=item.description,
         price=item.price,
-        contact_phone=item.contact_phone or (item.author.phone if item.author else None),
+        contact_phone=raw_phone if show_phone else None,
+        phone_hidden=bool(raw_phone) and not show_phone,
         status=item.status,
         moderation_note=item.moderation_note,
         close_reason=item.close_reason,
@@ -219,7 +235,7 @@ def admin_list_listings(
         stmt = stmt.order_by(Listing.auto_flagged.desc(), Listing.created_at.asc())
     else:
         stmt = stmt.order_by(Listing.created_at.desc())
-    return [to_out(r) for r in db.execute(stmt).scalars().unique().all()]
+    return [to_out(r, viewer=user) for r in db.execute(stmt).scalars().unique().all()]
 
 
 @router.get("/mine/stats")
@@ -263,7 +279,35 @@ def list_favorites(
         .order_by(Favorite.created_at.desc())
     )
     fav_ids = favorite_ids_for(db, user)
-    return [to_out(r, fav_ids) for r in db.execute(stmt).scalars().unique().all()]
+    return [to_out(r, fav_ids, viewer=user) for r in db.execute(stmt).scalars().unique().all()]
+
+
+@router.get("/reports/against-me", response_model=list[AuthorReportOut])
+def reports_against_me(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    rows = db.execute(
+        select(ListingReport, Listing)
+        .join(Listing, Listing.id == ListingReport.listing_id)
+        .where(Listing.author_id == user.id)
+        .order_by(ListingReport.created_at.desc())
+        .limit(100)
+    ).all()
+    return [
+        AuthorReportOut(
+            id=rep.id,
+            listing_id=listing.id,
+            listing_title=listing.title,
+            reason=rep.reason,
+            note=rep.note,
+            status=rep.status,
+            moderator_reply=rep.moderator_reply,
+            created_at=rep.created_at,
+            reviewed_at=rep.reviewed_at,
+        )
+        for rep, listing in rows
+    ]
 
 
 @router.get("", response_model=ListingPageOut)
@@ -275,11 +319,15 @@ def list_listings(
     mine: bool = False,
     author_id: int | None = None,
     has_photos: bool | None = None,
+    price_min: float | None = Query(default=None, ge=0),
+    price_max: float | None = Query(default=None, ge=0),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     user: User | None = Depends(get_optional_user),
 ):
+    if price_min is not None and price_max is not None and price_min > price_max:
+        raise HTTPException(status_code=400, detail="Цена «от» больше цены «до»")
     stmt = select(Listing).options(
         selectinload(Listing.author),
         selectinload(Listing.settlement),
@@ -304,12 +352,17 @@ def list_listings(
         stmt = stmt.where(exists().where(ListingImage.listing_id == Listing.id))
     elif has_photos is False:
         stmt = stmt.where(~exists().where(ListingImage.listing_id == Listing.id))
+    if price_min is not None:
+        stmt = stmt.where(Listing.price.is_not(None), Listing.price >= price_min)
+    if price_max is not None:
+        stmt = stmt.where(Listing.price.is_not(None), Listing.price <= price_max)
+    price_nulls = case((Listing.price.is_(None), 1), else_=0)
     if sort == "oldest":
         stmt = stmt.order_by(Listing.is_pinned.desc(), Listing.created_at.asc())
     elif sort == "price_asc":
-        stmt = stmt.order_by(Listing.is_pinned.desc(), Listing.price.asc(), Listing.created_at.desc())
+        stmt = stmt.order_by(Listing.is_pinned.desc(), price_nulls.asc(), Listing.price.asc(), Listing.created_at.desc())
     elif sort == "price_desc":
-        stmt = stmt.order_by(Listing.is_pinned.desc(), Listing.price.desc(), Listing.created_at.desc())
+        stmt = stmt.order_by(Listing.is_pinned.desc(), price_nulls.asc(), Listing.price.desc(), Listing.created_at.desc())
     else:
         stmt = stmt.order_by(Listing.is_pinned.desc(), Listing.created_at.desc())
 
@@ -331,11 +384,15 @@ def list_listings(
         count_stmt = count_stmt.where(exists().where(ListingImage.listing_id == Listing.id))
     elif has_photos is False:
         count_stmt = count_stmt.where(~exists().where(ListingImage.listing_id == Listing.id))
+    if price_min is not None:
+        count_stmt = count_stmt.where(Listing.price.is_not(None), Listing.price >= price_min)
+    if price_max is not None:
+        count_stmt = count_stmt.where(Listing.price.is_not(None), Listing.price <= price_max)
     total = int(db.execute(count_stmt).scalar_one())
 
     stmt = stmt.offset(offset).limit(limit)
     fav_ids = favorite_ids_for(db, user)
-    items = [to_out(r, fav_ids) for r in db.execute(stmt).scalars().unique().all()]
+    items = [to_out(r, fav_ids, viewer=user) for r in db.execute(stmt).scalars().unique().all()]
     return ListingPageOut(items=items, total=total, limit=limit, offset=offset)
 
 
@@ -351,7 +408,7 @@ def get_listing(
     if item.status != ListingStatus.approved:
         if not user or (user.id != item.author_id and user.role not in (UserRole.admin, UserRole.moderator)):
             raise HTTPException(status_code=404, detail="Объявление не найдено")
-    return to_out(item, favorite_ids_for(db, user))
+    return to_out(item, favorite_ids_for(db, user), viewer=user)
 
 
 @router.post("", response_model=ListingOut)
@@ -584,8 +641,130 @@ def report_listing(
             status="open",
         )
     )
+    db.flush()
+    notify_user(
+        db,
+        user_id=item.author_id,
+        type="listing_reported",
+        title="На ваше объявление пожаловались",
+        body=f'"{item.title}" проверят модераторы',
+        listing_id=item.id,
+    )
+    against = int(
+        db.execute(
+            select(func.count(ListingReport.id))
+            .join(Listing, Listing.id == ListingReport.listing_id)
+            .where(Listing.author_id == item.author_id, ListingReport.status.in_(["open", "reviewed"]))
+        ).scalar_one()
+    )
+    author = db.execute(select(User).where(User.id == item.author_id)).scalar_one()
+    if against >= 5 and author.is_active and author.role == UserRole.user:
+        author.is_active = False
+        author.badge = "caution"
+        notify_user(
+            db,
+            user_id=author.id,
+            type="account_limited",
+            title="Аккаунт ограничен",
+            body="Слишком много жалоб на объявления. Напишите в поддержку.",
+            listing_id=None,
+        )
+    elif against >= 2:
+        author.badge = "caution"
     db.commit()
     return {"ok": True}
+
+
+@router.get("/{listing_id}/messages", response_model=list[ListingMessageOut])
+def list_messages(
+    listing_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    item = load_listing(db, listing_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Объявление не найдено")
+    # доступ: автор или участник переписки
+    msgs = db.execute(
+        select(ListingMessage).where(ListingMessage.listing_id == listing_id).order_by(ListingMessage.created_at.asc())
+    ).scalars().all()
+    participant_ids = {m.sender_id for m in msgs} | {item.author_id}
+    if user.id not in participant_ids and user.role not in (UserRole.admin, UserRole.moderator):
+        # новый собеседник может открыть пустой чат
+        if item.author_id != user.id and item.status != ListingStatus.approved:
+            raise HTTPException(status_code=403, detail="Нет доступа")
+    # отметить прочитанным для получателя (не свои)
+    for m in msgs:
+        if m.sender_id != user.id and not m.is_read:
+            m.is_read = True
+    db.commit()
+    names = {}
+    for m in msgs:
+        if m.sender_id not in names:
+            u = db.execute(select(User).where(User.id == m.sender_id)).scalar_one_or_none()
+            names[m.sender_id] = u.full_name if u else None
+    return [
+        ListingMessageOut(
+            id=m.id,
+            listing_id=m.listing_id,
+            sender_id=m.sender_id,
+            sender_name=names.get(m.sender_id),
+            body=m.body,
+            is_read=m.is_read,
+            created_at=m.created_at,
+            is_mine=m.sender_id == user.id,
+        )
+        for m in msgs
+    ]
+
+
+@router.post("/{listing_id}/messages", response_model=ListingMessageOut)
+def post_message(
+    listing_id: int,
+    payload: ListingMessageIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    item = load_listing(db, listing_id)
+    if not item or item.status != ListingStatus.approved:
+        raise HTTPException(status_code=404, detail="Объявление не найдено")
+    body = payload.body.strip()
+    if not body:
+        raise HTTPException(status_code=400, detail="Пустое сообщение")
+    msg = ListingMessage(listing_id=listing_id, sender_id=user.id, body=body)
+    db.add(msg)
+    db.flush()
+    target = item.author_id if user.id != item.author_id else None
+    # уведомить другую сторону: автора или последнего собеседника
+    if user.id == item.author_id:
+        other = db.execute(
+            select(ListingMessage.sender_id)
+            .where(ListingMessage.listing_id == listing_id, ListingMessage.sender_id != user.id)
+            .order_by(ListingMessage.created_at.desc())
+            .limit(1)
+        ).scalar_one_or_none()
+        target = other
+    if target:
+        notify_user(
+            db,
+            user_id=target,
+            type="listing_message",
+            title="Новое сообщение по объявлению",
+            body=body[:120],
+            listing_id=item.id,
+        )
+    db.commit()
+    db.refresh(msg)
+    return ListingMessageOut(
+        id=msg.id,
+        listing_id=msg.listing_id,
+        sender_id=msg.sender_id,
+        sender_name=user.full_name,
+        body=msg.body,
+        is_read=msg.is_read,
+        created_at=msg.created_at,
+        is_mine=True,
+    )
 
 
 @router.post("/{listing_id}/images", response_model=ListingOut)

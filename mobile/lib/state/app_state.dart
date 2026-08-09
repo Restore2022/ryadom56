@@ -32,6 +32,8 @@ class AppState extends ChangeNotifier {
   String? error;
   bool listingsOffline = false;
   bool directoryOffline = false;
+  bool lastNewsFromCache = false;
+  bool lastTransportFromCache = false;
   String? sessionMessage;
   bool _clearingSession = false;
 
@@ -40,8 +42,12 @@ class AppState extends ChangeNotifier {
   String filterQuery = '';
   String sort = 'newest';
   bool filterHasPhotos = false;
+  double? filterPriceMin;
+  double? filterPriceMax;
   bool listingsLoading = false;
   int unreadNotifications = 0;
+  int? preferredSettlementId;
+  bool onboardingDone = false;
 
   String? directoryCategory;
   int? directorySettlementId;
@@ -132,10 +138,19 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  static const _filtersKey = 'listing_filters';
+  static const _onboardingKey = 'onboarding_done';
+  static const _settlementPrefKey = 'preferred_settlement_id';
+  static const _newsCachePrefix = 'cache_news_json';
+  static const _transportCachePrefix = 'cache_transport_';
+
   Future<void> bootstrap() async {
     try {
       final prefs = await SharedPreferences.getInstance();
       darkMode = prefs.getBool('dark_mode') ?? false;
+      onboardingDone = prefs.getBool(_onboardingKey) ?? false;
+      preferredSettlementId = prefs.getInt(_settlementPrefKey);
+      await _loadSavedFilters(prefs);
       await _loadViewHistory(prefs);
       try {
         settlements = await api.request('/settlements') as List<dynamic>;
@@ -256,6 +271,8 @@ class AppState extends ChangeNotifier {
       if (filterSettlementId != null) params['settlement_id'] = '$filterSettlementId';
       if (filterQuery.trim().isNotEmpty) params['q'] = filterQuery.trim();
       if (filterHasPhotos) params['has_photos'] = 'true';
+      if (filterPriceMin != null) params['price_min'] = '${filterPriceMin!}';
+      if (filterPriceMax != null) params['price_max'] = '${filterPriceMax!}';
       final qs = params.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&');
       final data = await api.request('/listings?$qs', auth: true);
       List<dynamic> items;
@@ -333,12 +350,28 @@ class AppState extends ChangeNotifier {
     return await api.request('/directory/$id') as Map<String, dynamic>;
   }
 
-  Future<List<dynamic>> loadNews({int? settlementId}) async {
+  Future<List<dynamic>> loadNews({int? settlementId, bool useCacheOnError = true}) async {
     final params = <String, String>{};
     if (settlementId != null) params['settlement_id'] = '$settlementId';
     final qs = params.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&');
     final path = qs.isEmpty ? '/news' : '/news?$qs';
-    return await api.request(path) as List<dynamic>;
+    try {
+      final rows = await api.request(path) as List<dynamic>;
+      await _saveNewsCache(settlementId, rows);
+      lastNewsFromCache = false;
+      notifyListeners();
+      return rows;
+    } catch (e) {
+      if (!useCacheOnError) rethrow;
+      final cached = await _loadNewsCache(settlementId);
+      if (cached != null) {
+        lastNewsFromCache = true;
+        notifyListeners();
+        return cached;
+      }
+      lastNewsFromCache = false;
+      rethrow;
+    }
   }
 
   Future<Map<String, dynamic>?> loadActiveAlert() async {
@@ -346,6 +379,18 @@ class AppState extends ChangeNotifier {
     if (data == null) return null;
     if (data is Map) return Map<String, dynamic>.from(data);
     return null;
+  }
+
+  Future<List<Map<String, dynamic>>> loadActiveAlerts({int limit = 5}) async {
+    try {
+      final data = await api.request('/alerts/active/list?limit=$limit');
+      if (data is List) {
+        return data.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+      }
+    } catch (_) {}
+    final single = await loadActiveAlert();
+    if (single != null) return [single];
+    return [];
   }
 
   Future<List<dynamic>> loadEvents({bool? upcoming, String? q, int? settlementId}) async {
@@ -381,6 +426,7 @@ class AppState extends ChangeNotifier {
     int? settlementId,
     String? day,
     bool favoritesOnly = false,
+    bool useCacheOnError = true,
   }) async {
     final params = <String, String>{};
     if (settlementId != null) params['settlement_id'] = '$settlementId';
@@ -389,10 +435,29 @@ class AppState extends ChangeNotifier {
     if (favoritesOnly) params['favorites_only'] = 'true';
     final qs = params.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&');
     final path = qs.isEmpty ? '/transport' : '/transport?$qs';
-    final rows = await api.request(path, auth: true) as List<dynamic>;
-    _syncTransportFavoriteIds(rows);
-    notifyListeners();
-    return rows;
+    try {
+      final rows = await api.request(path, auth: true) as List<dynamic>;
+      _syncTransportFavoriteIds(rows);
+      if (settlementId != null) await _saveTransportCache(settlementId, day ?? 'today', favoritesOnly, rows);
+      lastTransportFromCache = false;
+      notifyListeners();
+      return rows;
+    } catch (e) {
+      if (!useCacheOnError || settlementId == null) rethrow;
+      final cached = await _loadTransportCache(settlementId, day ?? 'today', favoritesOnly);
+      if (cached != null) {
+        _syncTransportFavoriteIds(cached);
+        lastTransportFromCache = true;
+        notifyListeners();
+        return cached;
+      }
+      lastTransportFromCache = false;
+      rethrow;
+    }
+  }
+
+  Future<void> reportTransportOutdated(int routeId) async {
+    await api.request('/transport/$routeId/outdated', method: 'POST', auth: true);
   }
 
   Future<Map<String, dynamic>> getTransportRoute(int id) async {
@@ -443,8 +508,12 @@ class AppState extends ChangeNotifier {
     String? query,
     String? sortBy,
     bool? hasPhotos,
+    double? priceMin,
+    double? priceMax,
     bool clearCategory = false,
     bool clearSettlement = false,
+    bool clearPriceMin = false,
+    bool clearPriceMax = false,
   }) async {
     if (clearCategory) {
       filterCategory = null;
@@ -459,6 +528,17 @@ class AppState extends ChangeNotifier {
     if (query != null) filterQuery = query;
     if (sortBy != null) sort = sortBy;
     if (hasPhotos != null) filterHasPhotos = hasPhotos;
+    if (clearPriceMin) {
+      filterPriceMin = null;
+    } else if (priceMin != null) {
+      filterPriceMin = priceMin;
+    }
+    if (clearPriceMax) {
+      filterPriceMax = null;
+    } else if (priceMax != null) {
+      filterPriceMax = priceMax;
+    }
+    await _persistFilters();
     await loadListings();
   }
 
@@ -468,13 +548,134 @@ class AppState extends ChangeNotifier {
     String? query,
     String? sortBy,
     bool? hasPhotos,
+    double? priceMin,
+    double? priceMax,
   }) async {
     filterCategory = category;
     filterSettlementId = settlementId;
     if (query != null) filterQuery = query;
     if (sortBy != null) sort = sortBy;
     if (hasPhotos != null) filterHasPhotos = hasPhotos;
+    filterPriceMin = priceMin;
+    filterPriceMax = priceMax;
+    await _persistFilters();
     await loadListings();
+  }
+
+  Future<void> _loadSavedFilters(SharedPreferences prefs) async {
+    final raw = prefs.getString(_filtersKey);
+    if (raw == null || raw.isEmpty) return;
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      filterCategory = map['category'] as String?;
+      filterSettlementId = (map['settlement_id'] as num?)?.toInt();
+      filterQuery = map['query'] as String? ?? '';
+      sort = map['sort'] as String? ?? 'newest';
+      filterHasPhotos = map['has_photos'] == true;
+      filterPriceMin = (map['price_min'] as num?)?.toDouble();
+      filterPriceMax = (map['price_max'] as num?)?.toDouble();
+    } catch (_) {}
+  }
+
+  Future<void> _persistFilters() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _filtersKey,
+      jsonEncode({
+        'category': filterCategory,
+        'settlement_id': filterSettlementId,
+        'query': filterQuery,
+        'sort': sort,
+        'has_photos': filterHasPhotos,
+        'price_min': filterPriceMin,
+        'price_max': filterPriceMax,
+      }),
+    );
+  }
+
+  Future<void> setPreferredSettlement(int? settlementId) async {
+    preferredSettlementId = settlementId;
+    final prefs = await SharedPreferences.getInstance();
+    if (settlementId == null) {
+      await prefs.remove(_settlementPrefKey);
+    } else {
+      await prefs.setInt(_settlementPrefKey, settlementId);
+    }
+    notifyListeners();
+  }
+
+  Future<void> completeOnboarding({int? settlementId}) async {
+    onboardingDone = true;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_onboardingKey, true);
+    if (settlementId != null) await setPreferredSettlement(settlementId);
+    notifyListeners();
+  }
+
+  Future<Map<String, dynamic>> getPublicProfile(int userId) async {
+    return await api.request('/auth/users/$userId/public') as Map<String, dynamic>;
+  }
+
+  Future<List<dynamic>> loadListingMessages(int listingId) async {
+    return await api.request('/listings/$listingId/messages', auth: true) as List<dynamic>;
+  }
+
+  Future<Map<String, dynamic>> sendListingMessage(int listingId, String body) async {
+    return await api.request(
+      '/listings/$listingId/messages',
+      method: 'POST',
+      auth: true,
+      body: {'body': body},
+    ) as Map<String, dynamic>;
+  }
+
+  Future<List<dynamic>> loadReportsAgainstMe() async {
+    return await api.request('/listings/reports/against-me', auth: true) as List<dynamic>;
+  }
+
+  String _newsCacheStorageKey(int? settlementId) => '${_newsCachePrefix}_$settlementId';
+
+  Future<void> _saveNewsCache(int? settlementId, List<dynamic> rows) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _newsCacheStorageKey(settlementId),
+      jsonEncode({'saved_at': DateTime.now().toIso8601String(), 'items': rows}),
+    );
+  }
+
+  Future<List<dynamic>?> _loadNewsCache(int? settlementId) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_newsCacheStorageKey(settlementId));
+    if (raw == null) return null;
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      return (map['items'] as List<dynamic>?) ?? [];
+    } catch (_) {
+      return null;
+    }
+  }
+
+  String _transportCacheKey(int settlementId, String day, bool favoritesOnly) =>
+      '$_transportCachePrefix${settlementId}_${day}_${favoritesOnly ? 1 : 0}';
+
+  Future<void> _saveTransportCache(int settlementId, String day, bool favoritesOnly, List<dynamic> rows) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+      _transportCacheKey(settlementId, day, favoritesOnly),
+      jsonEncode({'saved_at': DateTime.now().toIso8601String(), 'items': rows}),
+    );
+  }
+
+  Future<List<dynamic>?> _loadTransportCache(int settlementId, String day, bool favoritesOnly) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_transportCacheKey(settlementId, day, favoritesOnly));
+    if (raw == null) return null;
+    try {
+      final map = jsonDecode(raw) as Map<String, dynamic>;
+      return (map['items'] as List<dynamic>?) ?? [];
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<Map<String, dynamic>> getListing(int id) async {

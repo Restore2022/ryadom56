@@ -1,4 +1,5 @@
-from datetime import datetime
+from datetime import datetime, timedelta
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import or_, select
@@ -9,8 +10,11 @@ from app.core.database import get_db
 from app.models import TransportFavorite, TransportRoute, User, UserRole
 from app.schemas import TransportCreate, TransportOut, TransportUpdate
 from app.services.audit import log_action
+from app.services.notify import notify_user
 
 router = APIRouter(prefix="/transport", tags=["transport"])
+
+_TIME_RE = re.compile(r"\b([01]?\d|2[0-3])[:.]([0-5]\d)\b")
 
 
 def _stops(text: str | None) -> list[str]:
@@ -26,6 +30,41 @@ def favorite_ids_for(db: Session, user: User | None) -> set[int]:
     return set(rows)
 
 
+def _schedule_blob(item: TransportRoute, now: datetime | None = None) -> str:
+    now = now or datetime.now()
+    weekend = now.weekday() >= 5
+    parts: list[str] = []
+    if weekend and item.schedule_weekends:
+        parts.append(item.schedule_weekends)
+    elif not weekend and item.schedule_weekdays:
+        parts.append(item.schedule_weekdays)
+    if item.schedule_text:
+        parts.append(item.schedule_text)
+    if item.schedule_weekdays:
+        parts.append(item.schedule_weekdays)
+    if item.schedule_weekends:
+        parts.append(item.schedule_weekends)
+    return "\n".join(parts)
+
+
+def next_departure(item: TransportRoute, now: datetime | None = None) -> str | None:
+    """Ближайшее время из текста расписания (сегодня или завтра)."""
+    now = now or datetime.now()
+    blob = _schedule_blob(item, now)
+    times: list[tuple[int, int]] = []
+    for m in _TIME_RE.finditer(blob):
+        times.append((int(m.group(1)), int(m.group(2))))
+    if not times:
+        return None
+    times = sorted(set(times))
+    for h, mi in times:
+        cand = now.replace(hour=h, minute=mi, second=0, microsecond=0)
+        if cand >= now - timedelta(minutes=1):
+            return f"{h:02d}:{mi:02d}"
+    h, mi = times[0]
+    return f"завтра {h:02d}:{mi:02d}"
+
+
 def to_out(item: TransportRoute, favorited_ids: set[int] | None = None) -> TransportOut:
     return TransportOut(
         id=item.id,
@@ -39,11 +78,16 @@ def to_out(item: TransportRoute, favorited_ids: set[int] | None = None) -> Trans
         stops=_stops(item.stops_text),
         days_mode=item.days_mode or "all",
         notes=item.notes,
+        fare_text=item.fare_text,
+        phone=item.phone,
+        next_departure=next_departure(item),
         settlement_id=item.settlement_id,
         settlement_name=item.settlement.display_name if item.settlement else None,
         is_published=item.is_published,
         is_favorited=bool(favorited_ids and item.id in favorited_ids),
         view_count=item.view_count or 0,
+        favorite_count=item.favorite_count or 0,
+        outdated_reports=item.outdated_reports or 0,
         created_at=item.created_at,
         updated_at=item.updated_at,
     )
@@ -164,6 +208,32 @@ def track_route_view(
     return to_out(item, favorite_ids_for(db, user))
 
 
+@router.post("/{route_id}/outdated")
+def report_outdated(
+    route_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    item = db.execute(select(TransportRoute).where(TransportRoute.id == route_id)).scalar_one_or_none()
+    if not item or not item.is_published:
+        raise HTTPException(status_code=404, detail="Маршрут не найден")
+    item.outdated_reports = (item.outdated_reports or 0) + 1
+    db.commit()
+    for staff in db.execute(
+        select(User).where(User.role.in_([UserRole.admin, UserRole.editor]), User.is_active.is_(True))
+    ).scalars().all():
+        notify_user(
+            db,
+            user_id=staff.id,
+            type="transport_outdated",
+            title="Расписание устарело?",
+            body=f"{item.title}: сообщение от пользователя",
+            listing_id=None,
+        )
+    db.commit()
+    return {"ok": True, "outdated_reports": item.outdated_reports}
+
+
 @router.post("/{route_id}/favorite", response_model=TransportOut)
 def add_favorite(
     route_id: int,
@@ -185,6 +255,7 @@ def add_favorite(
     ).scalar_one_or_none()
     if not exists:
         db.add(TransportFavorite(user_id=user.id, route_id=route_id))
+        item.favorite_count = (item.favorite_count or 0) + 1
         db.commit()
     return to_out(item, favorite_ids_for(db, user))
 
@@ -210,6 +281,7 @@ def remove_favorite(
     ).scalar_one_or_none()
     if row:
         db.delete(row)
+        item.favorite_count = max(0, (item.favorite_count or 0) - 1)
         db.commit()
     return to_out(item, favorite_ids_for(db, user))
 
@@ -263,7 +335,6 @@ def delete_route(
     if not item:
         raise HTTPException(status_code=404, detail="Маршрут не найден")
     log_action(db, actor=user, action="transport.delete", entity_type="transport", entity_id=item.id, details=item.title)
-    db.execute(select(TransportFavorite).where(TransportFavorite.route_id == route_id))
     for fav in db.execute(select(TransportFavorite).where(TransportFavorite.route_id == route_id)).scalars().all():
         db.delete(fav)
     db.delete(item)

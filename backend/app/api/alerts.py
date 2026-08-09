@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import or_, select
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_optional_user, require_roles
@@ -18,6 +18,7 @@ def to_out(item: DistrictAlert) -> AlertOut:
         id=item.id,
         message=item.message,
         kind=item.kind,
+        priority=item.priority or 0,
         is_active=item.is_active,
         starts_at=item.starts_at,
         ends_at=item.ends_at,
@@ -26,33 +27,54 @@ def to_out(item: DistrictAlert) -> AlertOut:
     )
 
 
+def _active_stmt(now: datetime):
+    return select(DistrictAlert).where(
+        DistrictAlert.is_active.is_(True),
+        or_(DistrictAlert.starts_at.is_(None), DistrictAlert.starts_at <= now),
+        or_(DistrictAlert.ends_at.is_(None), DistrictAlert.ends_at >= now),
+    )
+
+
 @router.get("/active", response_model=AlertOut | None)
 def get_active_alert(
     db: Session = Depends(get_db),
     _: User | None = Depends(get_optional_user),
 ):
+    """Один самый приоритетный баннер (обратная совместимость)."""
     now = datetime.now(timezone.utc)
-    stmt = (
-        select(DistrictAlert)
-        .where(
-            DistrictAlert.is_active.is_(True),
-            or_(DistrictAlert.starts_at.is_(None), DistrictAlert.starts_at <= now),
-            or_(DistrictAlert.ends_at.is_(None), DistrictAlert.ends_at >= now),
-        )
-        .order_by(DistrictAlert.updated_at.desc())
-        .limit(1)
-    )
+    stmt = _active_stmt(now).order_by(DistrictAlert.priority.desc(), DistrictAlert.updated_at.desc()).limit(1)
     item = db.execute(stmt).scalar_one_or_none()
     return to_out(item) if item else None
 
 
+@router.get("/active/list", response_model=list[AlertOut])
+def list_active_alerts(
+    limit: int = Query(default=5, ge=1, le=20),
+    db: Session = Depends(get_db),
+    _: User | None = Depends(get_optional_user),
+):
+    now = datetime.now(timezone.utc)
+    stmt = _active_stmt(now).order_by(DistrictAlert.priority.desc(), DistrictAlert.updated_at.desc()).limit(limit)
+    return [to_out(r) for r in db.execute(stmt).scalars().all()]
+
+
 @router.get("", response_model=list[AlertOut])
 def list_alerts(
+    history: bool = False,
     db: Session = Depends(get_db),
     _: User = Depends(require_roles(UserRole.editor, UserRole.admin)),
 ):
-    rows = db.execute(select(DistrictAlert).order_by(DistrictAlert.updated_at.desc())).scalars().all()
-    return [to_out(r) for r in rows]
+    now = datetime.now(timezone.utc)
+    stmt = select(DistrictAlert)
+    if history:
+        stmt = stmt.where(
+            or_(
+                DistrictAlert.is_active.is_(False),
+                and_(DistrictAlert.ends_at.is_not(None), DistrictAlert.ends_at < now),
+            )
+        )
+    stmt = stmt.order_by(DistrictAlert.priority.desc(), DistrictAlert.updated_at.desc())
+    return [to_out(r) for r in db.execute(stmt).scalars().all()]
 
 
 @router.post("", response_model=AlertOut)

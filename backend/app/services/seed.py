@@ -29,6 +29,8 @@ USER_COLUMNS = {
     "device_info": "TEXT",
     "last_seen_at": "DATETIME",
     "fcm_token": "VARCHAR(255)",
+    "badge": "VARCHAR(40)",
+    "rating_score": "FLOAT",
 }
 
 LISTING_COLUMNS = {
@@ -52,6 +54,7 @@ EVENT_COLUMNS = {
     "cover_path": "VARCHAR(255)",
     "publish_at": "DATETIME",
     "view_count": "INTEGER DEFAULT 0",
+    "favorite_add_count": "INTEGER DEFAULT 0",
 }
 
 TRANSPORT_COLUMNS = {
@@ -60,6 +63,19 @@ TRANSPORT_COLUMNS = {
     "stops_text": "TEXT",
     "days_mode": "VARCHAR(20) DEFAULT 'all'",
     "view_count": "INTEGER DEFAULT 0",
+    "fare_text": "VARCHAR(120)",
+    "phone": "VARCHAR(32)",
+    "favorite_count": "INTEGER DEFAULT 0",
+    "outdated_reports": "INTEGER DEFAULT 0",
+}
+
+NEWS_COLUMNS = {
+    "cover_path": "VARCHAR(255)",
+    "is_pinned": "BOOLEAN DEFAULT 0",
+}
+
+ALERT_COLUMNS = {
+    "priority": "INTEGER DEFAULT 0",
 }
 
 
@@ -67,6 +83,7 @@ def init_db() -> None:
     Path("data").mkdir(exist_ok=True)
     Path("data/uploads").mkdir(parents=True, exist_ok=True)
     Path("data/uploads/events").mkdir(parents=True, exist_ok=True)
+    Path("data/uploads/news").mkdir(parents=True, exist_ok=True)
     Path("data/releases").mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)
     _migrate_user_columns()
@@ -75,6 +92,8 @@ def init_db() -> None:
     _migrate_report_columns()
     _migrate_event_columns()
     _migrate_transport_columns()
+    _migrate_news_columns()
+    _migrate_alert_columns()
 
 
 def _migrate_user_columns() -> None:
@@ -141,6 +160,28 @@ def _migrate_transport_columns() -> None:
         for name, sql_type in TRANSPORT_COLUMNS.items():
             if name not in existing:
                 conn.execute(text(f"ALTER TABLE transport_routes ADD COLUMN {name} {sql_type}"))
+
+
+def _migrate_news_columns() -> None:
+    inspector = inspect(engine)
+    if "district_news" not in inspector.get_table_names():
+        return
+    existing = {col["name"] for col in inspector.get_columns("district_news")}
+    with engine.begin() as conn:
+        for name, sql_type in NEWS_COLUMNS.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE district_news ADD COLUMN {name} {sql_type}"))
+
+
+def _migrate_alert_columns() -> None:
+    inspector = inspect(engine)
+    if "district_alerts" not in inspector.get_table_names():
+        return
+    existing = {col["name"] for col in inspector.get_columns("district_alerts")}
+    with engine.begin() as conn:
+        for name, sql_type in ALERT_COLUMNS.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE district_alerts ADD COLUMN {name} {sql_type}"))
 
 
 def seed_db(session: Session) -> None:
