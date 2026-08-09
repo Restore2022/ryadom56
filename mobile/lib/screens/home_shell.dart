@@ -313,11 +313,6 @@ class _ListingsTabState extends State<_ListingsTab> {
     final state = context.watch<AppState>();
     final items = state.listings;
     final scheme = Theme.of(context).colorScheme;
-    final quick = state.filterCategory == 'jobs'
-        ? 'jobs'
-        : state.filterCategory == 'lost_found'
-            ? 'lost_found'
-            : 'all';
 
     return Column(
       children: [
@@ -392,37 +387,8 @@ class _ListingsTabState extends State<_ListingsTab> {
               ),
             ),
           ),
-        ListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-          leading: Icon(Icons.location_city_outlined, color: scheme.primary),
-          title: Text(
-            'Район',
-            style: GoogleFonts.manrope(fontWeight: FontWeight.w700),
-          ),
-          subtitle: const Text('Оповещения, новости и события'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () {
-            Navigator.push(context, fastRoute(const DistrictHubScreen()));
-          },
-        ),
-        ListTile(
-          contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-          leading: Icon(Icons.newspaper_outlined, color: scheme.primary),
-          title: Text(
-            'Новости района',
-            style: GoogleFonts.manrope(fontWeight: FontWeight.w700),
-          ),
-          subtitle: const Text('События и объявления администрации'),
-          trailing: const Icon(Icons.chevron_right),
-          onTap: () {
-            Navigator.push(
-              context,
-              fastRoute(NewsListScreen(settlementId: state.filterSettlementId)),
-            );
-          },
-        ),
         Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
           child: TextField(
             controller: search,
             textInputAction: TextInputAction.search,
@@ -435,26 +401,6 @@ class _ListingsTabState extends State<_ListingsTab> {
                 onPressed: () => _openFilters(context, state),
               ),
             ),
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 0, 16, 8),
-          child: SegmentedButton<String>(
-            showSelectedIcon: false,
-            segments: const [
-              ButtonSegment(value: 'all', label: Text('Все')),
-              ButtonSegment(value: 'jobs', label: Text('Работа')),
-              ButtonSegment(value: 'lost_found', label: Text('Потеряшки')),
-            ],
-            selected: {quick},
-            onSelectionChanged: (s) {
-              final v = s.first;
-              if (v == 'all') {
-                state.applyListingFilters(clearCategory: true);
-              } else {
-                state.applyListingFilters(category: v);
-              }
-            },
           ),
         ),
         SizedBox(
@@ -471,13 +417,16 @@ class _ListingsTabState extends State<_ListingsTab> {
                   onSelected: (_) => state.applyListingFilters(hasPhotos: !state.filterHasPhotos),
                 ),
               ),
-              ...['goods', 'services', 'rent', 'free'].map(
+              ...['goods', 'services', 'jobs', 'rent', 'free', 'lost_found'].map(
                 (c) => Padding(
                   padding: const EdgeInsets.only(right: 8),
                   child: RyadomFilterChip(
                     label: categoryLabels[c]!,
                     selected: state.filterCategory == c,
-                    onSelected: (_) => state.applyListingFilters(category: state.filterCategory == c ? '' : c),
+                    onSelected: (_) => state.applyListingFilters(
+                      category: state.filterCategory == c ? '' : c,
+                      clearCategory: state.filterCategory == c,
+                    ),
                   ),
                 ),
               ),
@@ -1878,6 +1827,24 @@ class _ProfileTab extends StatelessWidget {
           ),
           const SizedBox(height: 16),
           ListTile(
+            leading: const Icon(Icons.location_city_outlined),
+            title: const Text('Район'),
+            subtitle: const Text('Срочное, новости и события'),
+            trailing: const Icon(Icons.chevron_right),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            onTap: () => Navigator.push(context, fastRoute(const DistrictHubScreen())),
+          ),
+          ListTile(
+            leading: const Icon(Icons.newspaper_outlined),
+            title: const Text('Новости района'),
+            trailing: const Icon(Icons.chevron_right),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            onTap: () => Navigator.push(
+              context,
+              fastRoute(NewsListScreen(settlementId: state.filterSettlementId)),
+            ),
+          ),
+          ListTile(
             leading: const Icon(Icons.info_outline),
             title: const Text('О проекте'),
             trailing: const Icon(Icons.chevron_right),
@@ -1999,6 +1966,24 @@ class _ProfileTab extends StatelessWidget {
           trailing: const Icon(Icons.chevron_right),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           onTap: () => Navigator.push(context, fastRoute(const EditProfileScreen())),
+        ),
+        ListTile(
+          leading: const Icon(Icons.location_city_outlined),
+          title: const Text('Район'),
+          subtitle: const Text('Срочное, новости и события'),
+          trailing: const Icon(Icons.chevron_right),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          onTap: () => Navigator.push(context, fastRoute(const DistrictHubScreen())),
+        ),
+        ListTile(
+          leading: const Icon(Icons.newspaper_outlined),
+          title: const Text('Новости района'),
+          trailing: const Icon(Icons.chevron_right),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          onTap: () => Navigator.push(
+            context,
+            fastRoute(NewsListScreen(settlementId: state.filterSettlementId)),
+          ),
         ),
         ListTile(
           leading: const Icon(Icons.info_outline),
