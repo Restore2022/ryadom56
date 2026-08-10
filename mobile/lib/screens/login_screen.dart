@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
+import '../api.dart';
+import '../api.dart';
 import '../state/app_state.dart';
 import '../ui_helpers.dart';
 import 'pin_unlock_screen.dart';
@@ -118,7 +120,11 @@ class _LoginScreenState extends State<LoginScreen> {
             if (error != null) ...[
               const SizedBox(height: 12),
               Text(error!, style: TextStyle(color: scheme.error, height: 1.35)),
-              if (error == AppState.offlineMessage || error!.contains('не отвечает')) ...[
+              if (error == AppState.offlineMessage ||
+                  error == ApiClient.noInternetMessage ||
+                  error == ApiClient.serverUnreachableMessage ||
+                  error!.contains('связи') ||
+                  error!.contains('интернет')) ...[
                 const SizedBox(height: 8),
                 OutlinedButton(
                   onPressed: busy ? null : _submit,

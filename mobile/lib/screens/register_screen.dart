@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../api.dart';
+import '../api.dart';
 import '../state/app_state.dart';
 import '../ui_helpers.dart';
 import 'home_shell.dart';
@@ -189,7 +191,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
           ),
           if (error != null) Text(error!, style: const TextStyle(color: Colors.red)),
           const SizedBox(height: 12),
-          if (error != null && (error == AppState.offlineMessage || error!.contains('не отвечает')))
+          if (error != null &&
+              (error == AppState.offlineMessage ||
+                  error == ApiClient.noInternetMessage ||
+                  error == ApiClient.serverUnreachableMessage ||
+                  error!.contains('связи') ||
+                  error!.contains('интернет')))
             OutlinedButton(
               onPressed: busy ? null : () => _register(),
               child: const Text('Повторить'),

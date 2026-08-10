@@ -60,16 +60,29 @@ class AppState extends ChangeNotifier {
   static const offlineMessage = ApiClient.offlineMessage;
 
   static String userFriendlyError(Object e) {
-    if (e is ApiException) return e.message;
+    if (e is ApiException) {
+      // на всякий случай прячем старые технические формулировки
+      final m = e.message;
+      final lower = m.toLowerCase();
+      if (lower.contains('api') || lower.contains('wi-fi') || lower.contains('wi‑fi') || lower.contains('wifi')) {
+        return ApiClient.offlineMessage;
+      }
+      return m;
+    }
     final raw = e.toString();
     final lower = raw.toLowerCase();
+    if (lower.contains('failed host lookup') ||
+        lower.contains('network is unreachable') ||
+        lower.contains('no address associated') ||
+        lower.contains('name or service not known')) {
+      return ApiClient.noInternetMessage;
+    }
+    if (lower.contains('timed out') || lower.contains('timeout')) {
+      return ApiClient.serverUnreachableMessage;
+    }
     if (lower.contains('socketexception') ||
-        lower.contains('failed host lookup') ||
         lower.contains('connection refused') ||
         lower.contains('connection reset') ||
-        lower.contains('network is unreachable') ||
-        lower.contains('timed out') ||
-        lower.contains('timeout') ||
         lower.contains('clientexception') ||
         lower.contains('handshakeexception') ||
         lower.contains('connection errored') ||
@@ -82,11 +95,21 @@ class AppState extends ChangeNotifier {
     if (raw.startsWith('ApiException: ')) {
       return raw.substring('ApiException: '.length);
     }
+    // Не показываем сырой стек/английский технический текст
+    if (lower.contains('api') || RegExp(r'[a-z]{4,}exception').hasMatch(lower)) {
+      return offlineMessage;
+    }
     return raw;
   }
 
-  bool get hasConnectionIssue =>
-      listingsOffline || directoryOffline || (error != null && error == offlineMessage);
+  bool get hasConnectionIssue {
+    if (listingsOffline || directoryOffline) return true;
+    final err = error;
+    if (err == null) return false;
+    return err == offlineMessage ||
+        err == ApiClient.noInternetMessage ||
+        err == ApiClient.serverUnreachableMessage;
+  }
 
   Future<void> _handleUnauthorized() async {
     if (_clearingSession || user == null) return;
@@ -354,7 +377,11 @@ class AppState extends ChangeNotifier {
       listingsHasMore = listings.length < listingsTotal;
       _syncFavoriteIdsFromListings();
       listingsOffline = false;
-      if (error == offlineMessage) error = null;
+      if (error == offlineMessage ||
+          error == ApiClient.noInternetMessage ||
+          error == ApiClient.serverUnreachableMessage) {
+        error = null;
+      }
     } catch (e) {
       if (!append) {
         listingsOffline = true;
@@ -386,7 +413,12 @@ class AppState extends ChangeNotifier {
         }
       }
       directoryOffline = false;
-      if (error == offlineMessage && !listingsOffline) error = null;
+      if (!listingsOffline &&
+          (error == offlineMessage ||
+              error == ApiClient.noInternetMessage ||
+              error == ApiClient.serverUnreachableMessage)) {
+        error = null;
+      }
     } catch (e) {
       directoryOffline = true;
       error = userFriendlyError(e);

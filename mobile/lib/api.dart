@@ -24,8 +24,15 @@ class ApiClient {
   final String baseUrl;
   void Function()? onUnauthorized;
 
+  /// Пользовательский текст: без «API», Wi‑Fi и технических деталей.
   static const offlineMessage =
-      'Нет связи с сервером. Проверьте Wi‑Fi и что API запущен.';
+      'Нет связи с сервером. Проверьте интернет и попробуйте снова.';
+
+  static const noInternetMessage =
+      'Нет интернета. Проверьте подключение и попробуйте снова.';
+
+  static const serverUnreachableMessage =
+      'Не удалось связаться с сервером. Попробуйте чуть позже.';
 
   String get mediaBase {
     final uri = Uri.parse(baseUrl);
@@ -84,7 +91,7 @@ class ApiClient {
         return d.isNotEmpty && d.length < 160 ? d : 'Не найдено';
       case 408:
       case 504:
-        return 'Сервер долго не отвечает. Попробуйте ещё раз';
+        return serverUnreachableMessage;
       case 413:
         return 'Файл слишком большой';
       case 422:
@@ -114,14 +121,19 @@ class ApiClient {
   ApiException _fromNetwork(Object e) {
     final raw = e.toString().toLowerCase();
     if (e is TimeoutException || raw.contains('timeout') || raw.contains('timed out')) {
-      return ApiException('Сервер долго не отвечает. Попробуйте ещё раз', statusCode: 408);
+      return ApiException(serverUnreachableMessage, statusCode: 408);
+    }
+    // DNS / нет сети на устройстве
+    if (raw.contains('failed host lookup') ||
+        raw.contains('network is unreachable') ||
+        raw.contains('no address associated') ||
+        raw.contains('name or service not known')) {
+      return ApiException(noInternetMessage);
     }
     if (e is SocketException ||
         raw.contains('socketexception') ||
-        raw.contains('failed host lookup') ||
         raw.contains('connection refused') ||
         raw.contains('connection reset') ||
-        raw.contains('network is unreachable') ||
         raw.contains('clientexception') ||
         raw.contains('handshakeexception') ||
         raw.contains('connection errored')) {
