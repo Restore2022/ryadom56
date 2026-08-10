@@ -2,7 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../api.dart';
-import '../api.dart';
 import '../state/app_state.dart';
 import '../ui_helpers.dart';
 import 'home_shell.dart';
