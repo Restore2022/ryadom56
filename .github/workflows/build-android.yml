@@ -12,8 +12,7 @@ jobs:
       run:
         working-directory: mobile
     env:
-      GRADLE_OPTS: -Xmx3072m -XX:MaxMetaspaceSize=1024m -Dfile.encoding=UTF-8
-      JAVA_TOOL_OPTIONS: -Xmx3072m -XX:MaxMetaspaceSize=1024m
+      GRADLE_OPTS: -Dorg.gradle.daemon=true -Dfile.encoding=UTF-8
 
     steps:
       - name: Checkout
@@ -30,6 +29,29 @@ jobs:
         with:
           channel: stable
           cache: true
+
+      # Local gradle.properties uses tiny heap/metaspace so Windows does not freeze.
+      # CI has enough RAM for Firebase (firebase_core javac died with Metaspace).
+      - name: Raise Gradle memory for CI
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          p = Path("android/gradle.properties")
+          lines = []
+          for line in p.read_text(encoding="utf-8").splitlines():
+              if line.startswith("org.gradle.jvmargs="):
+                  lines.append(
+                      "org.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8"
+                  )
+              elif line.startswith("org.gradle.daemon="):
+                  lines.append("org.gradle.daemon=true")
+              elif line.startswith("org.gradle.workers.max="):
+                  lines.append("org.gradle.workers.max=2")
+              else:
+                  lines.append(line)
+          p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+          print(p.read_text(encoding="utf-8"))
+          PY
 
       - name: Flutter pub get
         run: flutter pub get
