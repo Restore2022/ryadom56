@@ -5,6 +5,15 @@ from sqlalchemy.orm import Session
 
 from app.models import BlacklistEntry
 
+_CHAT_SPAM_RE = re.compile(
+    r"(https?://|t\.me/|whatsapp|телег|казино|ставк|крипт|заработ|подписыва)",
+    re.IGNORECASE,
+)
+
+
+def looks_like_chat_spam(body: str) -> bool:
+    return bool(body and _CHAT_SPAM_RE.search(body))
+
 
 def normalize_phone(value: str | None) -> str:
     if not value:

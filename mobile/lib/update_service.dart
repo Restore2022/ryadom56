@@ -108,7 +108,20 @@ class UpdateService {
       final total = res.contentLength ?? 0;
       var received = 0;
       final dir = await getTemporaryDirectory();
+      // Один и тот же файл обновления — меньше шансов, что установщик
+      // предложит «второе» приложение рядом со старым.
       final file = File('${dir.path}/ryadom56-update.apk');
+      if (await file.exists()) {
+        await file.delete();
+      }
+      // подчистить старые копии
+      await for (final entity in dir.list()) {
+        if (entity is File && entity.path.contains('ryadom56') && entity.path.endsWith('.apk')) {
+          try {
+            await entity.delete();
+          } catch (_) {}
+        }
+      }
       final sink = file.openWrite();
       await for (final chunk in res.stream) {
         received += chunk.length;
@@ -208,7 +221,23 @@ class _UpdateDialogState extends State<_UpdateDialog> {
       await widget.service.clearSkip();
       if (!mounted) return;
       await widget.service.installApk(file);
-      if (mounted) Navigator.pop(context);
+      if (!mounted) return;
+      Navigator.pop(context);
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          title: const Text('Установите обновление'),
+          content: const Text(
+            'Откроется установщик Android — подтвердите установку поверх текущей версии.\n\n'
+            'Это заменит то же приложение «Рядом56», новый значок не появится.\n\n'
+            'Если вдруг останутся два значка — удалите старый '
+            '(тот, который не открывается или со старым номером версии).',
+          ),
+          actions: [
+            FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Понятно')),
+          ],
+        ),
+      );
     } catch (e) {
       if (mounted) {
         setState(() {
@@ -229,6 +258,11 @@ class _UpdateDialogState extends State<_UpdateDialog> {
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Text('Версия ${remote.version} (сборка ${remote.build})'),
+          const SizedBox(height: 8),
+          Text(
+            'Обновление ставится поверх текущего приложения — данные и вход сохраняются.',
+            style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, height: 1.35, fontSize: 13),
+          ),
           if (remote.notes != null && remote.notes!.trim().isNotEmpty) ...[
             const SizedBox(height: 10),
             Text(remote.notes!, style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, height: 1.35)),

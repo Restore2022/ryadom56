@@ -80,9 +80,10 @@ class User(Base):
     app_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
     device_info: Mapped[str | None] = mapped_column(Text, nullable=True)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    fcm_token: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    fcm_token: Mapped[str | None] = mapped_column(String(512), nullable=True)
     badge: Mapped[str | None] = mapped_column(String(40), nullable=True)  # new|trusted|caution
     rating_score: Mapped[float | None] = mapped_column(Float, nullable=True)
+    token_version: Mapped[int] = mapped_column(Integer, default=0)
 
     settlement: Mapped["Settlement"] = relationship(back_populates="users")
     listings: Mapped[list["Listing"]] = relationship(back_populates="author")
@@ -91,6 +92,27 @@ class User(Base):
         back_populates="reporter",
         foreign_keys="ListingReport.reporter_id",
     )
+    sessions: Mapped[list["UserSession"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    jti: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    device_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
+    device_brand: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    device_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    device_os: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    app_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    last_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    fcm_token: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+    user: Mapped["User"] = relationship(back_populates="sessions")
 
 
 class Listing(Base):
@@ -396,6 +418,22 @@ class BlacklistEntry(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     created_by: Mapped["User | None"] = relationship()
+
+
+class PasswordReset(Base):
+    __tablename__ = "password_resets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    email: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    user: Mapped["User"] = relationship()
 
 
 class AppUpdate(Base):

@@ -113,6 +113,25 @@ class LoginIn(BaseModel):
     password: str
 
 
+class ForgotPasswordIn(BaseModel):
+    email: EmailStr
+
+
+class ResetPasswordIn(BaseModel):
+    email: EmailStr
+    code: str = Field(min_length=6, max_length=6, pattern=r"^\d{6}$")
+    password: str = Field(min_length=6, max_length=128)
+
+
+class MessageOut(BaseModel):
+    ok: bool = True
+    message: str
+
+
+class VerifyPasswordIn(BaseModel):
+    password: str = Field(min_length=1, max_length=128)
+
+
 class ListingCreate(BaseModel):
     title: str = Field(min_length=2, max_length=200)
     description: str = Field(min_length=3, max_length=5000)
@@ -333,6 +352,13 @@ class DirectoryOut(BaseModel):
         from_attributes = True
 
 
+class DirectoryPageOut(BaseModel):
+    items: list[DirectoryOut]
+    total: int
+    limit: int
+    offset: int
+
+
 class LegalOut(BaseModel):
     slug: str
     title: str
@@ -351,6 +377,19 @@ class UserRoleUpdate(BaseModel):
     phone: str | None = Field(default=None, max_length=32)
     settlement_id: int | None = None
     email: EmailStr | None = None
+    password: str | None = Field(default=None, min_length=6, max_length=128)
+    badge: str | None = Field(default=None, max_length=40)
+
+
+class AdminUserCreate(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=6, max_length=128)
+    full_name: str = Field(min_length=2, max_length=120)
+    phone: str | None = Field(default=None, max_length=32)
+    settlement_id: int
+    role: UserRole = UserRole.user
+    is_active: bool = True
+    badge: str | None = Field(default=None, max_length=40)
 
 
 class DeviceInfoIn(BaseModel):
@@ -359,7 +398,23 @@ class DeviceInfoIn(BaseModel):
     device_os: str | None = Field(default=None, max_length=80)
     app_version: str | None = Field(default=None, max_length=40)
     device_info: str | None = Field(default=None, max_length=2000)
-    fcm_token: str | None = Field(default=None, max_length=255)
+    fcm_token: str | None = Field(default=None, max_length=512)
+    device_id: str | None = Field(default=None, max_length=64)
+
+
+class SessionOut(BaseModel):
+    id: int
+    device_brand: str | None = None
+    device_model: str | None = None
+    device_os: str | None = None
+    app_version: str | None = None
+    last_ip: str | None = None
+    created_at: datetime | None = None
+    last_seen_at: datetime | None = None
+    is_current: bool = False
+
+    class Config:
+        from_attributes = True
 
 
 class CategoryStat(BaseModel):
@@ -588,6 +643,33 @@ class ConversationOut(BaseModel):
     last_message_at: datetime | None = None
     unread_count: int = 0
     is_seller: bool = False
+
+
+class AdminConversationOut(BaseModel):
+    listing_id: int
+    buyer_id: int
+    listing_title: str
+    listing_status: str
+    seller_id: int
+    seller_name: str | None = None
+    buyer_name: str | None = None
+    last_message: str | None = None
+    last_message_at: datetime | None = None
+    message_count: int = 0
+    flagged: bool = False
+    flag_reasons: list[str] = []
+
+
+class AdminChatMessageOut(BaseModel):
+    id: int
+    listing_id: int
+    buyer_id: int | None
+    sender_id: int
+    sender_name: str | None = None
+    body: str
+    created_at: datetime
+    flagged: bool = False
+    flag_reasons: list[str] = []
 
 
 class AuthorReportOut(BaseModel):

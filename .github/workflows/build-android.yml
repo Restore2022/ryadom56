@@ -34,6 +34,28 @@ jobs:
       - name: Flutter pub get
         run: flutter pub get
 
+      # Без key.properties Gradle подписывает debug-ключом — такой APK нельзя
+      # ставить поверх production (останется «второе» приложение). Секреты:
+      # ANDROID_KEYSTORE_BASE64, KEY_ALIAS, KEY_PASSWORD, STORE_PASSWORD.
+      - name: Restore release keystore
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+        run: |
+          if [ -z "$ANDROID_KEYSTORE_BASE64" ]; then
+            echo "::warning::No ANDROID_KEYSTORE_BASE64 — APK will be debug-signed (do not use for OTA updates)"
+            exit 0
+          fi
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 -d > android/ryadom56-release.jks
+          {
+            echo "storePassword=$STORE_PASSWORD"
+            echo "keyPassword=$KEY_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "storeFile=ryadom56-release.jks"
+          } > android/key.properties
+
       - name: Build release APK
         run: flutter build apk --release --no-tree-shake-icons --dart-define=API_BASE=http://155.212.174.201:8080/api
 

@@ -9,3 +9,5 @@ passlib[bcrypt]==1.7.4
 bcrypt==4.2.1
 python-multipart==0.0.19
 email-validator==2.2.0
+google-auth==2.40.3
+requests==2.32.4

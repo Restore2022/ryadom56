@@ -68,7 +68,11 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     } catch {
       /* ignore */
     }
-    const authCall = path.startsWith('/auth/login') || path.startsWith('/auth/register');
+    const authCall =
+      path.startsWith('/auth/login') ||
+      path.startsWith('/auth/register') ||
+      path.startsWith('/auth/forgot-password') ||
+      path.startsWith('/auth/reset-password');
     if (res.status === 401 && !authCall) {
       setToken(null);
       window.dispatchEvent(new CustomEvent('ryadom56:unauthorized'));
@@ -155,6 +159,7 @@ export type User = {
   app_version?: string | null;
   device_info?: string | null;
   last_seen_at?: string | null;
+  badge?: string | null;
 };
 
 export type ListingSnapshot = {
@@ -224,6 +229,33 @@ export type AuditLog = {
   entity_id?: number | null;
   details?: string | null;
   created_at: string;
+};
+
+export type AdminConversation = {
+  listing_id: number;
+  buyer_id: number;
+  listing_title: string;
+  listing_status: string;
+  seller_id: number;
+  seller_name?: string | null;
+  buyer_name?: string | null;
+  last_message?: string | null;
+  last_message_at?: string | null;
+  message_count: number;
+  flagged: boolean;
+  flag_reasons: string[];
+};
+
+export type AdminChatMessage = {
+  id: number;
+  listing_id: number;
+  buyer_id?: number | null;
+  sender_id: number;
+  sender_name?: string | null;
+  body: string;
+  created_at: string;
+  flagged: boolean;
+  flag_reasons: string[];
 };
 
 export type DirectoryItem = {

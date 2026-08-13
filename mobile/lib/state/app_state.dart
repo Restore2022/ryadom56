@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:flutter/foundation.dart';
@@ -8,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api.dart';
 import '../pin_storage.dart';
+import '../push_service.dart';
 
 class AppState extends ChangeNotifier {
   AppState(this.api) {
@@ -27,6 +29,10 @@ class AppState extends ChangeNotifier {
   bool listingsLoadingMore = false;
   static const listingsPageSize = 20;
   List<dynamic> directory = [];
+  int directoryTotal = 0;
+  bool directoryHasMore = false;
+  bool directoryLoadingMore = false;
+  static const directoryPageSize = 30;
   List<dynamic> favorites = [];
   final Set<int> favoriteIds = {};
   final Set<int> directoryFavoriteIds = {};
@@ -116,6 +122,8 @@ class AppState extends ChangeNotifier {
     _clearingSession = true;
     try {
       await api.setToken(null);
+      await PinStorage.saveSessionToken(null);
+      _hasPinSession = false;
       user = null;
       favorites = [];
       favoriteIds.clear();
@@ -171,8 +179,10 @@ class AppState extends ChangeNotifier {
   static const _newsCachePrefix = 'cache_news_json';
   static const _transportCachePrefix = 'cache_transport_';
 
-  /// Блокируем приложение PIN только если сессия уже восстановлена.
-  /// Если пользователь вышел — PIN предлагается на экране входа.
+  /// Вошедший пользователь обязан задать PIN (защита от посторонних на телефоне).
+  bool get needsPinSetup => user != null && !hasPin;
+
+  /// Блокируем приложение PIN, если сессия есть, а код ещё не введён.
   bool get needsPinUnlock => hasPin && !pinUnlocked && user != null;
 
   bool get canUnlockWithPin => hasPin && _hasPinSession;
@@ -261,6 +271,8 @@ class AppState extends ChangeNotifier {
       return true;
     } catch (_) {
       await api.setToken(null);
+      await PinStorage.saveSessionToken(null);
+      _hasPinSession = false;
       user = null;
       pinUnlocked = false;
       notifyListeners();
@@ -311,17 +323,21 @@ class AppState extends ChangeNotifier {
     }
 
     return {
+      'device_id': await _ensureDeviceId(),
       'device_brand': brand,
       'device_model': model,
       'device_os': os,
       'app_version': '${package.version}+${package.buildNumber}',
       'device_info': details.entries.map((e) => '${e.key}: ${e.value}').join('\n'),
+      if ((await PushService.instance.ensureToken()) != null)
+        'fcm_token': PushService.instance.token,
     };
   }
 
   Future<void> reportDeviceInfo() async {
     if (user == null) return;
     try {
+      await PushService.instance.ensureToken();
       final payload = await _collectDevicePayload();
       user = await api.request('/auth/device', method: 'POST', auth: true, body: payload) as Map<String, dynamic>;
     } catch (_) {
@@ -396,18 +412,42 @@ class AppState extends ChangeNotifier {
 
   Future<void> loadMoreListings() => loadListings(append: true);
 
-  Future<void> loadDirectory() async {
-    directoryLoading = true;
+  Future<void> loadDirectory({bool append = false}) async {
+    if (append) {
+      if (!directoryHasMore || directoryLoadingMore || directoryLoading) return;
+      directoryLoadingMore = true;
+    } else {
+      directoryLoading = true;
+    }
     notifyListeners();
     try {
-      final params = <String, String>{};
+      final offset = append ? directory.length : 0;
+      final params = <String, String>{
+        'limit': '$directoryPageSize',
+        'offset': '$offset',
+      };
       if (directoryCategory != null) params['category'] = directoryCategory!;
       if (directorySettlementId != null) params['settlement_id'] = '$directorySettlementId';
       if (directoryQuery.trim().isNotEmpty) params['q'] = directoryQuery.trim();
       final qs = params.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&');
-      final path = qs.isEmpty ? '/directory' : '/directory?$qs';
-      directory = await api.request(path, auth: true) as List<dynamic>;
-      for (final item in directory) {
+      final data = await api.request('/directory?$qs', auth: true);
+      List<dynamic> items;
+      int total;
+      if (data is Map) {
+        items = (data['items'] as List<dynamic>?) ?? [];
+        total = (data['total'] as num?)?.toInt() ?? items.length;
+      } else {
+        items = data as List<dynamic>;
+        total = items.length;
+      }
+      if (append) {
+        directory = [...directory, ...items];
+      } else {
+        directory = items;
+      }
+      directoryTotal = total;
+      directoryHasMore = directory.length < directoryTotal;
+      for (final item in items) {
         if (item is Map && item['is_favorited'] == true && item['id'] is int) {
           directoryFavoriteIds.add(item['id'] as int);
         }
@@ -420,13 +460,18 @@ class AppState extends ChangeNotifier {
         error = null;
       }
     } catch (e) {
-      directoryOffline = true;
-      error = userFriendlyError(e);
+      if (!append) {
+        directoryOffline = true;
+        error = userFriendlyError(e);
+      }
     } finally {
       directoryLoading = false;
+      directoryLoadingMore = false;
       notifyListeners();
     }
   }
+
+  Future<void> loadMoreDirectory() => loadDirectory(append: true);
 
   Future<void> setDirectoryFilters({
     String? category,
@@ -974,16 +1019,26 @@ class AppState extends ChangeNotifier {
     return await api.request('/notifications', auth: true) as List<dynamic>;
   }
 
-  Future<void> refreshUnreadNotifications() async {
+  Future<void> refreshUnreadNotifications({bool announceLocal = false}) async {
     if (user == null) {
       unreadNotifications = 0;
       notifyListeners();
       return;
     }
     try {
+      final before = unreadNotifications;
       final data = await api.request('/notifications/unread-count', auth: true) as Map<String, dynamic>;
       unreadNotifications = (data['count'] as num?)?.toInt() ?? 0;
       notifyListeners();
+      if (announceLocal && unreadNotifications > before) {
+        await PushService.instance.showLocal(
+          title: 'Рядом56',
+          body: unreadNotifications == 1
+              ? 'Новое уведомление'
+              : 'Новые уведомления: $unreadNotifications',
+          data: {'type': 'inbox'},
+        );
+      }
     } catch (_) {}
   }
 
@@ -1109,6 +1164,59 @@ class AppState extends ChangeNotifier {
     return rows;
   }
 
+  Future<String> requestPasswordReset(String email) async {
+    final data = await api.request('/auth/forgot-password', method: 'POST', body: {
+      'email': email,
+    });
+    if (data is Map && data['message'] is String) {
+      return data['message'] as String;
+    }
+    return 'Если такой email есть в системе, мы отправили код на почту';
+  }
+
+  Future<void> confirmPasswordReset({
+    required String email,
+    required String code,
+    required String password,
+  }) async {
+    await api.request('/auth/reset-password', method: 'POST', body: {
+      'email': email,
+      'code': code,
+      'password': password,
+    });
+  }
+
+  Future<String> _ensureDeviceId() async {
+    final prefs = await SharedPreferences.getInstance();
+    var id = prefs.getString('ryadom_device_id');
+    if (id != null && id.length >= 16) return id;
+    final rand = Random.secure();
+    id = List.generate(16, (_) => rand.nextInt(256).toRadixString(16).padLeft(2, '0')).join();
+    await prefs.setString('ryadom_device_id', id);
+    return id;
+  }
+
+  Future<List<Map<String, dynamic>>> loadDeviceSessions() async {
+    final rows = await api.request('/auth/sessions', auth: true) as List<dynamic>;
+    return rows.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
+  }
+
+  Future<void> revokeAllSessions() async {
+    await api.request('/auth/sessions/revoke-all', method: 'POST', auth: true);
+    await logout(keepPinBackup: false);
+  }
+
+  Future<void> revokeOtherSessions() async {
+    await api.request('/auth/sessions/revoke-others', method: 'POST', auth: true);
+  }
+
+  Future<void> revokeSession(int id, {required bool isCurrent}) async {
+    await api.request('/auth/sessions/$id', method: 'DELETE', auth: true);
+    if (isCurrent) {
+      await logout(keepPinBackup: false);
+    }
+  }
+
   Future<void> login(String email, String password) async {
     final data = await api.request('/auth/login', method: 'POST', body: {
       'email': email,
@@ -1120,6 +1228,8 @@ class AppState extends ChangeNotifier {
     _hasPinSession = true;
     user = await api.request('/auth/me', auth: true) as Map<String, dynamic>;
     hasPin = await PinStorage.hasPin();
+    // Пароль уже введён — сессия разблокирована; если PIN нет, RootGate/экран входа
+    // отправят на обязательную настройку.
     pinUnlocked = true;
     await reportDeviceInfo();
     await refreshPublic();
@@ -1135,6 +1245,7 @@ class AppState extends ChangeNotifier {
     await PinStorage.saveSessionToken(token);
     _hasPinSession = true;
     user = await api.request('/auth/me', auth: true) as Map<String, dynamic>;
+    hasPin = await PinStorage.hasPin();
     pinUnlocked = true;
     await reportDeviceInfo();
     await refreshPublic();
@@ -1143,13 +1254,16 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> logout() async {
+  Future<void> logout({bool keepPinBackup = true}) async {
     // Резервный токен оставляем, если PIN есть — можно войти по PIN снова.
-    final keepPinSession = hasPin || await PinStorage.hasPin();
+    final keepPinSession = keepPinBackup && (hasPin || await PinStorage.hasPin());
     final current = await api.token;
     if (keepPinSession && current != null) {
       await PinStorage.saveSessionToken(current);
       _hasPinSession = true;
+    } else {
+      await PinStorage.saveSessionToken(null);
+      _hasPinSession = false;
     }
     await api.setToken(null);
     user = null;

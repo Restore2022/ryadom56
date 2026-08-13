@@ -1,7 +1,7 @@
 name: ryadom56
-description: Ryadom56 ? Sakmarsky district app
+description: Ryadom56 — Sakmarsky district app
 publish_to: "none"
-version: 0.18.3+26
+version: 0.21.0+33
 
 environment:
   sdk: ">=3.8.0 <4.0.0"
@@ -22,6 +22,10 @@ dependencies:
   path_provider: ^2.1.5
   open_filex: ^4.7.0
   crypto: ^3.0.7
+  firebase_core: ^4.0.0
+  firebase_messaging: ^16.0.0
+  flutter_local_notifications: ^19.0.0
+
 dev_dependencies:
   flutter_test:
     sdk: flutter

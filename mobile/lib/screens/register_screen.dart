@@ -82,7 +82,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (!mounted) return;
       Navigator.pushAndRemoveUntil(
         context,
-        MaterialPageRoute(builder: (_) => const PinSetupScreen()),
+        MaterialPageRoute(builder: (_) => const PinSetupScreen(allowSkip: false)),
         (route) => false,
       );
     } catch (e) {

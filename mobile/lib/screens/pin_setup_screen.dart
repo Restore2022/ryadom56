@@ -6,9 +6,9 @@ import 'package:provider/provider.dart';
 import '../pin_storage.dart';
 import '../state/app_state.dart';
 
-/// Настройка 5-значного PIN после регистрации.
+/// Обязательная настройка 5-значного PIN (защита входа в аккаунт на устройстве).
 class PinSetupScreen extends StatefulWidget {
-  const PinSetupScreen({super.key, this.allowSkip = true});
+  const PinSetupScreen({super.key, this.allowSkip = false});
 
   final bool allowSkip;
 
@@ -122,7 +122,7 @@ class _PinSetupScreenState extends State<PinSetupScreen> with SingleTickerProvid
     final title = _confirming ? 'Повторите PIN' : 'Придумайте PIN';
     final subtitle = _confirming
         ? 'Введите тот же код ещё раз'
-        : '5 цифр для быстрого входа в приложение';
+        : '5 цифр — чтобы посторонние не открыли ваш аккаунт на этом телефоне';
 
     return Scaffold(
       body: SafeArea(

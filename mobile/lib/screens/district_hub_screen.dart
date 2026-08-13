@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
+import '../scroll_to_top.dart';
 import '../state/app_state.dart';
 import 'event_detail_screen.dart';
 import 'home_shell.dart';
@@ -15,6 +16,7 @@ class DistrictHubScreen extends StatefulWidget {
 }
 
 class _DistrictHubScreenState extends State<DistrictHubScreen> {
+  final scroll = ScrollController();
   List<Map<String, dynamic>> alerts = [];
   List<dynamic> news = [];
   List<dynamic> events = [];
@@ -25,6 +27,12 @@ class _DistrictHubScreenState extends State<DistrictHubScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  @override
+  void dispose() {
+    scroll.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -98,13 +106,17 @@ class _DistrictHubScreenState extends State<DistrictHubScreen> {
     final state = context.watch<AppState>();
     return Scaffold(
       appBar: AppBar(title: const Text('Район')),
-      body: RefreshIndicator(
-        onRefresh: _load,
-        child: loading && alerts.isEmpty && news.isEmpty && events.isEmpty
-            ? const Center(child: CircularProgressIndicator())
-            : ListView(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
-                children: [
+      body: stackWithScrollToTop(
+        controller: scroll,
+        heroTag: 'scroll-top-district',
+        child: RefreshIndicator(
+          onRefresh: _load,
+          child: loading && alerts.isEmpty && news.isEmpty && events.isEmpty
+              ? const Center(child: CircularProgressIndicator())
+              : ListView(
+                  controller: scroll,
+                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                  children: [
                   if (error != null)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 12),
@@ -207,6 +219,7 @@ class _DistrictHubScreenState extends State<DistrictHubScreen> {
                     }),
                 ],
               ),
+        ),
       ),
     );
   }

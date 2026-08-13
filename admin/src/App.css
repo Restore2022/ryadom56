@@ -159,6 +159,28 @@ textarea:focus {
   color: #fff;
 }
 
+.login-card button.ghost {
+  background: transparent;
+  color: var(--brand);
+  border: 1px solid var(--line);
+}
+
+.login-card button.text-link {
+  background: none;
+  box-shadow: none;
+  color: var(--brand);
+  padding: 4px 0;
+  font-weight: 600;
+  text-align: left;
+  margin-top: 0;
+}
+
+.login-info {
+  margin: 0;
+  color: var(--ok);
+  font-size: 14px;
+}
+
 .layout {
   display: grid;
   grid-template-columns: 260px 1fr;

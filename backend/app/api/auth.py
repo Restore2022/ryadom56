@@ -1,15 +1,40 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+import hashlib
+import hmac
+import logging
+import secrets
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, security
+from app.core.config import settings
 from app.core.database import get_db
-from app.core.security import create_access_token, hash_password, verify_password
-from app.models import Listing, ListingReport, ListingStatus, Settlement, User
-from app.schemas import DeviceInfoIn, LoginIn, ProfileUpdateIn, PublicUserOut, RegisterIn, TokenOut, UserOut
+from app.core.security import decode_access_token, hash_password, verify_password
+from app.models import Listing, ListingReport, ListingStatus, PasswordReset, Settlement, User, UserSession
+from app.schemas import (
+    DeviceInfoIn,
+    ForgotPasswordIn,
+    LoginIn,
+    MessageOut,
+    ProfileUpdateIn,
+    PublicUserOut,
+    RegisterIn,
+    ResetPasswordIn,
+    VerifyPasswordIn,
+    SessionOut,
+    TokenOut,
+    UserOut,
+)
+from app.services.mail import MailNotConfigured, MailSendError, mail_configured, send_email
 from app.services.rate_limit import limiter
+from app.services.sessions import bind_device_to_session, issue_user_token, revoke_all_sessions, revoke_session
+
+logger = logging.getLogger(__name__)
+
+_RESET_OK = "Если такой email есть в системе, мы отправили код на почту"
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -95,7 +120,8 @@ def register(payload: RegisterIn, request: Request, db: Session = Depends(get_db
     db.add(user)
     db.commit()
     db.refresh(user)
-    token = create_access_token(str(user.id), {"role": user.role.value})
+    token = issue_user_token(db, user, ip=client_ip(request))
+    db.commit()
     return TokenOut(access_token=token)
 
 
@@ -110,9 +136,141 @@ def login(payload: LoginIn, request: Request, db: Session = Depends(get_db)):
     if not user.is_active:
         raise HTTPException(status_code=403, detail="Аккаунт заблокирован")
     touch_user(user, request)
+    token = issue_user_token(db, user, ip=client_ip(request))
     db.commit()
-    token = create_access_token(str(user.id), {"role": user.role.value})
     return TokenOut(access_token=token)
+
+
+@router.post("/verify-password", response_model=MessageOut)
+def verify_account_password(
+    payload: VerifyPasswordIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    ip = client_ip(request) or "unknown"
+    if not limiter.allow(f"verify-pass:{user.id}:{ip}", limit=12, window_sec=600):
+        raise HTTPException(status_code=429, detail="Слишком много попыток. Подождите")
+    db_user = db.get(User, user.id)
+    if not db_user or not verify_password(payload.password, db_user.password_hash):
+        raise HTTPException(status_code=400, detail="Неверный пароль")
+    return MessageOut(message="Пароль подтверждён")
+
+
+def _reset_code_hash(email: str, code: str) -> str:
+    raw = f"{email.lower().strip()}:{code}".encode("utf-8")
+    return hmac.new(settings.secret_key.encode("utf-8"), raw, hashlib.sha256).hexdigest()
+
+
+def _password_reset_email(code: str, minutes: int) -> tuple[str, str, str]:
+    subject = "Код для смены пароля — Рядом56"
+    text = (
+        f"Здравствуйте!\n\n"
+        f"Код для восстановления пароля в Рядом56: {code}\n\n"
+        f"Код действует {minutes} минут. Если вы не запрашивали смену пароля, просто проигнорируйте это письмо.\n"
+    )
+    html = f"""
+    <div style="font-family:Arial,sans-serif;line-height:1.5;color:#132016">
+      <p>Здравствуйте!</p>
+      <p>Код для восстановления пароля в <strong>Рядом56</strong>:</p>
+      <p style="font-size:28px;letter-spacing:6px;font-weight:700">{code}</p>
+      <p>Код действует {minutes} минут. Если вы не запрашивали смену пароля, просто проигнорируйте это письмо.</p>
+    </div>
+    """
+    return subject, text, html
+
+
+@router.post("/forgot-password", response_model=MessageOut)
+def forgot_password(payload: ForgotPasswordIn, request: Request, db: Session = Depends(get_db)):
+    ip = client_ip(request) or "unknown"
+    email = payload.email.lower().strip()
+    if not limiter.allow(f"forgot-ip:{ip}", limit=8, window_sec=3600):
+        raise HTTPException(status_code=429, detail="Слишком много запросов. Подождите час")
+    if not limiter.allow(f"forgot-email:{email}", limit=5, window_sec=3600):
+        raise HTTPException(status_code=429, detail="Слишком много запросов на этот email. Подождите")
+    if not mail_configured():
+        logger.warning("forgot-password: SMTP is not configured")
+        raise HTTPException(status_code=503, detail="Восстановление пароля временно недоступно")
+
+    user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+    if not user or not user.is_active:
+        return MessageOut(message=_RESET_OK)
+
+    now = datetime.now(timezone.utc)
+    pending = db.execute(
+        select(PasswordReset).where(
+            PasswordReset.user_id == user.id,
+            PasswordReset.used_at.is_(None),
+        )
+    ).scalars().all()
+    for row in pending:
+        row.used_at = now
+
+    code = f"{secrets.randbelow(1_000_000):06d}"
+    ttl = max(5, int(settings.password_reset_ttl_minutes or 20))
+    item = PasswordReset(
+        user_id=user.id,
+        email=email,
+        code_hash=_reset_code_hash(email, code),
+        attempts=0,
+        expires_at=now + timedelta(minutes=ttl),
+        created_ip=ip[:64],
+    )
+    db.add(item)
+    db.flush()
+    subject, text, html = _password_reset_email(code, ttl)
+    try:
+        send_email(to=email, subject=subject, text=text, html=html)
+    except MailNotConfigured:
+        db.rollback()
+        raise HTTPException(status_code=503, detail="Восстановление пароля временно недоступно")
+    except MailSendError:
+        db.rollback()
+        raise HTTPException(status_code=503, detail="Не удалось отправить письмо. Попробуйте позже")
+    db.commit()
+    return MessageOut(message=_RESET_OK)
+
+
+@router.post("/reset-password", response_model=MessageOut)
+def reset_password(payload: ResetPasswordIn, request: Request, db: Session = Depends(get_db)):
+    ip = client_ip(request) or "unknown"
+    if not limiter.allow(f"reset-ip:{ip}", limit=20, window_sec=600):
+        raise HTTPException(status_code=429, detail="Слишком много попыток. Подождите")
+    email = payload.email.lower().strip()
+    code = payload.code.strip()
+    user = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+    if not user or not user.is_active:
+        raise HTTPException(status_code=400, detail="Неверный код или срок действия истёк")
+
+    now = datetime.now(timezone.utc)
+    row = db.execute(
+        select(PasswordReset)
+        .where(
+            PasswordReset.user_id == user.id,
+            PasswordReset.used_at.is_(None),
+            PasswordReset.expires_at > now,
+        )
+        .order_by(PasswordReset.created_at.desc())
+    ).scalars().first()
+    if not row:
+        raise HTTPException(status_code=400, detail="Неверный код или срок действия истёк")
+    if row.attempts >= 5:
+        row.used_at = now
+        db.commit()
+        raise HTTPException(status_code=400, detail="Слишком много попыток. Запросите код снова")
+
+    expected = _reset_code_hash(email, code)
+    if not hmac.compare_digest(row.code_hash, expected):
+        row.attempts += 1
+        db.commit()
+        left = max(0, 5 - row.attempts)
+        raise HTTPException(status_code=400, detail=f"Неверный код. Осталось попыток: {left}")
+
+    user.password_hash = hash_password(payload.password)
+    row.used_at = now
+    revoke_all_sessions(db, user)
+    db.commit()
+    return MessageOut(message="Пароль обновлён. Войдите с новым паролем")
 
 
 @router.get("/me", response_model=UserOut)
@@ -166,6 +324,7 @@ def update_me(
     payload: ProfileUpdateIn,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    creds: HTTPAuthorizationCredentials | None = Depends(security),
 ):
     db_user = db.execute(
         select(User).options(selectinload(User.settlement)).where(User.id == user.id)
@@ -175,6 +334,9 @@ def update_me(
         if not payload.current_password or not verify_password(payload.current_password, db_user.password_hash):
             raise HTTPException(status_code=400, detail="Неверный текущий пароль")
         db_user.password_hash = hash_password(data.pop("password"))
+        # смена пароля выкидывает остальные телефоны, текущий остаётся
+        current = _session_by_creds(db, db_user.id, creds)
+        revoke_all_sessions(db, db_user, except_id=current.id if current else None)
     data.pop("current_password", None)
     if "settlement_id" in data and data["settlement_id"] is not None:
         settlement = db.execute(select(Settlement).where(Settlement.id == data["settlement_id"])).scalar_one_or_none()
@@ -194,17 +356,102 @@ def update_me(
     return db_user
 
 
+def _payload_from_creds(creds: HTTPAuthorizationCredentials | None) -> dict:
+    if not creds:
+        return {}
+    return decode_access_token(creds.credentials) or {}
+
+
+def _session_by_creds(db: Session, user_id: int, creds: HTTPAuthorizationCredentials | None) -> UserSession | None:
+    jti = str(_payload_from_creds(creds).get("jti") or "").strip()
+    if not jti:
+        return None
+    return db.execute(
+        select(UserSession).where(
+            UserSession.jti == jti,
+            UserSession.user_id == user_id,
+            UserSession.revoked_at.is_(None),
+        )
+    ).scalar_one_or_none()
+
+
 @router.post("/device", response_model=UserOut)
 def report_device(
     payload: DeviceInfoIn,
     request: Request,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    creds: HTTPAuthorizationCredentials | None = Depends(security),
 ):
     db_user = db.execute(
         select(User).options(selectinload(User.settlement)).where(User.id == user.id)
     ).scalar_one()
     touch_user(db_user, request, payload)
+    bind_device_to_session(
+        db,
+        db_user,
+        jti=str(_payload_from_creds(creds).get("jti") or "").strip() or None,
+        ip=client_ip(request),
+        device_id=(payload.device_id or "").strip() or None,
+        device_brand=payload.device_brand,
+        device_model=payload.device_model,
+        device_os=payload.device_os,
+        app_version=payload.app_version,
+        fcm_token=payload.fcm_token,
+    )
     db.commit()
     db.refresh(db_user)
     return db_user
+
+
+@router.get("/sessions", response_model=list[SessionOut])
+def list_sessions(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    creds: HTTPAuthorizationCredentials | None = Depends(security),
+):
+    current_jti = str(_payload_from_creds(creds).get("jti") or "").strip()
+    rows = db.execute(
+        select(UserSession)
+        .where(UserSession.user_id == user.id, UserSession.revoked_at.is_(None))
+        .order_by(UserSession.last_seen_at.desc(), UserSession.id.desc())
+    ).scalars().all()
+    out: list[SessionOut] = []
+    for row in rows:
+        item = SessionOut.model_validate(row)
+        item.is_current = bool(current_jti and row.jti == current_jti)
+        out.append(item)
+    return out
+
+
+@router.post("/sessions/revoke-all", response_model=MessageOut)
+def sessions_revoke_all(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    n = revoke_all_sessions(db, user)
+    db.commit()
+    return MessageOut(message=f"Выполнен выход на всех устройствах ({n})")
+
+
+@router.post("/sessions/revoke-others", response_model=MessageOut)
+def sessions_revoke_others(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    creds: HTTPAuthorizationCredentials | None = Depends(security),
+):
+    current = _session_by_creds(db, user.id, creds)
+    n = revoke_all_sessions(db, user, except_id=current.id if current else None)
+    db.commit()
+    return MessageOut(message=f"Выполнен выход на других устройствах ({n})")
+
+
+@router.delete("/sessions/{session_id}", response_model=MessageOut)
+def sessions_revoke_one(
+    session_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    revoke_session(db, user, session_id)
+    db.commit()
+    return MessageOut(message="Устройство отключено")

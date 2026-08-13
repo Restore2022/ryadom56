@@ -36,7 +36,7 @@ from app.schemas import (
     ListingUpdate,
 )
 from app.services.audit import log_action
-from app.services.blacklist import match_blacklist
+from app.services.blacklist import looks_like_chat_spam, match_blacklist
 from app.services.notify import notify_user
 from app.services.rate_limit import limiter
 
@@ -828,6 +828,14 @@ def post_message(
     body = payload.body.strip()
     if not body:
         raise HTTPException(status_code=400, detail="Пустое сообщение")
+    hits = match_blacklist(db, title="", description=body)
+    if hits:
+        raise HTTPException(status_code=400, detail="Сообщение отклонено: запрещённые слова или контакты")
+    if looks_like_chat_spam(body):
+        raise HTTPException(
+            status_code=400,
+            detail="Сообщение похоже на спам. Уберите ссылки и рекламу — пишите по делу объявления",
+        )
     buyer_id = _resolve_thread_buyer_id(item, user, payload.peer_id)
     if user.id == item.author_id:
         # продавец отвечает только в существующий или явный тред с покупателем
@@ -851,6 +859,7 @@ def post_message(
             title="Новое сообщение по объявлению",
             body=body[:120],
             listing_id=item.id,
+            extra={"buyer_id": buyer_id},
         )
     db.commit()
     db.refresh(msg)

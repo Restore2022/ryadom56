@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Navigate, NavLink, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, apiDownload, apiText, mediaUrl, setToken } from './api';
 import type {
+  AdminChatMessage,
+  AdminConversation,
   AuditLog,
   BlacklistEntry,
   DirectoryItem,
@@ -167,6 +169,14 @@ const ROLE_LABELS: Record<User['role'], string> = {
   admin: 'Админ',
 };
 
+const BADGE_LABELS: Record<string, string> = {
+  '': 'Без метки',
+  new: 'Новичок',
+  trusted: 'Надёжный',
+  verified: 'Проверенный',
+  caution: 'Осторожно',
+};
+
 const STATUS_CHIP: Record<string, string> = {
   pending: 'chip warn',
   approved: 'chip ok',
@@ -259,12 +269,16 @@ function useAuth() {
 }
 
 function LoginPage({ onLogin }: { onLogin: (u: User) => void }) {
+  const [mode, setMode] = useState<'login' | 'forgot' | 'reset'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [code, setCode] = useState('');
+  const [password2, setPassword2] = useState('');
   const [error, setError] = useState('');
+  const [info, setInfo] = useState('');
   const [busy, setBusy] = useState(false);
 
-  async function submit(e: React.FormEvent) {
+  async function submitLogin(e: React.FormEvent) {
     e.preventDefault();
     if (!isValidEmail(email)) {
       setError('Введите корректный email');
@@ -296,22 +310,162 @@ function LoginPage({ onLogin }: { onLogin: (u: User) => void }) {
     }
   }
 
+  async function sendCode() {
+    if (!isValidEmail(email)) {
+      setError('Введите корректный email');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    setInfo('');
+    try {
+      const res = await api<{ ok: boolean; message: string }>('/auth/forgot-password', {
+        method: 'POST',
+        body: JSON.stringify({ email: email.trim() }),
+      });
+      setInfo(res.message || 'Если такой email есть, мы отправили код на почту');
+      setMode('reset');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось отправить код');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitForgot(e: React.FormEvent) {
+    e.preventDefault();
+    await sendCode();
+  }
+
+  async function submitReset(e: React.FormEvent) {
+    e.preventDefault();
+    if (!/^\d{6}$/.test(code.trim())) {
+      setError('Введите 6-значный код из письма');
+      return;
+    }
+    if (password.length < 6) {
+      setError('Пароль не короче 6 символов');
+      return;
+    }
+    if (password !== password2) {
+      setError('Пароли не совпадают');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      await api('/auth/reset-password', {
+        method: 'POST',
+        body: JSON.stringify({ email: email.trim(), code: code.trim(), password }),
+      });
+      setMode('login');
+      setPassword('');
+      setPassword2('');
+      setCode('');
+      setInfo('Пароль обновлён. Войдите с новым паролем');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось сменить пароль');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const title = mode === 'login' ? 'Панель управления' : 'Восстановление пароля';
+  const onSubmit = mode === 'login' ? submitLogin : mode === 'forgot' ? submitForgot : submitReset;
+
   return (
     <div className="login-wrap">
-      <form className="login-card" onSubmit={submit}>
+      <form className="login-card" onSubmit={onSubmit}>
         <p className="brand">Рядом56</p>
-        <h1>Панель управления</h1>
-        <p className="login-sub">Модерация объявлений и справочник района</p>
+        <h1>{title}</h1>
+        <p className="login-sub">
+          {mode === 'login'
+            ? 'Модерация объявлений и справочник района'
+            : mode === 'forgot'
+              ? 'Отправим 6-значный код на почту'
+              : 'Введите код из письма и новый пароль'}
+        </p>
         <label>
           Email
-          <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" required />
+          <input
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            type="email"
+            required
+            disabled={busy || mode === 'reset'}
+          />
         </label>
-        <label>
-          Пароль
-          <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" required />
-        </label>
+        {mode === 'login' && (
+          <label>
+            Пароль
+            <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" required />
+          </label>
+        )}
+        {mode === 'reset' && (
+          <>
+            <label>
+              Код из письма
+              <input
+                value={code}
+                onChange={(e) => setCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                required
+              />
+            </label>
+            <label>
+              Новый пароль
+              <input value={password} onChange={(e) => setPassword(e.target.value)} type="password" required />
+            </label>
+            <label>
+              Повторите пароль
+              <input value={password2} onChange={(e) => setPassword2(e.target.value)} type="password" required />
+            </label>
+          </>
+        )}
+        {info && <p className="login-info">{info}</p>}
         {error && <p className="error">{error}</p>}
-        <button disabled={busy}>{busy ? 'Вход…' : 'Войти'}</button>
+        <button disabled={busy}>
+          {busy
+            ? 'Отправка…'
+            : mode === 'login'
+              ? 'Войти'
+              : mode === 'forgot'
+                ? 'Отправить код'
+                : 'Сохранить пароль'}
+        </button>
+        {mode === 'login' ? (
+          <button
+            type="button"
+            className="text-link"
+            disabled={busy}
+            onClick={() => {
+              setError('');
+              setInfo('');
+              setMode('forgot');
+            }}
+          >
+            Забыли пароль?
+          </button>
+        ) : (
+          <button
+            type="button"
+            className="text-link"
+            disabled={busy}
+            onClick={() => {
+              setError('');
+              setInfo('');
+              setMode('login');
+            }}
+          >
+            Назад ко входу
+          </button>
+        )}
+        {mode === 'reset' && (
+          <button type="button" className="ghost" disabled={busy} onClick={() => void sendCode()}>
+            Отправить код ещё раз
+          </button>
+        )}
       </form>
     </div>
   );
@@ -436,6 +590,11 @@ function Shell({
           {directory && (
             <NavLink to="/alerts">
               <span className="nav-ico">⚡</span> Срочное
+            </NavLink>
+          )}
+          {mod && (
+            <NavLink to="/chats">
+              <span className="nav-ico">⇄</span> Чаты
             </NavLink>
           )}
           {mod && (
@@ -1574,7 +1733,8 @@ function DirectoryPage() {
   const [settlementFilter, setSettlementFilter] = useState<number | ''>('');
 
   async function load() {
-    setItems(await api<DirectoryItem[]>('/directory'));
+    const data = await api<{ items: DirectoryItem[] } | DirectoryItem[]>('/directory?limit=500&offset=0');
+    setItems(Array.isArray(data) ? data : data.items ?? []);
     setSettlements(await api<Settlement[]>('/settlements'));
   }
 
@@ -1838,6 +1998,203 @@ function DirectoryPage() {
   );
 }
 
+function ChatsModerationPage() {
+  const [items, setItems] = useState<AdminConversation[]>([]);
+  const [query, setQuery] = useState('');
+  const [flaggedOnly, setFlaggedOnly] = useState(true);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [selected, setSelected] = useState<AdminConversation | null>(null);
+  const [messages, setMessages] = useState<AdminChatMessage[]>([]);
+
+  async function loadList() {
+    const params = new URLSearchParams();
+    if (query.trim()) params.set('q', query.trim());
+    if (flaggedOnly) params.set('flagged_only', 'true');
+    const qs = params.toString();
+    setItems(await api<AdminConversation[]>(`/admin/chats${qs ? `?${qs}` : ''}`));
+  }
+
+  async function openThread(row: AdminConversation) {
+    setSelected(row);
+    setMessages(await api<AdminChatMessage[]>(`/admin/chats/${row.listing_id}/${row.buyer_id}`));
+  }
+
+  useEffect(() => {
+    setBusy(true);
+    loadList()
+      .catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'))
+      .finally(() => setBusy(false));
+  }, []);
+
+  async function refresh() {
+    setBusy(true);
+    setError('');
+    try {
+      await loadList();
+      if (selected) {
+        await openThread(selected);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteMessage(id: number) {
+    if (!(await confirmAction('Удалить это сообщение?'))) return;
+    try {
+      await api(`/admin/chat-messages/${id}`, { method: 'DELETE' });
+      pushToast('Сообщение удалено');
+      await refresh();
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : 'Ошибка');
+    }
+  }
+
+  async function deleteThread(row: AdminConversation) {
+    if (!(await confirmAction(`Удалить всю переписку по «${row.listing_title}» (${row.message_count} сообщ.)?`))) {
+      return;
+    }
+    try {
+      await api(`/admin/chats/${row.listing_id}/${row.buyer_id}`, { method: 'DELETE' });
+      pushToast('Переписка удалена');
+      if (selected?.listing_id === row.listing_id && selected?.buyer_id === row.buyer_id) {
+        setSelected(null);
+        setMessages([]);
+      }
+      await loadList();
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : 'Ошибка');
+    }
+  }
+
+  return (
+    <div>
+      <div className="page-head compact">
+        <div>
+          <h1>Чаты по объявлениям</h1>
+          <p>Проверка переписок на спам, ссылки и слова из чёрного списка</p>
+        </div>
+      </div>
+      <form
+        className="toolbar compact"
+        onSubmit={(e) => {
+          e.preventDefault();
+          refresh();
+        }}
+      >
+        <input
+          placeholder="Поиск: объявление, имена, текст…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <label className="chip neutral" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+          <input type="checkbox" checked={flaggedOnly} onChange={(e) => setFlaggedOnly(e.target.checked)} />
+          Только подозрительные
+        </label>
+        <button className="btn" type="submit" disabled={busy}>
+          {busy ? '…' : 'Обновить'}
+        </button>
+      </form>
+      {error && <p className="error">{error}</p>}
+      <div className="list compact" style={{ display: 'grid', gridTemplateColumns: selected ? '1fr 1.2fr' : '1fr', gap: 12 }}>
+        <div>
+          {items.map((row) => (
+            <article
+              key={`${row.listing_id}-${row.buyer_id}`}
+              className="row-card compact"
+              style={{
+                outline: selected?.listing_id === row.listing_id && selected?.buyer_id === row.buyer_id ? '2px solid var(--accent, #2a6)' : undefined,
+                cursor: 'pointer',
+              }}
+              onClick={() => openThread(row).catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'))}
+            >
+              <div className="row-main">
+                <h3 className="row-title">{row.listing_title}</h3>
+                <div className="meta">
+                  {row.flagged && <span className="chip danger">Подозрительно</span>}
+                  <span className="chip neutral">{row.message_count} сообщ.</span>
+                  <span className="chip">продавец: {row.seller_name || `#${row.seller_id}`}</span>
+                  <span className="chip">покупатель: {row.buyer_name || `#${row.buyer_id}`}</span>
+                </div>
+                {row.last_message && <p style={{ margin: '6px 0 0', opacity: 0.85 }}>{row.last_message}</p>}
+                {!!row.flag_reasons?.length && (
+                  <div className="meta" style={{ marginTop: 6 }}>
+                    {row.flag_reasons.map((r) => (
+                      <span key={r} className="chip danger">
+                        {r}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+              <div className="actions inline">
+                <button
+                  className="btn danger"
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    deleteThread(row);
+                  }}
+                >
+                  Удалить тред
+                </button>
+              </div>
+            </article>
+          ))}
+          {!items.length && !busy && <div className="empty">Переписок нет</div>}
+        </div>
+        {selected && (
+          <div className="row-card compact">
+            <div className="page-head compact" style={{ marginBottom: 8 }}>
+              <div>
+                <h2 style={{ margin: 0, fontSize: '1.1rem' }}>{selected.listing_title}</h2>
+                <p style={{ margin: '4px 0 0' }}>
+                  {selected.seller_name} ↔ {selected.buyer_name}
+                </p>
+              </div>
+              <button className="btn ghost" type="button" onClick={() => { setSelected(null); setMessages([]); }}>
+                Закрыть
+              </button>
+            </div>
+            <div className="list compact">
+              {messages.map((m) => (
+                <article key={m.id} className="row-card compact" style={{ opacity: m.flagged ? 1 : 0.95 }}>
+                  <div className="row-main">
+                    <div className="meta">
+                      <strong>{m.sender_name || `#${m.sender_id}`}</strong>
+                      <span className="chip neutral">{new Date(m.created_at).toLocaleString('ru-RU')}</span>
+                      {m.flagged && <span className="chip danger">Флаг</span>}
+                    </div>
+                    <p style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap' }}>{m.body}</p>
+                    {!!m.flag_reasons?.length && (
+                      <div className="meta" style={{ marginTop: 6 }}>
+                        {m.flag_reasons.map((r) => (
+                          <span key={r} className="chip danger">
+                            {r}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div className="actions inline">
+                    <button className="btn danger" type="button" onClick={() => deleteMessage(m.id)}>
+                      Удалить
+                    </button>
+                  </div>
+                </article>
+              ))}
+              {!messages.length && <div className="empty">Сообщений нет</div>}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function BlacklistPage() {
   const [items, setItems] = useState<BlacklistEntry[]>([]);
   const [kind, setKind] = useState<'phone' | 'word'>('word');
@@ -1930,17 +2287,22 @@ function BlacklistPage() {
 
 function UsersPage() {
   const navigate = useNavigate();
-  const [users, setUsers] = useState<User[]>([]);
-  const [settlements, setSettlements] = useState<Settlement[]>([]);
-  const [selected, setSelected] = useState<User | null>(null);
-  const [form, setForm] = useState({
+  const emptyForm = {
     full_name: '',
     email: '',
     phone: '',
     settlement_id: 0,
     role: 'user' as User['role'],
     is_active: true,
-  });
+    password: '',
+    password2: '',
+    badge: '',
+  };
+  const [users, setUsers] = useState<User[]>([]);
+  const [settlements, setSettlements] = useState<Settlement[]>([]);
+  const [selected, setSelected] = useState<User | null>(null);
+  const [creating, setCreating] = useState(false);
+  const [form, setForm] = useState(emptyForm);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
@@ -1957,6 +2319,7 @@ function UsersPage() {
     ]);
     setUsers(u);
     setSettlements(s);
+    setForm((prev) => (prev.settlement_id ? prev : { ...prev, settlement_id: s[0]?.id || 0 }));
   }
 
   useEffect(() => {
@@ -1978,7 +2341,24 @@ function UsersPage() {
     URL.revokeObjectURL(url);
   }
 
+  function openCreate() {
+    setSelected(null);
+    setCreating(true);
+    setForm({
+      ...emptyForm,
+      settlement_id: settlements[0]?.id || 0,
+    });
+    setError('');
+  }
+
+  function closeEditor() {
+    setSelected(null);
+    setCreating(false);
+    setError('');
+  }
+
   function openEdit(u: User) {
+    setCreating(false);
     setSelected(u);
     setForm({
       full_name: u.full_name,
@@ -1987,27 +2367,47 @@ function UsersPage() {
       settlement_id: u.settlement_id,
       role: u.role,
       is_active: u.is_active,
+      password: '',
+      password2: '',
+      badge: u.badge || '',
     });
     setError('');
   }
 
   async function saveUser(e: React.FormEvent) {
     e.preventDefault();
-    if (!selected || busy) return;
+    if (busy) return;
     if (!form.full_name.trim() || !isValidEmail(form.email)) {
       setError('Проверьте имя и email');
       return;
     }
-    if (selected.is_active && !form.is_active) {
+    if (!form.settlement_id) {
+      setError('Выберите населённый пункт');
+      return;
+    }
+    if (creating && form.password.length < 6) {
+      setError('Пароль не короче 6 символов');
+      return;
+    }
+    if (form.password && form.password !== form.password2) {
+      setError('Пароли не совпадают');
+      return;
+    }
+    if (form.password && form.password.length < 6) {
+      setError('Пароль не короче 6 символов');
+      return;
+    }
+    if (!creating && selected?.is_active && !form.is_active) {
       if (!(await confirmAction(`Заблокировать пользователя ${selected.full_name}?`))) return;
     }
     if (
-      form.role !== selected.role &&
+      form.role !== (creating ? 'user' : selected?.role) &&
       (form.role === 'moderator' || form.role === 'editor' || form.role === 'admin')
     ) {
+      const who = creating ? form.full_name.trim() : selected?.full_name || '';
       if (
         !(await confirmAction(
-          `Назначить роль «${ROLE_LABELS[form.role]}» пользователю ${selected.full_name}? Это даст доступ к админке.`,
+          `Назначить роль «${ROLE_LABELS[form.role]}» пользователю ${who}? Это даст доступ к админке.`,
         ))
       ) {
         return;
@@ -2015,21 +2415,37 @@ function UsersPage() {
     }
     setBusy(true);
     setError('');
+    const body: Record<string, unknown> = {
+      full_name: form.full_name.trim(),
+      email: form.email.trim(),
+      phone: form.phone.trim() || null,
+      settlement_id: form.settlement_id,
+      role: form.role,
+      is_active: form.is_active,
+      badge: form.badge || null,
+    };
+    if (form.password) body.password = form.password;
     try {
-      const updated = await api<User>(`/admin/users/${selected.id}`, {
-        method: 'PATCH',
-        body: JSON.stringify({
-          full_name: form.full_name.trim(),
-          email: form.email.trim(),
-          phone: form.phone.trim() || null,
-          settlement_id: form.settlement_id,
-          role: form.role,
-          is_active: form.is_active,
-        }),
-      });
-      setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)));
-      setSelected(updated);
-      pushToast('Пользователь сохранён');
+      if (creating) {
+        const created = await api<User>('/admin/users', {
+          method: 'POST',
+          body: JSON.stringify(body),
+        });
+        setUsers((prev) => [created, ...prev.filter((u) => u.id !== created.id)]);
+        setCreating(false);
+        setSelected(created);
+        setForm((prev) => ({ ...prev, password: '', password2: '' }));
+        pushToast('Пользователь создан');
+      } else if (selected) {
+        const updated = await api<User>(`/admin/users/${selected.id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(body),
+        });
+        setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)));
+        setSelected(updated);
+        setForm((prev) => ({ ...prev, password: '', password2: '' }));
+        pushToast('Пользователь сохранён');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка');
     } finally {
@@ -2045,6 +2461,9 @@ function UsersPage() {
           <p>Роли, устройство, IP · подозрительные = один IP у нескольких аккаунтов</p>
         </div>
         <div className="toolbar compact" style={{ margin: 0 }}>
+          <button className="btn" type="button" onClick={openCreate}>
+            Создать пользователя
+          </button>
           <button className="btn secondary" type="button" onClick={() => load().catch(console.error)}>
             Обновить
           </button>
@@ -2080,6 +2499,7 @@ function UsersPage() {
               <div className="meta">
                 <span className="chip neutral">{u.email}</span>
                 <span className="chip">{ROLE_LABELS[u.role]}</span>
+                {u.badge ? <span className="chip neutral">{BADGE_LABELS[u.badge] || u.badge}</span> : null}
                 {!u.is_active && <span className="chip danger">Заблокирован</span>}
               </div>
               <div className="device-grid">
@@ -2122,10 +2542,10 @@ function UsersPage() {
         {!users.length && <div className="empty">Пользователи не найдены</div>}
       </div>
 
-      {selected && (
-        <div className="modal-backdrop" onClick={() => setSelected(null)}>
+      {(creating || selected) && (
+        <div className="modal-backdrop" onClick={closeEditor}>
           <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h2>Редактировать пользователя</h2>
+            <h2>{creating ? 'Новый пользователь' : 'Редактировать пользователя'}</h2>
             <form onSubmit={saveUser}>
               <div className="grid2">
                 <label className="field">
@@ -2184,8 +2604,40 @@ function UsersPage() {
                     <option value="0">Заблокирован</option>
                   </select>
                 </label>
+                <label className="field">
+                  Метка
+                  <select value={form.badge} onChange={(e) => setForm({ ...form, badge: e.target.value })}>
+                    {Object.entries(BADGE_LABELS).map(([value, label]) => (
+                      <option key={value || 'none'} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  {creating ? 'Пароль' : 'Новый пароль'}
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    required={creating}
+                    placeholder={creating ? 'минимум 6 символов' : 'оставьте пустым, чтобы не менять'}
+                    value={form.password}
+                    onChange={(e) => setForm({ ...form, password: e.target.value })}
+                  />
+                </label>
+                <label className="field">
+                  Повторите пароль
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    required={creating || Boolean(form.password)}
+                    value={form.password2}
+                    onChange={(e) => setForm({ ...form, password2: e.target.value })}
+                  />
+                </label>
               </div>
 
+              {selected && !creating && (
               <div className="panel" style={{ marginTop: 16, marginBottom: 0, padding: 14 }}>
                 <h3 style={{ margin: '0 0 10px', fontSize: 15 }}>Устройство и сеть</h3>
                 <p className="muted" style={{ margin: '0 0 6px' }}>
@@ -2215,24 +2667,51 @@ function UsersPage() {
                   </p>
                 )}
               </div>
+              )}
 
               {error && <p className="error">{error}</p>}
               <div className="modal-actions">
                 <button className="btn" type="submit" disabled={busy}>
-                  {busy ? 'Сохранение…' : 'Сохранить'}
+                  {busy ? 'Сохранение…' : creating ? 'Создать' : 'Сохранить'}
                 </button>
+                {selected && !creating && (
+                <button
+                  className="btn ghost"
+                  type="button"
+                  disabled={busy}
+                  onClick={async () => {
+                    if (!(await confirmAction(`Выйти из аккаунта «${selected.full_name}» на всех телефонах?`))) return;
+                    setBusy(true);
+                    setError('');
+                    try {
+                      const res = await api<{ ok?: boolean; message?: string }>(`/admin/users/${selected.id}/revoke-sessions`, {
+                        method: 'POST',
+                      });
+                      pushToast(res.message || 'Выполнен выход на всех устройствах');
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : 'Ошибка');
+                    } finally {
+                      setBusy(false);
+                    }
+                  }}
+                >
+                  Выйти на всех телефонах
+                </button>
+                )}
+                {selected && !creating && (
                 <button
                   className="btn ghost"
                   type="button"
                   onClick={() => {
                     const id = selected.id;
-                    setSelected(null);
+                    closeEditor();
                     navigate(`/moderation?authorId=${id}`);
                   }}
                 >
                   Объявления
                 </button>
-                <button className="btn secondary" type="button" onClick={() => setSelected(null)}>
+                )}
+                <button className="btn secondary" type="button" onClick={closeEditor}>
                   Закрыть
                 </button>
               </div>
@@ -3781,7 +4260,8 @@ function AppUpdatePage() {
           <h1>Обновления приложения</h1>
           <p>
             Приложение при запуске сравнивает свой build с этим номером. Если на сервере выше — предложит
-            скачать и установить APK.
+            скачать и установить APK. Загружайте только release-подписанный APK с тем же ключом — иначе Android
+            поставит второе приложение рядом со старым.
           </p>
         </div>
       </div>
@@ -3901,6 +4381,7 @@ export default function App() {
         {canEditDirectory(user!.role) && <Route path="/transport" element={<TransportPage />} />}
         {canEditDirectory(user!.role) && <Route path="/news" element={<NewsPage />} />}
         {canEditDirectory(user!.role) && <Route path="/alerts" element={<AlertsPage />} />}
+        {canModerate(user!.role) && <Route path="/chats" element={<ChatsModerationPage />} />}
         {canModerate(user!.role) && <Route path="/blacklist" element={<BlacklistPage />} />}
         {user!.role === 'admin' && <Route path="/users" element={<UsersPage />} />}
         {user!.role === 'admin' && <Route path="/legal" element={<LegalPage />} />}

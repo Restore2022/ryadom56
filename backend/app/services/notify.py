@@ -1,14 +1,21 @@
 import json
 import logging
+import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models import Notification, User
 
 logger = logging.getLogger(__name__)
+
+_FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging"
+_cached_token: str | None = None
+_cached_token_exp: float = 0.0
 
 
 def notify_user(
@@ -19,6 +26,7 @@ def notify_user(
     title: str,
     body: str | None = None,
     listing_id: int | None = None,
+    extra: dict | None = None,
 ) -> Notification:
     item = Notification(
         user_id=user_id,
@@ -30,35 +38,183 @@ def notify_user(
     )
     db.add(item)
     db.flush()
-    _try_push(db, user_id=user_id, title=title, body=body or "")
+    data = {
+        "type": type,
+        "notification_id": str(item.id),
+        "click_action": "FLUTTER_NOTIFICATION_CLICK",
+    }
+    if listing_id is not None:
+        data["listing_id"] = str(listing_id)
+    if extra:
+        for k, v in extra.items():
+            if v is None:
+                continue
+            data[str(k)] = str(v)
+    _try_push(db, user_id=user_id, title=title, body=body or "", data=data)
     return item
 
 
-def _try_push(db: Session, *, user_id: int, title: str, body: str) -> None:
-    key = (settings.fcm_server_key or "").strip()
-    if not key:
-        return
+def notify_broadcast(
+    db: Session,
+    *,
+    type: str,
+    title: str,
+    body: str | None = None,
+    listing_id: int | None = None,
+    extra: dict | None = None,
+    only_with_push: bool = False,
+) -> int:
+    """Создаёт in-app уведомления и шлёт FCM всем активным пользователям."""
+    stmt = select(User).where(User.is_active.is_(True))
+    if only_with_push:
+        stmt = stmt.where(User.fcm_token.is_not(None), User.fcm_token != "")
+    users = db.execute(stmt).scalars().all()
+    created = 0
+    tokens: list[str] = []
+    for user in users:
+        db.add(
+            Notification(
+                user_id=user.id,
+                type=type,
+                title=title,
+                body=body,
+                listing_id=listing_id,
+                is_read=False,
+            )
+        )
+        created += 1
+        token = (user.fcm_token or "").strip()
+        if token:
+            tokens.append(token)
+    db.flush()
+    data = {
+        "type": type,
+        "click_action": "FLUTTER_NOTIFICATION_CLICK",
+    }
+    if listing_id is not None:
+        data["listing_id"] = str(listing_id)
+    if extra:
+        for k, v in extra.items():
+            if v is None:
+                continue
+            data[str(k)] = str(v)
+    _fcm_send_many(tokens, title=title, body=body or "", data=data)
+    return created
+
+
+def _try_push(
+    db: Session,
+    *,
+    user_id: int,
+    title: str,
+    body: str,
+    data: dict | None = None,
+) -> None:
     user = db.get(User, user_id)
     token = (getattr(user, "fcm_token", None) or "").strip() if user else ""
     if not token:
         return
-    payload = {
-        "to": token,
-        "notification": {"title": title, "body": body},
-        "data": {"click_action": "FLUTTER_NOTIFICATION_CLICK"},
-        "priority": "high",
-    }
-    req = urllib.request.Request(
-        "https://fcm.googleapis.com/fcm/send",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"key={key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
+    _fcm_send_many([token], title=title, body=body, data=data or {})
+
+
+def _service_account_path() -> Path | None:
+    raw = (settings.fcm_service_account_file or "").strip()
+    if not raw:
+        # удобный дефолт на VPS
+        candidates = [
+            Path("data/firebase-service-account.json"),
+            Path("/opt/ryadom56/backend/data/firebase-service-account.json"),
+        ]
+        for p in candidates:
+            if p.is_file():
+                return p
+        return None
+    p = Path(raw)
+    return p if p.is_file() else None
+
+
+def _fcm_access_token() -> str | None:
+    global _cached_token, _cached_token_exp
+    now = time.time()
+    if _cached_token and now < _cached_token_exp - 60:
+        return _cached_token
+    path = _service_account_path()
+    if not path:
+        logger.warning("FCM v1: service account JSON not found — set FCM_SERVICE_ACCOUNT_FILE")
+        return None
     try:
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            resp.read()
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        logger.warning("FCM push failed for user %s: %s", user_id, exc)
+        from google.auth.transport.requests import Request
+        from google.oauth2 import service_account
+    except ImportError:
+        logger.warning("FCM v1: install google-auth and requests")
+        return None
+    creds = service_account.Credentials.from_service_account_file(
+        str(path),
+        scopes=[_FCM_SCOPE],
+    )
+    creds.refresh(Request())
+    _cached_token = creds.token
+    # типичный TTL ~3600с
+    _cached_token_exp = now + 3500
+    return _cached_token
+
+
+def _fcm_project_id() -> str:
+    pid = (settings.fcm_project_id or "").strip()
+    if pid:
+        return pid
+    path = _service_account_path()
+    if path:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return str(data.get("project_id") or "ryadom56")
+        except Exception:
+            pass
+    return "ryadom56"
+
+
+def _fcm_send_many(tokens: list[str], *, title: str, body: str, data: dict) -> None:
+    if not tokens:
+        return
+    access = _fcm_access_token()
+    if not access:
+        return
+    project = _fcm_project_id()
+    url = f"https://fcm.googleapis.com/v1/projects/{project}/messages:send"
+    unique = list(dict.fromkeys(tokens))
+    ok = 0
+    for token in unique:
+        payload = {
+            "message": {
+                "token": token,
+                "notification": {"title": title, "body": body},
+                "data": {str(k): str(v) for k, v in data.items()},
+                "android": {
+                    "priority": "HIGH",
+                    "notification": {
+                        "channel_id": "ryadom56_alerts",
+                        "sound": "default",
+                        "click_action": "FLUTTER_NOTIFICATION_CLICK",
+                    },
+                },
+            }
+        }
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "Authorization": f"Bearer {access}",
+                "Content-Type": "application/json; charset=UTF-8",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                resp.read()
+                ok += 1
+        except urllib.error.HTTPError as exc:
+            err_body = exc.read().decode("utf-8", "replace")[:400]
+            logger.warning("FCM v1 HTTP %s token=…%s: %s", exc.code, token[-8:], err_body)
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            logger.warning("FCM v1 failed token=…%s: %s", token[-8:], exc)
+    logger.info("FCM v1 sent ok=%s / %s", ok, len(unique))

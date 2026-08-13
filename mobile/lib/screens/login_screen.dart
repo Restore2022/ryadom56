@@ -3,10 +3,10 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../api.dart';
-import '../api.dart';
 import '../state/app_state.dart';
 import '../ui_helpers.dart';
-import 'pin_unlock_screen.dart';
+import 'forgot_password_screen.dart';
+import 'pin_setup_screen.dart';
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -65,6 +65,15 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       await context.read<AppState>().login(mail, pass);
       if (!mounted) return;
+      final state = context.read<AppState>();
+      if (!state.hasPin) {
+        Navigator.pushAndRemoveUntil(
+          context,
+          MaterialPageRoute(builder: (_) => const PinSetupScreen(allowSkip: false)),
+          (_) => false,
+        );
+        return;
+      }
       if (Navigator.canPop(context)) {
         Navigator.pop(context);
       } else {
@@ -137,21 +146,19 @@ class _LoginScreenState extends State<LoginScreen> {
               onPressed: busy ? null : _submit,
               child: Text(busy ? 'Вход…' : 'Войти'),
             ),
-            if (context.watch<AppState>().canUnlockWithPin) ...[
-              const SizedBox(height: 8),
-              OutlinedButton.icon(
-                onPressed: busy
-                    ? null
-                    : () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(builder: (_) => const PinUnlockScreen(asGate: false)),
-                        );
-                      },
-                icon: const Icon(Icons.pin_outlined),
-                label: const Text('Войти по PIN'),
-              ),
-            ],
+            TextButton(
+              onPressed: busy
+                  ? null
+                  : () {
+                      Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) => ForgotPasswordScreen(initialEmail: email.text.trim()),
+                        ),
+                      );
+                    },
+              child: const Text('Забыли пароль?'),
+            ),
             TextButton(
               onPressed: busy ? null : () => Navigator.pushNamed(context, '/register'),
               child: const Text('Создать аккаунт'),

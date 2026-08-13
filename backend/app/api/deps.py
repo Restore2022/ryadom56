@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session, selectinload
 from app.core.database import get_db
 from app.core.security import decode_access_token
 from app.models import User, UserRole
+from app.services.sessions import assert_token_session
 
 security = HTTPBearer(auto_error=False)
 
@@ -25,6 +26,7 @@ def get_current_user(
     ).scalar_one_or_none()
     if not user or not user.is_active:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Пользователь не найден или заблокирован")
+    assert_token_session(db, user, payload)
     return user
 
 
@@ -41,6 +43,10 @@ def get_optional_user(
         select(User).options(selectinload(User.settlement)).where(User.id == int(payload["sub"]))
     ).scalar_one_or_none()
     if not user or not user.is_active:
+        return None
+    try:
+        assert_token_session(db, user, payload)
+    except HTTPException:
         return None
     return user
 

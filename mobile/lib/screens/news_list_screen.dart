@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
+import '../scroll_to_top.dart';
 import '../state/app_state.dart';
 import '../ui_helpers.dart';
 
@@ -15,6 +16,7 @@ class NewsListScreen extends StatefulWidget {
 }
 
 class _NewsListScreenState extends State<NewsListScreen> {
+  final scroll = ScrollController();
   List<dynamic> items = [];
   bool loading = true;
   String? error;
@@ -25,6 +27,12 @@ class _NewsListScreenState extends State<NewsListScreen> {
     super.initState();
     settlementId = widget.settlementId;
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  @override
+  void dispose() {
+    scroll.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -186,38 +194,44 @@ class _NewsListScreenState extends State<NewsListScreen> {
               ),
             ),
           Expanded(
-            child: RefreshIndicator(
-              onRefresh: _load,
-              child: loading && items.isEmpty
-                  ? const Center(child: CircularProgressIndicator())
-                  : error != null && items.isEmpty
-                      ? ListView(
-                          children: [
-                            SizedBox(
-                              height: 280,
-                              child: errorState(context: context, message: error!, onRetry: _load),
-                            ),
-                          ],
-                        )
-                      : items.isEmpty
-                          ? ListView(
-                              children: [
-                                SizedBox(
-                                  height: 280,
-                                  child: emptyState(
-                                    context: context,
-                                    title: 'Пока нет новостей',
-                                    subtitle: 'Новости района появятся здесь',
-                                    icon: Icons.newspaper_outlined,
-                                    actionLabel: 'Обновить',
-                                    onAction: _load,
+            child: stackWithScrollToTop(
+              controller: scroll,
+              heroTag: 'scroll-top-news',
+              child: RefreshIndicator(
+                onRefresh: _load,
+                child: loading && items.isEmpty
+                    ? const Center(child: CircularProgressIndicator())
+                    : error != null && items.isEmpty
+                        ? ListView(
+                            controller: scroll,
+                            children: [
+                              SizedBox(
+                                height: 280,
+                                child: errorState(context: context, message: error!, onRetry: _load),
+                              ),
+                            ],
+                          )
+                        : items.isEmpty
+                            ? ListView(
+                                controller: scroll,
+                                children: [
+                                  SizedBox(
+                                    height: 280,
+                                    child: emptyState(
+                                      context: context,
+                                      title: 'Пока нет новостей',
+                                      subtitle: 'Новости района появятся здесь',
+                                      icon: Icons.newspaper_outlined,
+                                      actionLabel: 'Обновить',
+                                      onAction: _load,
+                                    ),
                                   ),
-                                ),
-                              ],
-                            )
-                          : ListView.separated(
-                              padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-                              itemCount: items.length,
+                                ],
+                              )
+                            : ListView.separated(
+                                controller: scroll,
+                                padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                                itemCount: items.length,
                               separatorBuilder: (_, __) => const SizedBox(height: 12),
                               itemBuilder: (_, i) {
                                 final item = items[i] as Map<String, dynamic>;
@@ -325,6 +339,7 @@ class _NewsListScreenState extends State<NewsListScreen> {
                                 );
                               },
                             ),
+              ),
             ),
           ),
         ],

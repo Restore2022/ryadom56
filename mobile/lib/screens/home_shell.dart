@@ -6,6 +6,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../auth_prompt.dart';
 import '../event_actions.dart';
 import '../responsive.dart';
+import '../scroll_to_top.dart';
 import '../state/app_state.dart';
 import '../ui_helpers.dart';
 import '../update_service.dart';
@@ -16,6 +17,7 @@ import 'directory_detail_screen.dart';
 import 'district_hub_screen.dart';
 import 'directory_favorites_screen.dart';
 import 'edit_profile_screen.dart';
+import 'device_sessions_screen.dart';
 import 'event_detail_screen.dart';
 import 'favorites_screen.dart';
 import 'legal_doc_screen.dart';
@@ -175,12 +177,13 @@ class _HomeShellState extends State<HomeShell> {
       final state = context.read<AppState>();
       if (state.user == null) continue;
       final before = state.unreadNotifications;
-      await state.refreshUnreadNotifications();
+      await state.refreshUnreadNotifications(announceLocal: true);
       await state.refreshUnreadChats();
       final after = state.unreadNotifications;
       if (!mounted) return;
       if (after > before && after > _lastUnread) {
         _lastUnread = after;
+        // Системное уведомление уже показано через PushService; snackbar — мягкий дубль в UI
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             content: Text('Новое уведомление · непрочитанных: $after'),
@@ -341,6 +344,7 @@ class _ListingsTab extends StatefulWidget {
 
 class _ListingsTabState extends State<_ListingsTab> {
   final search = TextEditingController();
+  final scroll = ScrollController();
   List<Map<String, dynamic>> activeAlerts = [];
   final Set<int> dismissedAlertIds = {};
 
@@ -357,6 +361,7 @@ class _ListingsTabState extends State<_ListingsTab> {
   @override
   void dispose() {
     search.dispose();
+    scroll.dispose();
     super.dispose();
   }
 
@@ -407,21 +412,25 @@ class _ListingsTabState extends State<_ListingsTab> {
     // В альбоме не забиваем экран пачкой баннеров
     final alertsToShow = context.isLandscape ? visibleAlerts.take(1).toList() : visibleAlerts;
 
-    return RefreshIndicator(
-      onRefresh: () async {
-        await Future.wait([state.loadListings(), _loadAlert()]);
-      },
-      child: NotificationListener<ScrollNotification>(
-        onNotification: (n) {
-          if (n.metrics.pixels >= n.metrics.maxScrollExtent - 240) {
-            state.loadMoreListings();
-          }
-          return false;
+    return stackWithScrollToTop(
+      controller: scroll,
+      heroTag: 'scroll-top-listings',
+      child: RefreshIndicator(
+        onRefresh: () async {
+          await Future.wait([state.loadListings(), _loadAlert()]);
         },
-        child: CustomScrollView(
-          physics: const AlwaysScrollableScrollPhysics(),
-          slivers: [
-            if (state.hasConnectionIssue)
+        child: NotificationListener<ScrollNotification>(
+          onNotification: (n) {
+            if (n.metrics.pixels >= n.metrics.maxScrollExtent - 240) {
+              state.loadMoreListings();
+            }
+            return false;
+          },
+          child: CustomScrollView(
+            controller: scroll,
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: [
+              if (state.hasConnectionIssue)
               SliverToBoxAdapter(
                 child: Material(
                   color: scheme.errorContainer,
@@ -616,7 +625,8 @@ class _ListingsTabState extends State<_ListingsTab> {
                   },
                 ),
               ),
-          ],
+            ],
+          ),
         ),
       ),
     );
@@ -928,6 +938,7 @@ class _EventsTab extends StatefulWidget {
 }
 
 class _EventsTabState extends State<_EventsTab> {
+  final scroll = ScrollController();
   List<dynamic> items = [];
   bool loading = true;
   String? error;
@@ -944,6 +955,12 @@ class _EventsTabState extends State<_EventsTab> {
       if (sid != null) settlementId = sid;
       _load();
     });
+  }
+
+  @override
+  void dispose() {
+    scroll.dispose();
+    super.dispose();
   }
 
   Future<void> _load() async {
@@ -1051,80 +1068,87 @@ class _EventsTabState extends State<_EventsTab> {
           ),
         ),
         Expanded(
-          child: RefreshIndicator(
-            onRefresh: _load,
-            child: loading && items.isEmpty
-                ? const Center(child: CircularProgressIndicator())
-                : error != null && items.isEmpty
-                    ? ListView(
-                        children: [
-                          adaptiveFillMessage(
-                            context: context,
-                            child: errorState(context: context, message: error!, onRetry: _load),
-                          ),
-                        ],
-                      )
-                    : items.isEmpty
-                        ? ListView(
-                            children: [
-                              adaptiveFillMessage(
-                                context: context,
-                                child: emptyState(
+          child: stackWithScrollToTop(
+            controller: scroll,
+            heroTag: 'scroll-top-events',
+            child: RefreshIndicator(
+              onRefresh: _load,
+              child: loading && items.isEmpty
+                  ? const Center(child: CircularProgressIndicator())
+                  : error != null && items.isEmpty
+                      ? ListView(
+                          controller: scroll,
+                          children: [
+                            adaptiveFillMessage(
+                              context: context,
+                              child: errorState(context: context, message: error!, onRetry: _load),
+                            ),
+                          ],
+                        )
+                      : items.isEmpty
+                          ? ListView(
+                              controller: scroll,
+                              children: [
+                                adaptiveFillMessage(
                                   context: context,
-                                  title: upcomingOnly == false ? 'Прошедших событий нет' : 'Пока нет событий',
-                                  subtitle: 'Афиша района появится здесь',
-                                  icon: Icons.event_outlined,
-                                  actionLabel: 'Обновить',
-                                  onAction: _load,
+                                  child: emptyState(
+                                    context: context,
+                                    title: upcomingOnly == false ? 'Прошедших событий нет' : 'Пока нет событий',
+                                    subtitle: 'Афиша района появится здесь',
+                                    icon: Icons.event_outlined,
+                                    actionLabel: 'Обновить',
+                                    onAction: _load,
+                                  ),
                                 ),
-                              ),
-                            ],
-                          )
-                        : ListView.separated(
-                            padding: EdgeInsets.fromLTRB(16, 4, 16, context.listBottomPad),
-                            itemCount: items.length,
-                            separatorBuilder: (_, __) => const SizedBox(height: 12),
-                            itemBuilder: (_, i) {
-                              final item = items[i] as Map<String, dynamic>;
-                              return Material(
-                                color: Theme.of(context).cardTheme.color,
-                                borderRadius: BorderRadius.circular(18),
-                                child: InkWell(
+                              ],
+                            )
+                          : ListView.separated(
+                              controller: scroll,
+                              padding: EdgeInsets.fromLTRB(16, 4, 16, context.listBottomPad),
+                              itemCount: items.length,
+                              separatorBuilder: (_, __) => const SizedBox(height: 12),
+                              itemBuilder: (_, i) {
+                                final item = items[i] as Map<String, dynamic>;
+                                return Material(
+                                  color: Theme.of(context).cardTheme.color,
                                   borderRadius: BorderRadius.circular(18),
-                                  onTap: () => Navigator.push(
-                                    context,
-                                    fastRoute(EventDetailScreen(item: item)),
-                                  ),
-                                  child: Container(
-                                    padding: const EdgeInsets.all(16),
-                                    decoration: BoxDecoration(
-                                      borderRadius: BorderRadius.circular(18),
-                                      border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.45)),
+                                  child: InkWell(
+                                    borderRadius: BorderRadius.circular(18),
+                                    onTap: () => Navigator.push(
+                                      context,
+                                      fastRoute(EventDetailScreen(item: item)),
                                     ),
-                                    child: Column(
-                                      crossAxisAlignment: CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          _fmtWhen(item['starts_at']?.toString()),
-                                          style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700, fontSize: 12),
-                                        ),
-                                        const SizedBox(height: 6),
-                                        Text(
-                                          '${item['title']}',
-                                          style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 17),
-                                        ),
-                                        const SizedBox(height: 6),
-                                        Text(
-                                          '${item['place_text']}${item['settlement_name'] != null ? ' · ${item['settlement_name']}' : ''}',
-                                          style: TextStyle(color: scheme.onSurfaceVariant, height: 1.3),
-                                        ),
-                                      ],
+                                    child: Container(
+                                      padding: const EdgeInsets.all(16),
+                                      decoration: BoxDecoration(
+                                        borderRadius: BorderRadius.circular(18),
+                                        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.45)),
+                                      ),
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(
+                                            _fmtWhen(item['starts_at']?.toString()),
+                                            style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700, fontSize: 12),
+                                          ),
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            '${item['title']}',
+                                            style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 17),
+                                          ),
+                                          const SizedBox(height: 6),
+                                          Text(
+                                            '${item['place_text']}${item['settlement_name'] != null ? ' · ${item['settlement_name']}' : ''}',
+                                            style: TextStyle(color: scheme.onSurfaceVariant, height: 1.3),
+                                          ),
+                                        ],
+                                      ),
                                     ),
                                   ),
-                                ),
-                              );
-                            },
-                          ),
+                                );
+                              },
+                            ),
+            ),
           ),
         ),
       ],
@@ -1141,6 +1165,7 @@ class _TransportTab extends StatefulWidget {
 
 class _TransportTabState extends State<_TransportTab> {
   final search = TextEditingController();
+  final scroll = ScrollController();
   List<dynamic> items = [];
   bool loading = false;
   String? error;
@@ -1165,6 +1190,7 @@ class _TransportTabState extends State<_TransportTab> {
   @override
   void dispose() {
     search.dispose();
+    scroll.dispose();
     super.dispose();
   }
 
@@ -1374,113 +1400,120 @@ class _TransportTabState extends State<_TransportTab> {
                   subtitle: 'Маршруты показываются только для выбранного села или города',
                   icon: Icons.directions_bus_outlined,
                 )
-              : RefreshIndicator(
-                  onRefresh: _load,
-                  child: loading && items.isEmpty
-                      ? const Center(child: CircularProgressIndicator())
-                      : error != null && items.isEmpty
-                          ? ListView(
-                              children: [
-                                adaptiveFillMessage(
-                                  context: context,
-                                  child: errorState(context: context, message: error!, onRetry: _load),
-                                ),
-                              ],
-                            )
-                          : items.isEmpty
-                              ? ListView(
-                                  children: [
-                                    adaptiveFillMessage(
-                                      context: context,
-                                      child: emptyState(
+              : stackWithScrollToTop(
+                  controller: scroll,
+                  heroTag: 'scroll-top-transport',
+                  child: RefreshIndicator(
+                    onRefresh: _load,
+                    child: loading && items.isEmpty
+                        ? const Center(child: CircularProgressIndicator())
+                        : error != null && items.isEmpty
+                            ? ListView(
+                                controller: scroll,
+                                children: [
+                                  adaptiveFillMessage(
+                                    context: context,
+                                    child: errorState(context: context, message: error!, onRetry: _load),
+                                  ),
+                                ],
+                              )
+                            : items.isEmpty
+                                ? ListView(
+                                    controller: scroll,
+                                    children: [
+                                      adaptiveFillMessage(
                                         context: context,
-                                        title: favoritesOnly ? 'Нет избранных маршрутов' : 'Маршрутов нет',
-                                        subtitle: favoritesOnly
-                                            ? 'Добавьте маршруты звёздочкой в списке'
-                                            : 'Для этого населённого пункта расписаний пока нет',
-                                        icon: Icons.directions_bus_outlined,
-                                        actionLabel: 'Обновить',
-                                        onAction: _load,
-                                      ),
-                                    ),
-                                  ],
-                                )
-                              : ListView.separated(
-                                  padding: EdgeInsets.fromLTRB(16, 4, 16, context.listBottomPad),
-                                  itemCount: items.length,
-                                  separatorBuilder: (_, __) => const SizedBox(height: 12),
-                                  itemBuilder: (_, i) {
-                                    final item = Map<String, dynamic>.from(items[i] as Map);
-                                    final number = item['route_number']?.toString();
-                                    final id = item['id'];
-                                    final favorited =
-                                        id is int && state.isTransportFavorited(id, item: item);
-                                    return Material(
-                                      color: Theme.of(context).cardTheme.color,
-                                      borderRadius: BorderRadius.circular(18),
-                                      child: InkWell(
-                                        borderRadius: BorderRadius.circular(18),
-                                        onTap: () async {
-                                          await Navigator.push(
-                                            context,
-                                            fastRoute(TransportDetailScreen(item: item)),
-                                          );
-                                          if (mounted) _load();
-                                        },
-                                        child: Container(
-                                          padding: const EdgeInsets.all(16),
-                                          decoration: BoxDecoration(
-                                            borderRadius: BorderRadius.circular(18),
-                                            border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.45)),
-                                          ),
-                                          child: Row(
-                                            crossAxisAlignment: CrossAxisAlignment.start,
-                                            children: [
-                                              Expanded(
-                                                child: Column(
-                                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                                  children: [
-                                                    if (number != null && number.isNotEmpty)
-                                                      Text(
-                                                        number,
-                                                        style: TextStyle(
-                                                          color: scheme.primary,
-                                                          fontWeight: FontWeight.w700,
-                                                          fontSize: 12,
-                                                        ),
-                                                      ),
-                                                    Text(
-                                                      '${item['title']}',
-                                                      style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 17),
-                                                    ),
-                                                    if (item['description'] != null) ...[
-                                                      const SizedBox(height: 6),
-                                                      Text(
-                                                        '${item['description']}',
-                                                        maxLines: 2,
-                                                        overflow: TextOverflow.ellipsis,
-                                                        style: TextStyle(color: scheme.onSurfaceVariant, height: 1.3),
-                                                      ),
-                                                    ],
-                                                  ],
-                                                ),
-                                              ),
-                                              IconButton(
-                                                tooltip: favorited ? 'Убрать из избранного' : 'В избранное',
-                                                visualDensity: VisualDensity.compact,
-                                                onPressed: () => _toggleFavorite(item),
-                                                icon: Icon(
-                                                  favorited ? Icons.star : Icons.star_border,
-                                                  color: favorited ? scheme.primary : scheme.onSurfaceVariant,
-                                                ),
-                                              ),
-                                            ],
-                                          ),
+                                        child: emptyState(
+                                          context: context,
+                                          title: favoritesOnly ? 'Нет избранных маршрутов' : 'Маршрутов нет',
+                                          subtitle: favoritesOnly
+                                              ? 'Добавьте маршруты звёздочкой в списке'
+                                              : 'Для этого населённого пункта расписаний пока нет',
+                                          icon: Icons.directions_bus_outlined,
+                                          actionLabel: 'Обновить',
+                                          onAction: _load,
                                         ),
                                       ),
-                                    );
-                                  },
-                                ),
+                                    ],
+                                  )
+                                : ListView.separated(
+                                    controller: scroll,
+                                    padding: EdgeInsets.fromLTRB(16, 4, 16, context.listBottomPad),
+                                    itemCount: items.length,
+                                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                                    itemBuilder: (_, i) {
+                                      final item = Map<String, dynamic>.from(items[i] as Map);
+                                      final number = item['route_number']?.toString();
+                                      final id = item['id'];
+                                      final favorited =
+                                          id is int && state.isTransportFavorited(id, item: item);
+                                      return Material(
+                                        color: Theme.of(context).cardTheme.color,
+                                        borderRadius: BorderRadius.circular(18),
+                                        child: InkWell(
+                                          borderRadius: BorderRadius.circular(18),
+                                          onTap: () async {
+                                            await Navigator.push(
+                                              context,
+                                              fastRoute(TransportDetailScreen(item: item)),
+                                            );
+                                            if (mounted) _load();
+                                          },
+                                          child: Container(
+                                            padding: const EdgeInsets.all(16),
+                                            decoration: BoxDecoration(
+                                              borderRadius: BorderRadius.circular(18),
+                                              border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.45)),
+                                            ),
+                                            child: Row(
+                                              crossAxisAlignment: CrossAxisAlignment.start,
+                                              children: [
+                                                Expanded(
+                                                  child: Column(
+                                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                                    children: [
+                                                      if (number != null && number.isNotEmpty)
+                                                        Text(
+                                                          number,
+                                                          style: TextStyle(
+                                                            color: scheme.primary,
+                                                            fontWeight: FontWeight.w700,
+                                                            fontSize: 12,
+                                                          ),
+                                                        ),
+                                                      Text(
+                                                        '${item['title']}',
+                                                        style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 17),
+                                                      ),
+                                                      if (item['description'] != null) ...[
+                                                        const SizedBox(height: 6),
+                                                        Text(
+                                                          '${item['description']}',
+                                                          maxLines: 2,
+                                                          overflow: TextOverflow.ellipsis,
+                                                          style: TextStyle(color: scheme.onSurfaceVariant, height: 1.3),
+                                                        ),
+                                                      ],
+                                                    ],
+                                                  ),
+                                                ),
+                                                IconButton(
+                                                  tooltip: favorited ? 'Убрать из избранного' : 'В избранное',
+                                                  visualDensity: VisualDensity.compact,
+                                                  onPressed: () => _toggleFavorite(item),
+                                                  icon: Icon(
+                                                    favorited ? Icons.star : Icons.star_border,
+                                                    color: favorited ? scheme.primary : scheme.onSurfaceVariant,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ),
+                                      );
+                                    },
+                                  ),
+                  ),
                 ),
         ),
       ],
@@ -1497,6 +1530,7 @@ class _DirectoryTab extends StatefulWidget {
 
 class _DirectoryTabState extends State<_DirectoryTab> {
   final search = TextEditingController();
+  final scroll = ScrollController();
 
   static const dirCategories = [
     'school',
@@ -1515,6 +1549,7 @@ class _DirectoryTabState extends State<_DirectoryTab> {
   @override
   void dispose() {
     search.dispose();
+    scroll.dispose();
     super.dispose();
   }
 
@@ -1560,111 +1595,141 @@ class _DirectoryTabState extends State<_DirectoryTab> {
     final padH = context.isLandscape ? 12.0 : 16.0;
     final bottomPad = context.listBottomPad;
 
-    return RefreshIndicator(
-      onRefresh: () => state.loadDirectory(),
-      child: CustomScrollView(
-        physics: const AlwaysScrollableScrollPhysics(),
-        slivers: [
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(padH, context.isLandscape ? 6 : 12, padH, 8),
-              child: TextField(
-                controller: search,
-                textInputAction: TextInputAction.search,
-                onSubmitted: (v) {
-                  state.setDirectoryFilters(
-                    category: state.directoryCategory,
-                    settlementId: state.directorySettlementId,
-                    query: v,
-                  );
-                },
-                decoration: InputDecoration(
-                  isDense: context.isLandscape,
-                  hintText: 'Школа, больница, магазин…',
-                  prefixIcon: const Icon(Icons.search),
-                  suffixIcon: IconButton(
-                    icon: const Icon(Icons.tune),
-                    onPressed: () => _openFilters(context, state),
+    final totalLabel = state.directoryTotal > 0
+        ? (items.length < state.directoryTotal
+            ? 'Показано ${items.length} из ${state.directoryTotal}'
+            : '${state.directoryTotal} записей')
+        : '${items.length} записей';
+
+    return stackWithScrollToTop(
+      controller: scroll,
+      heroTag: 'scroll-top-directory',
+      child: RefreshIndicator(
+        onRefresh: () => state.loadDirectory(),
+        child: NotificationListener<ScrollNotification>(
+          onNotification: (n) {
+            if (n.metrics.pixels >= n.metrics.maxScrollExtent - 240) {
+              state.loadMoreDirectory();
+            }
+            return false;
+          },
+          child: CustomScrollView(
+            controller: scroll,
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: [
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(padH, context.isLandscape ? 6 : 12, padH, 8),
+                child: TextField(
+                  controller: search,
+                  textInputAction: TextInputAction.search,
+                  onSubmitted: (v) {
+                    state.setDirectoryFilters(
+                      category: state.directoryCategory,
+                      settlementId: state.directorySettlementId,
+                      query: v,
+                    );
+                  },
+                  decoration: InputDecoration(
+                    isDense: context.isLandscape,
+                    hintText: 'Школа, больница, магазин…',
+                    prefixIcon: const Icon(Icons.search),
+                    suffixIcon: IconButton(
+                      icon: const Icon(Icons.tune),
+                      onPressed: () => _openFilters(context, state),
+                    ),
                   ),
                 ),
               ),
             ),
-          ),
-          SliverToBoxAdapter(
-            child: ryadomChipRow(
-              padding: EdgeInsets.symmetric(horizontal: padH),
-              children: [
-                Padding(
-                  padding: const EdgeInsets.only(right: 8),
-                  child: RyadomFilterChip(
-                    label: 'Все',
-                    selected: state.directoryCategory == null,
-                    onSelected: (_) => state.setDirectoryFilters(
-                      category: null,
-                      settlementId: state.directorySettlementId,
-                      query: search.text,
-                    ),
-                  ),
-                ),
-                ...dirCategories.map(
-                  (c) => Padding(
+            SliverToBoxAdapter(
+              child: ryadomChipRow(
+                padding: EdgeInsets.symmetric(horizontal: padH),
+                children: [
+                  Padding(
                     padding: const EdgeInsets.only(right: 8),
                     child: RyadomFilterChip(
-                      label: categoryLabels[c] ?? c,
-                      selected: state.directoryCategory == c,
+                      label: 'Все',
+                      selected: state.directoryCategory == null,
                       onSelected: (_) => state.setDirectoryFilters(
-                        category: state.directoryCategory == c ? null : c,
+                        category: null,
                         settlementId: state.directorySettlementId,
                         query: search.text,
                       ),
                     ),
                   ),
-                ),
-              ],
-            ),
-          ),
-          SliverToBoxAdapter(
-            child: Padding(
-              padding: EdgeInsets.fromLTRB(padH, 8, padH, 6),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  '${items.length} записей',
-                  style: TextStyle(color: scheme.onSurfaceVariant),
-                ),
+                  ...dirCategories.map(
+                    (c) => Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: RyadomFilterChip(
+                        label: categoryLabels[c] ?? c,
+                        selected: state.directoryCategory == c,
+                        onSelected: (_) => state.setDirectoryFilters(
+                          category: state.directoryCategory == c ? null : c,
+                          settlementId: state.directorySettlementId,
+                          query: search.text,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-          ),
-          if (state.directoryLoading && items.isEmpty)
-            const SliverFillRemaining(child: Center(child: CircularProgressIndicator()))
-          else if (state.directoryOffline && items.isEmpty)
-            SliverFillRemaining(
-              hasScrollBody: false,
-              child: errorState(
-                context: context,
-                message: state.error ?? AppState.offlineMessage,
-                onRetry: () => state.loadDirectory(),
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: EdgeInsets.fromLTRB(padH, 8, padH, 6),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    totalLabel,
+                    style: TextStyle(color: scheme.onSurfaceVariant),
+                  ),
+                ),
               ),
-            )
-          else if (items.isEmpty)
-            SliverFillRemaining(
-              hasScrollBody: false,
-              child: emptyState(
-                context: context,
-                title: 'Справочник пуст',
-                subtitle: 'Попробуйте другой населённый пункт или категорию',
-                icon: Icons.map_outlined,
-                actionLabel: 'Обновить',
-                onAction: () => state.loadDirectory(),
-              ),
-            )
-          else
-            SliverPadding(
-              padding: EdgeInsets.fromLTRB(padH, 4, padH, bottomPad),
-              sliver: SliverList.separated(
-                itemCount: items.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 12),
-                itemBuilder: (_, i) {
+            ),
+            if (state.directoryLoading && items.isEmpty)
+              const SliverFillRemaining(child: Center(child: CircularProgressIndicator()))
+            else if (state.directoryOffline && items.isEmpty)
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: errorState(
+                  context: context,
+                  message: state.error ?? AppState.offlineMessage,
+                  onRetry: () => state.loadDirectory(),
+                ),
+              )
+            else if (items.isEmpty)
+              SliverFillRemaining(
+                hasScrollBody: false,
+                child: emptyState(
+                  context: context,
+                  title: 'Справочник пуст',
+                  subtitle: 'Попробуйте другой населённый пункт или категорию',
+                  icon: Icons.map_outlined,
+                  actionLabel: 'Обновить',
+                  onAction: () => state.loadDirectory(),
+                ),
+              )
+            else
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(padH, 4, padH, bottomPad),
+                sliver: SliverList.separated(
+                  itemCount: items.length + (state.directoryLoadingMore || state.directoryHasMore ? 1 : 0),
+                  separatorBuilder: (_, __) => const SizedBox(height: 12),
+                  itemBuilder: (_, i) {
+                    if (i >= items.length) {
+                      return Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 16),
+                        child: Center(
+                          child: state.directoryLoadingMore
+                              ? const CircularProgressIndicator()
+                              : TextButton(
+                                  onPressed: () => state.loadMoreDirectory(),
+                                  child: const Text('Ещё места'),
+                                ),
+                        ),
+                      );
+                    }
                   final item = items[i] as Map<String, dynamic>;
                   final phone = item['phone']?.toString();
                   final dirFav = item['is_favorited'] == true;
@@ -1832,7 +1897,9 @@ class _DirectoryTabState extends State<_DirectoryTab> {
                 },
               ),
             ),
-        ],
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -2099,6 +2166,14 @@ class ProfileScreen extends StatelessWidget {
           trailing: const Icon(Icons.chevron_right),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           onTap: () => Navigator.push(context, fastRoute(const EditProfileScreen())),
+        ),
+        ListTile(
+          leading: const Icon(Icons.phonelink_erase_outlined),
+          title: const Text('Сессии устройств'),
+          subtitle: const Text('Выйти на всех телефонах'),
+          trailing: const Icon(Icons.chevron_right),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          onTap: () => Navigator.push(context, fastRoute(const DeviceSessionsScreen())),
         ),
         ListTile(
           leading: const Icon(Icons.location_city_outlined),

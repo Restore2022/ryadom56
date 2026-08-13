@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "404074095424",
+    "project_id": "ryadom56",
+    "storage_bucket": "ryadom56.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:404074095424:android:c7f995c41c0253309790a5",
+        "android_client_info": {
+          "package_name": "ru.ryadom56.ryadom56"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDTRSIEn5mTs4SzzUzVomB4o796ySl2KZI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

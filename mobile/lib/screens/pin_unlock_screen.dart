@@ -112,7 +112,7 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> with TickerProviderSt
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Введите PIN',
+                    'Введите PIN для доступа',
                     style: GoogleFonts.manrope(fontSize: 17, color: scheme.onSurfaceVariant),
                   ),
                   const Spacer(flex: 2),

@@ -9,6 +9,7 @@ from app.core.database import get_db
 from app.models import DistrictAlert, User, UserRole
 from app.schemas import AlertCreate, AlertOut, AlertUpdate
 from app.services.audit import log_action
+from app.services.notify import notify_broadcast
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 
@@ -24,6 +25,26 @@ def to_out(item: DistrictAlert) -> AlertOut:
         ends_at=item.ends_at,
         created_at=item.created_at,
         updated_at=item.updated_at,
+    )
+
+
+def _alert_title(kind: str | None) -> str:
+    if kind == "danger":
+        return "Срочное сообщение района"
+    if kind == "warn":
+        return "Важное сообщение района"
+    return "Сообщение района"
+
+
+def _push_alert(db, item: DistrictAlert) -> None:
+    if not item.is_active:
+        return
+    notify_broadcast(
+        db,
+        type="district_alert",
+        title=_alert_title(item.kind),
+        body=(item.message or "")[:400],
+        extra={"alert_id": item.id, "kind": item.kind or "info"},
     )
 
 
@@ -87,6 +108,7 @@ def create_alert(
     db.add(item)
     db.flush()
     log_action(db, actor=user, action="alert.create", entity_type="alert", entity_id=item.id, details=item.message[:80])
+    _push_alert(db, item)
     db.commit()
     db.refresh(item)
     return to_out(item)
@@ -102,9 +124,14 @@ def update_alert(
     item = db.execute(select(DistrictAlert).where(DistrictAlert.id == alert_id)).scalar_one_or_none()
     if not item:
         raise HTTPException(status_code=404, detail="Объявление не найдено")
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    was_active = bool(item.is_active)
+    changes = payload.model_dump(exclude_unset=True)
+    for key, value in changes.items():
         setattr(item, key, value)
     log_action(db, actor=user, action="alert.update", entity_type="alert", entity_id=item.id, details=item.message[:80])
+    became_active = bool(item.is_active) and not was_active
+    if item.is_active and (became_active or "message" in changes):
+        _push_alert(db, item)
     db.commit()
     db.refresh(item)
     return to_out(item)

@@ -2,8 +2,8 @@ from datetime import datetime
 import re
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, get_optional_user, require_roles
@@ -16,7 +16,7 @@ from app.models import (
     User,
     UserRole,
 )
-from app.schemas import DirectoryCreate, DirectoryOut, DirectoryReportIn, DirectoryUpdate
+from app.schemas import DirectoryCreate, DirectoryOut, DirectoryPageOut, DirectoryReportIn, DirectoryUpdate
 from app.services.notify import notify_user
 from app.services.rate_limit import limiter
 
@@ -109,33 +109,44 @@ def list_directory_favorites(
     return [to_out(r, fav_ids) for r in db.execute(stmt).scalars().all()]
 
 
-@router.get("", response_model=list[DirectoryOut])
+@router.get("", response_model=DirectoryPageOut)
 def list_directory(
     category: DirectoryCategory | None = None,
     settlement_id: int | None = None,
     q: str | None = None,
+    limit: int = Query(default=30, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     user: User | None = Depends(get_optional_user),
 ):
-    stmt = select(DirectoryItem).options(selectinload(DirectoryItem.settlement))
+    filters = []
     is_staff = user and user.role in (UserRole.admin, UserRole.editor)
     if not is_staff:
-        stmt = stmt.where(DirectoryItem.is_published.is_(True))
+        filters.append(DirectoryItem.is_published.is_(True))
     if category:
-        stmt = stmt.where(DirectoryItem.category == category)
+        filters.append(DirectoryItem.category == category)
     if settlement_id:
-        stmt = stmt.where(DirectoryItem.settlement_id == settlement_id)
+        filters.append(DirectoryItem.settlement_id == settlement_id)
     if q:
         like = f"%{q.strip()}%"
-        stmt = stmt.where(
+        filters.append(
             DirectoryItem.title.ilike(like)
             | DirectoryItem.description.ilike(like)
             | DirectoryItem.address.ilike(like)
             | DirectoryItem.phone.ilike(like)
         )
-    stmt = stmt.order_by(DirectoryItem.title)
+    total = db.execute(select(func.count(DirectoryItem.id)).where(*filters)).scalar_one()
+    stmt = (
+        select(DirectoryItem)
+        .options(selectinload(DirectoryItem.settlement))
+        .where(*filters)
+        .order_by(DirectoryItem.title)
+        .offset(offset)
+        .limit(limit)
+    )
     fav_ids = favorite_ids_for(db, user)
-    return [to_out(r, fav_ids) for r in db.execute(stmt).scalars().all()]
+    items = [to_out(r, fav_ids) for r in db.execute(stmt).scalars().all()]
+    return DirectoryPageOut(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/{item_id}", response_model=DirectoryOut)

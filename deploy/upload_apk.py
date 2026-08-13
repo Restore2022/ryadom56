@@ -15,9 +15,9 @@ if not PASS:
 REMOTE = "/opt/ryadom56"
 REMOTE_APK = f"{REMOTE}/backend/data/releases/ryadom56-latest.apk"
 LOCAL_APK = Path(__file__).resolve().parents[1] / "mobile" / "apk" / "app-release.apk"
-VERSION_NAME = "0.18.3"
-VERSION_CODE = 26
-APK_FILENAME = "ryadom56-0.18.3.apk"
+VERSION_NAME = "0.21.0"
+VERSION_CODE = 33
+APK_FILENAME = "ryadom56-0.21.0.apk"
 
 
 def run(c: paramiko.SSHClient, cmd: str, timeout: int = 120) -> str:
@@ -68,7 +68,7 @@ try:
     row.version_name = {VERSION_NAME!r}
     row.version_code = {VERSION_CODE}
     row.force_update = False
-    row.notes = "Рядом56 {VERSION_NAME} — скачайте и установите APK."
+    row.notes = f"Ryadom56 {VERSION_NAME}: install over the current app (same icon)."
     row.apk_filename = {APK_FILENAME!r}
     db.commit()
     print("DB OK", row.version_name, row.version_code, row.apk_filename)

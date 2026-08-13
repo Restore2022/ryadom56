@@ -28,9 +28,10 @@ USER_COLUMNS = {
     "app_version": "VARCHAR(40)",
     "device_info": "TEXT",
     "last_seen_at": "DATETIME",
-    "fcm_token": "VARCHAR(255)",
+    "fcm_token": "VARCHAR(512)",
     "badge": "VARCHAR(40)",
     "rating_score": "FLOAT",
+    "token_version": "INTEGER DEFAULT 0",
 }
 
 LISTING_COLUMNS = {

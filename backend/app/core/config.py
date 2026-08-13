@@ -15,9 +15,22 @@ class Settings(BaseSettings):
     admin_email: str = "admin@ryadom56.ru"
     admin_password: str = "admin123"
     admin_name: str = "Администратор"
-    fcm_server_key: str = ""
+    # FCM HTTP v1 (Legacy API отключён в Firebase)
+    fcm_project_id: str = "ryadom56"
+    fcm_service_account_file: str = ""  # путь к JSON service account
+    fcm_server_key: str = ""  # устарело, не используется
     # Демо-контент (ярмарки, маршруты-заглушки) только для локальной разработки
     seed_demo_content: bool = False
+    # SMTP для восстановления пароля
+    smtp_host: str = ""
+    smtp_port: int = 465
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_from_name: str = "Рядом56"
+    smtp_use_ssl: bool = True
+    smtp_use_tls: bool = False
+    password_reset_ttl_minutes: int = 20
 
     class Config:
         env_file = ".env"

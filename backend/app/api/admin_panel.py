@@ -12,6 +12,7 @@ from app.api.deps import require_roles
 from app.api.listings import load_listing, to_out
 from app.core.config import settings
 from app.core.database import get_db
+from app.core.security import hash_password
 from app.models import (
     AuditLog,
     BlacklistEntry,
@@ -23,6 +24,7 @@ from app.models import (
     Event,
     Favorite,
     Listing,
+    ListingMessage,
     ListingReport,
     ListingStatus,
     Settlement,
@@ -33,6 +35,8 @@ from app.models import (
 )
 from app.schemas import (
     AdminAlertsOut,
+    AdminChatMessageOut,
+    AdminConversationOut,
     AuditLogOut,
     BlacklistCreate,
     BlacklistOut,
@@ -45,12 +49,23 @@ from app.schemas import (
     ReportStatusUpdate,
     SettlementStat,
     StatsOut,
+    AdminUserCreate,
     UserOut,
     UserRoleUpdate,
 )
 from app.services.audit import log_action
-from app.services.blacklist import normalize_phone, normalize_word
+from app.services.blacklist import looks_like_chat_spam, match_blacklist, normalize_phone, normalize_word
 from app.services.notify import notify_user
+from app.services.sessions import revoke_all_sessions
+
+
+def _chat_flag_reasons(db: Session, body: str) -> list[str]:
+    reasons: list[str] = []
+    hits = match_blacklist(db, title="", description=body)
+    reasons.extend(hits)
+    if looks_like_chat_spam(body):
+        reasons.append("подозрение на спам/ссылки")
+    return reasons
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -314,6 +329,49 @@ def list_users(
     return users
 
 
+@router.post("/users", response_model=UserOut)
+def create_user(
+    payload: AdminUserCreate,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_roles(UserRole.admin)),
+):
+    email = payload.email.lower().strip()
+    exists = db.execute(select(User).where(User.email == email)).scalar_one_or_none()
+    if exists:
+        raise HTTPException(status_code=400, detail="Email уже зарегистрирован")
+    settlement = db.execute(select(Settlement).where(Settlement.id == payload.settlement_id)).scalar_one_or_none()
+    if not settlement:
+        raise HTTPException(status_code=400, detail="Населённый пункт не найден")
+    badge = (payload.badge or "").strip() or None
+    if badge and badge not in ("new", "trusted", "caution", "verified"):
+        raise HTTPException(status_code=400, detail="Неизвестная метка пользователя")
+    user = User(
+        email=email,
+        password_hash=hash_password(payload.password),
+        full_name=payload.full_name.strip(),
+        phone=payload.phone.strip() if payload.phone else None,
+        settlement_id=payload.settlement_id,
+        role=payload.role,
+        is_active=payload.is_active,
+        accepted_terms=True,
+        badge=badge,
+    )
+    db.add(user)
+    db.flush()
+    log_action(
+        db,
+        actor=admin,
+        action="user.create",
+        entity_type="user",
+        entity_id=user.id,
+        details=f"{user.email} role={user.role.value} active={user.is_active}",
+    )
+    db.commit()
+    return db.execute(
+        select(User).options(selectinload(User.settlement)).where(User.id == user.id)
+    ).scalar_one()
+
+
 @router.get("/users/export")
 def export_users(
     q: str | None = None,
@@ -370,6 +428,15 @@ def update_user(
             raise HTTPException(status_code=400, detail="Email уже занят")
         target.email = email
         data.pop("email")
+    if "password" in data and data["password"]:
+        target.password_hash = hash_password(data.pop("password"))
+        revoke_all_sessions(db, target)
+    if "badge" in data:
+        badge = (data["badge"] or "").strip() or None
+        if badge and badge not in ("new", "trusted", "caution", "verified"):
+            raise HTTPException(status_code=400, detail="Неизвестная метка пользователя")
+        target.badge = badge
+        data.pop("badge")
     if "settlement_id" in data and data["settlement_id"] is not None:
         settlement = db.execute(select(Settlement).where(Settlement.id == data["settlement_id"])).scalar_one_or_none()
         if not settlement:
@@ -391,6 +458,28 @@ def update_user(
         select(User).options(selectinload(User.settlement)).where(User.id == user_id)
     ).scalar_one()
     return target
+
+
+@router.post("/users/{user_id}/revoke-sessions")
+def admin_revoke_sessions(
+    user_id: int,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_roles(UserRole.admin)),
+):
+    target = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    n = revoke_all_sessions(db, target)
+    log_action(
+        db,
+        actor=admin,
+        action="user.revoke_sessions",
+        entity_type="user",
+        entity_id=target.id,
+        details=f"revoked={n}",
+    )
+    db.commit()
+    return {"ok": True, "message": f"Выполнен выход на всех устройствах ({n})"}
 
 
 @router.get("/blacklist", response_model=list[BlacklistOut])
@@ -676,6 +765,175 @@ def update_report(
         moderator_reply=report.moderator_reply,
         created_at=report.created_at,
     )
+
+
+@router.get("/chats", response_model=list[AdminConversationOut])
+def list_chats(
+    q: str | None = None,
+    flagged_only: bool = Query(default=False),
+    limit: int = Query(default=100, ge=1, le=300),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(UserRole.moderator, UserRole.admin)),
+):
+    pairs = db.execute(
+        select(ListingMessage.listing_id, ListingMessage.buyer_id)
+        .where(ListingMessage.buyer_id.is_not(None))
+        .distinct()
+    ).all()
+    out: list[AdminConversationOut] = []
+    needle = (q or "").strip().lower()
+    for lid, buyer_id in pairs:
+        if buyer_id is None:
+            continue
+        item = db.execute(select(Listing).where(Listing.id == lid)).scalar_one_or_none()
+        if not item:
+            continue
+        msgs = (
+            db.execute(
+                select(ListingMessage)
+                .where(ListingMessage.listing_id == lid, ListingMessage.buyer_id == buyer_id)
+                .order_by(ListingMessage.created_at.desc())
+            )
+            .scalars()
+            .all()
+        )
+        if not msgs:
+            continue
+        last = msgs[0]
+        flag_reasons: list[str] = []
+        for m in msgs:
+            for reason in _chat_flag_reasons(db, m.body):
+                if reason not in flag_reasons:
+                    flag_reasons.append(reason)
+        seller = db.execute(select(User).where(User.id == item.author_id)).scalar_one_or_none()
+        buyer = db.execute(select(User).where(User.id == buyer_id)).scalar_one_or_none()
+        row = AdminConversationOut(
+            listing_id=lid,
+            buyer_id=buyer_id,
+            listing_title=item.title,
+            listing_status=item.status.value if hasattr(item.status, "value") else str(item.status),
+            seller_id=item.author_id,
+            seller_name=seller.full_name if seller else None,
+            buyer_name=buyer.full_name if buyer else None,
+            last_message=last.body[:200],
+            last_message_at=last.created_at,
+            message_count=len(msgs),
+            flagged=bool(flag_reasons),
+            flag_reasons=flag_reasons[:8],
+        )
+        if flagged_only and not row.flagged:
+            continue
+        if needle:
+            hay = " ".join(
+                [
+                    row.listing_title,
+                    row.seller_name or "",
+                    row.buyer_name or "",
+                    row.last_message or "",
+                    " ".join(row.flag_reasons),
+                ]
+            ).lower()
+            if needle not in hay:
+                continue
+        out.append(row)
+    out.sort(key=lambda r: (r.last_message_at or datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
+    return out[:limit]
+
+
+@router.get("/chats/{listing_id}/{buyer_id}", response_model=list[AdminChatMessageOut])
+def get_chat_thread(
+    listing_id: int,
+    buyer_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(UserRole.moderator, UserRole.admin)),
+):
+    msgs = (
+        db.execute(
+            select(ListingMessage)
+            .where(ListingMessage.listing_id == listing_id, ListingMessage.buyer_id == buyer_id)
+            .order_by(ListingMessage.created_at.asc())
+        )
+        .scalars()
+        .all()
+    )
+    sender_ids = {m.sender_id for m in msgs}
+    names = {}
+    if sender_ids:
+        for u in db.execute(select(User).where(User.id.in_(sender_ids))).scalars().all():
+            names[u.id] = u.full_name
+    result: list[AdminChatMessageOut] = []
+    for m in msgs:
+        reasons = _chat_flag_reasons(db, m.body)
+        result.append(
+            AdminChatMessageOut(
+                id=m.id,
+                listing_id=m.listing_id,
+                buyer_id=m.buyer_id,
+                sender_id=m.sender_id,
+                sender_name=names.get(m.sender_id),
+                body=m.body,
+                created_at=m.created_at,
+                flagged=bool(reasons),
+                flag_reasons=reasons,
+            )
+        )
+    return result
+
+
+@router.delete("/chat-messages/{message_id}")
+def delete_chat_message(
+    message_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(UserRole.moderator, UserRole.admin)),
+):
+    msg = db.execute(select(ListingMessage).where(ListingMessage.id == message_id)).scalar_one_or_none()
+    if not msg:
+        raise HTTPException(status_code=404, detail="Сообщение не найдено")
+    lid, buyer_id, preview = msg.listing_id, msg.buyer_id, msg.body[:80]
+    db.delete(msg)
+    log_action(
+        db,
+        actor=user,
+        action="chat.message_delete",
+        entity_type="listing_message",
+        entity_id=message_id,
+        details=f"listing={lid}; buyer_id={buyer_id}; body={preview}",
+    )
+    db.commit()
+    return {"ok": True}
+
+
+@router.delete("/chats/{listing_id}/{buyer_id}")
+def delete_chat_thread(
+    listing_id: int,
+    buyer_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(UserRole.moderator, UserRole.admin)),
+):
+    msgs = (
+        db.execute(
+            select(ListingMessage).where(
+                ListingMessage.listing_id == listing_id, ListingMessage.buyer_id == buyer_id
+            )
+        )
+        .scalars()
+        .all()
+    )
+    if not msgs:
+        raise HTTPException(status_code=404, detail="Переписка не найдена")
+    count = len(msgs)
+    for m in msgs:
+        db.delete(m)
+    log_action(
+        db,
+        actor=user,
+        action="chat.thread_delete",
+        entity_type="listing_chat",
+        entity_id=listing_id,
+        details=f"buyer_id={buyer_id}; messages={count}",
+    )
+    db.commit()
+    return {"ok": True, "deleted": count}
 
 
 @router.get("/audit-log", response_model=list[AuditLogOut])
