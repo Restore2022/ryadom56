@@ -3,13 +3,13 @@ from pathlib import Path
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_optional_user, require_roles
 from app.core.database import get_db
 from app.models import Event, User, UserRole
-from app.schemas import EventCreate, EventOut, EventUpdate
+from app.schemas import EventCreate, EventOut, EventPageOut, EventUpdate
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/events", tags=["events"])
@@ -74,12 +74,14 @@ def _can_see_unpublished(user: User | None) -> bool:
     return bool(user and user.role in (UserRole.admin, UserRole.editor))
 
 
-@router.get("", response_model=list[EventOut])
+@router.get("", response_model=EventPageOut)
 def list_events(
     settlement_id: int | None = None,
     upcoming: bool | None = Query(default=None),
     q: str | None = None,
     status: str | None = Query(default=None, description="draft|scheduled|published — только staff"),
+    limit: int = Query(default=30, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     user: User | None = Depends(get_optional_user),
 ):
@@ -112,8 +114,12 @@ def list_events(
                 Event.address.ilike(like),
             )
         )
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total = int(db.execute(count_stmt).scalar_one())
     stmt = stmt.order_by(Event.starts_at.asc() if upcoming is not False else Event.starts_at.desc())
-    return [to_out(r) for r in db.execute(stmt).scalars().all()]
+    stmt = stmt.offset(offset).limit(limit)
+    items = [to_out(r) for r in db.execute(stmt).scalars().all()]
+    return EventPageOut(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/{event_id}", response_model=EventOut)

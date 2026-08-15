@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'api.dart';
+import 'error_reporter.dart';
 import 'push_service.dart';
 import 'screens/home_shell.dart';
 import 'screens/listing_chat_screen.dart';
@@ -37,13 +38,16 @@ Future<void> main() async {
     apiBase = fromBuild;
   }
   await prefs.setString('api_base', apiBase);
-  runApp(RyadomApp(apiBase: apiBase));
+  final api = ApiClient(baseUrl: apiBase);
+  ErrorReporter.attach(api);
+  runApp(RyadomApp(apiBase: apiBase, api: api));
 }
 
 class RyadomApp extends StatefulWidget {
-  const RyadomApp({super.key, required this.apiBase});
+  const RyadomApp({super.key, required this.apiBase, required this.api});
 
   final String apiBase;
+  final ApiClient api;
 
   @override
   State<RyadomApp> createState() => _RyadomAppState();
@@ -55,7 +59,7 @@ class _RyadomAppState extends State<RyadomApp> {
   @override
   void initState() {
     super.initState();
-    _state = AppState(ApiClient(baseUrl: widget.apiBase))..bootstrap();
+    _state = AppState(widget.api)..bootstrap();
     PushService.instance.onTap = _handlePushTap;
   }
 

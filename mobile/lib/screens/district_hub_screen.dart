@@ -44,16 +44,14 @@ class _DistrictHubScreenState extends State<DistrictHubScreen> {
     final state = context.read<AppState>();
     final settlementId = state.preferredSettlementId ?? state.filterSettlementId;
     try {
-      final results = await Future.wait([
-        state.loadActiveAlerts(limit: 5),
-        state.loadNews(settlementId: settlementId),
-        state.loadEvents(upcoming: true, settlementId: settlementId),
-      ]);
+      final alertsData = await state.loadActiveAlerts(limit: 5);
+      final newsPage = await state.loadNews(settlementId: settlementId, limit: 3);
+      final eventsPage = await state.loadEvents(upcoming: true, settlementId: settlementId, limit: 5);
       if (mounted) {
         setState(() {
-          alerts = List<Map<String, dynamic>>.from(results[0] as List);
-          news = (results[1] as List<dynamic>).take(3).toList();
-          events = (results[2] as List<dynamic>).take(5).toList();
+          alerts = alertsData;
+          news = newsPage.items;
+          events = eventsPage.items;
           loading = false;
         });
       }

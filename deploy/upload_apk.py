@@ -15,9 +15,9 @@ if not PASS:
 REMOTE = "/opt/ryadom56"
 REMOTE_APK = f"{REMOTE}/backend/data/releases/ryadom56-latest.apk"
 LOCAL_APK = Path(__file__).resolve().parents[1] / "mobile" / "apk" / "app-release.apk"
-VERSION_NAME = "0.22.0"
-VERSION_CODE = 34
-APK_FILENAME = "ryadom56-0.22.0.apk"
+VERSION_NAME = "0.23.0"
+VERSION_CODE = 35
+APK_FILENAME = "ryadom56-0.23.0.apk"
 
 
 def run(c: paramiko.SSHClient, cmd: str, timeout: int = 120) -> str:
@@ -57,7 +57,12 @@ def main() -> None:
     sftp.close()
     run(c, f"mv -f {tmp} {REMOTE_APK} && ls -la {REMOTE_APK} && chmod 644 {REMOTE_APK}")
 
-    py = f"""
+    notes = (
+        "Рядом со мной: сортировка объявлений и мест по селу или GPS. "
+        "Пагинация новостей, афиши и транспорта. Темнее чипы в тёмной теме. "
+        "Сбои приложения уходят в админку."
+    )
+    py = f"""# coding: utf-8
 from sqlalchemy import select
 from app.core.database import SessionLocal
 from app.models import AppUpdate
@@ -71,10 +76,7 @@ try:
     row.version_name = {VERSION_NAME!r}
     row.version_code = {VERSION_CODE}
     row.force_update = False
-    row.notes = (
-        "Профиль справа, чаты вместо афиши, уведомления в шапке, "
-        "фото профиля, вход по отпечатку или лицу (PIN запасной)."
-    )
+    row.notes = {notes.encode("unicode_escape").decode("ascii")!r}.encode("utf-8").decode("unicode_escape")
     row.apk_filename = {APK_FILENAME!r}
     db.commit()
     print("DB OK", row.version_name, row.version_code, row.apk_filename)
@@ -82,8 +84,8 @@ finally:
     db.close()
 """
     sftp = c.open_sftp()
-    with sftp.file("/tmp/mark_apk.py", "w") as f:
-        f.write(py)
+    with sftp.file("/tmp/mark_apk.py", "wb") as f:
+        f.write(py.encode("utf-8"))
     sftp.close()
     run(
         c,

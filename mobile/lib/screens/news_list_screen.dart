@@ -20,8 +20,12 @@ class _NewsListScreenState extends State<NewsListScreen> {
   final scroll = ScrollController();
   List<dynamic> items = [];
   bool loading = true;
+  bool loadingMore = false;
+  bool hasMore = false;
+  int total = 0;
   String? error;
   int? settlementId;
+  static const _pageSize = 20;
 
   @override
   void initState() {
@@ -36,17 +40,29 @@ class _NewsListScreenState extends State<NewsListScreen> {
     super.dispose();
   }
 
-  Future<void> _load() async {
-    setState(() {
-      loading = true;
-      error = null;
-    });
+  Future<void> _load({bool append = false}) async {
+    if (append) {
+      if (!hasMore || loadingMore || loading) return;
+      setState(() => loadingMore = true);
+    } else {
+      setState(() {
+        loading = true;
+        error = null;
+      });
+    }
     try {
-      final data = await context.read<AppState>().loadNews(settlementId: settlementId);
+      final page = await context.read<AppState>().loadNews(
+            settlementId: settlementId,
+            offset: append ? items.length : 0,
+            limit: _pageSize,
+          );
       if (mounted) {
         setState(() {
-          items = data;
+          items = append ? [...items, ...page.items] : page.items;
+          total = page.total;
+          hasMore = items.length < total;
           loading = false;
+          loadingMore = false;
         });
       }
     } catch (e) {
@@ -54,6 +70,7 @@ class _NewsListScreenState extends State<NewsListScreen> {
         setState(() {
           error = AppState.userFriendlyError(e);
           loading = false;
+          loadingMore = false;
         });
       }
     }
@@ -194,7 +211,7 @@ class _NewsListScreenState extends State<NewsListScreen> {
               controller: scroll,
               heroTag: 'scroll-top-news',
               child: RefreshIndicator(
-                onRefresh: _load,
+                onRefresh: () => _load(),
                 child: loading && items.isEmpty
                     ? const Center(child: CircularProgressIndicator())
                     : error != null && items.isEmpty
@@ -203,7 +220,7 @@ class _NewsListScreenState extends State<NewsListScreen> {
                             children: [
                               SizedBox(
                                 height: 280,
-                                child: errorState(context: context, message: error!, onRetry: _load),
+                                child: errorState(context: context, message: error!, onRetry: () => _load()),
                               ),
                             ],
                           )
@@ -219,17 +236,34 @@ class _NewsListScreenState extends State<NewsListScreen> {
                                       subtitle: 'Новости района появятся здесь',
                                       icon: Icons.newspaper_outlined,
                                       actionLabel: 'Обновить',
-                                      onAction: _load,
+                                      onAction: () => _load(),
                                     ),
                                   ),
                                 ],
                               )
-                            : ListView.separated(
+                            : NotificationListener<ScrollNotification>(
+                                onNotification: (n) {
+                                  if (n.metrics.pixels >= n.metrics.maxScrollExtent - 240) {
+                                    _load(append: true);
+                                  }
+                                  return false;
+                                },
+                                child: ListView.separated(
                                 controller: scroll,
                                 padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
-                                itemCount: items.length,
+                                itemCount: items.length + (hasMore ? 1 : 0),
                               separatorBuilder: (_, __) => const SizedBox(height: 12),
                               itemBuilder: (_, i) {
+                                if (i >= items.length) {
+                                  return Padding(
+                                    padding: const EdgeInsets.symmetric(vertical: 12),
+                                    child: Center(
+                                      child: loadingMore
+                                          ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2))
+                                          : TextButton(onPressed: () => _load(append: true), child: const Text('Ещё новости')),
+                                    ),
+                                  );
+                                }
                                 final item = items[i] as Map<String, dynamic>;
                                 final date = _fmtDate(
                                   item['published_at']?.toString() ?? item['created_at']?.toString(),
@@ -335,6 +369,7 @@ class _NewsListScreenState extends State<NewsListScreen> {
                                 );
                               },
                             ),
+                                ),
               ),
             ),
           ),

@@ -49,6 +49,8 @@ class SettlementOut(BaseModel):
     council: str | None
     display_name: str
     is_district: bool
+    lat: float | None = None
+    lon: float | None = None
 
     class Config:
         from_attributes = True
@@ -218,6 +220,7 @@ class ListingOut(BaseModel):
     is_favorited: bool = False
     created_at: datetime
     updated_at: datetime
+    distance_km: float | None = None
 
     class Config:
         from_attributes = True
@@ -350,6 +353,7 @@ class DirectoryOut(BaseModel):
     view_count: int = 0
     created_at: datetime
     updated_at: datetime
+    distance_km: float | None = None
 
     class Config:
         from_attributes = True
@@ -502,6 +506,13 @@ class EventOut(BaseModel):
         from_attributes = True
 
 
+class EventPageOut(BaseModel):
+    items: list[EventOut]
+    total: int
+    limit: int
+    offset: int
+
+
 class TransportCreate(BaseModel):
     title: str = Field(min_length=2, max_length=200)
     route_number: str | None = Field(default=None, max_length=40)
@@ -563,6 +574,13 @@ class TransportOut(BaseModel):
         from_attributes = True
 
 
+class TransportPageOut(BaseModel):
+    items: list[TransportOut]
+    total: int
+    limit: int
+    offset: int
+
+
 class NewsCreate(BaseModel):
     title: str = Field(min_length=2, max_length=200)
     body: str = Field(min_length=3, max_length=12000)
@@ -596,6 +614,13 @@ class NewsOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class NewsPageOut(BaseModel):
+    items: list[NewsOut]
+    total: int
+    limit: int
+    offset: int
 
 
 class AlertCreate(BaseModel):
@@ -787,3 +812,30 @@ class AppUpdatePatch(BaseModel):
     version_code: int | None = Field(default=None, ge=1)
     force_update: bool | None = None
     notes: str | None = Field(default=None, max_length=4000)
+
+
+class ClientErrorIn(BaseModel):
+    message: str = Field(min_length=1, max_length=500)
+    stack: str | None = Field(default=None, max_length=8000)
+    screen: str | None = Field(default=None, max_length=120)
+    app_version: str | None = Field(default=None, max_length=40)
+    device_brand: str | None = Field(default=None, max_length=80)
+    device_model: str | None = Field(default=None, max_length=120)
+    device_os: str | None = Field(default=None, max_length=80)
+
+
+class ClientErrorOut(BaseModel):
+    id: int
+    created_at: datetime
+    user_id: int | None = None
+    message: str
+    stack: str | None = None
+    screen: str | None = None
+    app_version: str | None = None
+    device_brand: str | None = None
+    device_model: str | None = None
+    device_os: str | None = None
+    client_ip: str | None = None
+
+    class Config:
+        from_attributes = True

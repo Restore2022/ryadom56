@@ -232,6 +232,20 @@ export type AuditLog = {
   created_at: string;
 };
 
+export type ClientErrorLog = {
+  id: number;
+  created_at: string;
+  user_id?: number | null;
+  message: string;
+  stack?: string | null;
+  screen?: string | null;
+  app_version?: string | null;
+  device_brand?: string | null;
+  device_model?: string | null;
+  device_os?: string | null;
+  client_ip?: string | null;
+};
+
 export type AdminConversation = {
   listing_id: number;
   buyer_id: number;

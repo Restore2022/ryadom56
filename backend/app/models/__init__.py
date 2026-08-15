@@ -56,6 +56,8 @@ class Settlement(Base):
     is_district: Mapped[bool] = mapped_column(Boolean, default=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    lat: Mapped[float | None] = mapped_column(Float, nullable=True)
+    lon: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     users: Mapped[list["User"]] = relationship(back_populates="settlement")
 
@@ -451,3 +453,19 @@ class AppUpdate(Base):
     updated_at: Mapped[datetime] = mapped_column(
         UtcDateTime(), server_default=func.now(), onupdate=func.now()
     )
+
+
+class ClientErrorLog(Base):
+    __tablename__ = "client_error_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now(), index=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    message: Mapped[str] = mapped_column(String(500), nullable=False)
+    stack: Mapped[str | None] = mapped_column(Text, nullable=True)
+    screen: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    app_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    device_brand: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    device_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    device_os: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)

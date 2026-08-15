@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.core.database import Base, engine
 from app.core.security import hash_password
-from app.core.seed_data import LEGAL_DOCS, SETTLEMENTS
+from app.core.seed_data import LEGAL_DOCS, SETTLEMENT_COORDS, SETTLEMENTS
 from app.models import (
     AppUpdate,
     DistrictAlert,
@@ -81,6 +81,11 @@ ALERT_COLUMNS = {
     "priority": "INTEGER DEFAULT 0",
 }
 
+SETTLEMENT_COLUMNS = {
+    "lat": "FLOAT",
+    "lon": "FLOAT",
+}
+
 MESSAGE_COLUMNS = {
     "buyer_id": "INTEGER",
 }
@@ -103,6 +108,7 @@ def init_db() -> None:
     _migrate_news_columns()
     _migrate_alert_columns()
     _migrate_message_columns()
+    _migrate_settlement_columns()
 
 
 def _migrate_user_columns() -> None:
@@ -238,6 +244,17 @@ def _migrate_message_columns() -> None:
         )
 
 
+def _migrate_settlement_columns() -> None:
+    inspector = inspect(engine)
+    if "settlements" not in inspector.get_table_names():
+        return
+    existing = {col["name"] for col in inspector.get_columns("settlements")}
+    with engine.begin() as conn:
+        for name, sql_type in SETTLEMENT_COLUMNS.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE settlements ADD COLUMN {name} {sql_type}"))
+
+
 def seed_db(session: Session) -> None:
     existing = session.execute(select(Settlement).limit(1)).scalar_one_or_none()
     if existing is None:
@@ -250,9 +267,16 @@ def seed_db(session: Session) -> None:
                     display_name=display,
                     is_district=is_district,
                     sort_order=sort_order,
+                    lat=(SETTLEMENT_COORDS.get(display) or (None, None))[0],
+                    lon=(SETTLEMENT_COORDS.get(display) or (None, None))[1],
                 )
             )
         session.flush()
+
+    for row in session.execute(select(Settlement)).scalars():
+        coords = SETTLEMENT_COORDS.get(row.display_name)
+        if coords and (row.lat is None or row.lon is None):
+            row.lat, row.lon = coords
 
     for doc in LEGAL_DOCS:
         found = session.execute(select(LegalDocument).where(LegalDocument.slug == doc["slug"])).scalar_one_or_none()

@@ -2,13 +2,13 @@ from datetime import datetime, timedelta
 import re
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, get_optional_user, require_roles
 from app.core.database import get_db
 from app.models import TransportFavorite, TransportRoute, User, UserRole
-from app.schemas import TransportCreate, TransportOut, TransportUpdate
+from app.schemas import TransportCreate, TransportOut, TransportPageOut, TransportUpdate
 from app.services.audit import log_action
 from app.services.notify import notify_user
 
@@ -119,12 +119,14 @@ def list_transport_favorites(
     return [to_out(r, fav_ids) for r in db.execute(stmt).scalars().all()]
 
 
-@router.get("", response_model=list[TransportOut])
+@router.get("", response_model=TransportPageOut)
 def list_routes(
     settlement_id: int | None = None,
     q: str | None = None,
     day: str | None = Query(default=None, description="today|weekdays|weekends|all"),
     favorites_only: bool = False,
+    limit: int = Query(default=30, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     user: User | None = Depends(get_optional_user),
 ):
@@ -158,11 +160,14 @@ def list_routes(
         if not user:
             raise HTTPException(status_code=401, detail="Войдите, чтобы видеть избранные маршруты")
         if not fav_ids:
-            return []
+            return TransportPageOut(items=[], total=0, limit=limit, offset=offset)
         stmt = stmt.where(TransportRoute.id.in_(fav_ids))
 
-    stmt = stmt.order_by(TransportRoute.title)
-    return [to_out(r, fav_ids) for r in db.execute(stmt).scalars().all()]
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total = int(db.execute(count_stmt).scalar_one())
+    stmt = stmt.order_by(TransportRoute.title).offset(offset).limit(limit)
+    items = [to_out(r, fav_ids) for r in db.execute(stmt).scalars().all()]
+    return TransportPageOut(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/{route_id}", response_model=TransportOut)

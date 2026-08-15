@@ -8,14 +8,14 @@ ThemeData buildRyadomTheme(Brightness brightness) {
     seedColor: seed,
     brightness: brightness,
     primary: isDark ? const Color(0xFF6BCB8B) : seed,
-    surface: isDark ? const Color(0xFF121A14) : const Color(0xFFF4F7F2),
+    surface: isDark ? const Color(0xFF152018) : const Color(0xFFF4F7F2),
   );
 
-  final chipBg = isDark ? const Color(0xFF243328) : Colors.white;
-  final chipSelectedBg = isDark ? const Color(0xFF2F6B45) : const Color(0xFF1B6B3A);
-  final chipBorder = isDark ? const Color(0xFF3A4F3E) : const Color(0xFFB7C9B8);
-  final chipLabel = isDark ? const Color(0xFFD7E6D9) : const Color(0xFF1C2B1F);
-  final chipSelectedLabel = isDark ? const Color(0xFFE8FFF0) : Colors.white;
+  final chipBg = isDark ? const Color(0xFF2A3B30) : Colors.white;
+  final chipSelectedBg = isDark ? const Color(0xFF3D8A58) : const Color(0xFF1B6B3A);
+  final chipBorder = isDark ? const Color(0xFF5C7A66) : const Color(0xFFB7C9B8);
+  final chipLabel = isDark ? const Color(0xFFEEF6EF) : const Color(0xFF1C2B1F);
+  final chipSelectedLabel = isDark ? const Color(0xFFFFFFFF) : Colors.white;
 
   final textTheme = GoogleFonts.manropeTextTheme(
     isDark ? ThemeData.dark().textTheme : ThemeData.light().textTheme,
@@ -25,7 +25,7 @@ ThemeData buildRyadomTheme(Brightness brightness) {
     useMaterial3: true,
     colorScheme: scheme,
     textTheme: textTheme,
-    scaffoldBackgroundColor: isDark ? const Color(0xFF0D1410) : const Color(0xFFEEF3EA),
+    scaffoldBackgroundColor: isDark ? const Color(0xFF0B100D) : const Color(0xFFEEF3EA),
     appBarTheme: AppBarTheme(
       centerTitle: false,
       elevation: 0,
@@ -39,10 +39,10 @@ ThemeData buildRyadomTheme(Brightness brightness) {
     ),
     cardTheme: CardThemeData(
       elevation: 0,
-      color: isDark ? const Color(0xFF182118) : Colors.white,
+      color: isDark ? const Color(0xFF1E2C22) : Colors.white,
       shape: RoundedRectangleBorder(
         borderRadius: BorderRadius.circular(18),
-        side: BorderSide(color: isDark ? const Color(0xFF2A3A2E) : const Color(0xFFD5E0D0)),
+        side: BorderSide(color: isDark ? const Color(0xFF4A6354) : const Color(0xFFD5E0D0)),
       ),
       margin: EdgeInsets.zero,
     ),
@@ -69,8 +69,22 @@ ThemeData buildRyadomTheme(Brightness brightness) {
     ),
     navigationBarTheme: NavigationBarThemeData(
       height: 68,
-      indicatorColor: scheme.primary.withValues(alpha: 0.18),
-      labelTextStyle: WidgetStatePropertyAll(GoogleFonts.manrope(fontSize: 12, fontWeight: FontWeight.w600)),
+      backgroundColor: isDark ? const Color(0xFF152018) : const Color(0xFFF4F7F2),
+      indicatorColor: scheme.primary.withValues(alpha: isDark ? 0.28 : 0.18),
+      iconTheme: WidgetStateProperty.resolveWith((states) {
+        final selected = states.contains(WidgetState.selected);
+        return IconThemeData(
+          color: selected ? scheme.primary : (isDark ? const Color(0xFFC5D6C8) : scheme.onSurfaceVariant),
+        );
+      }),
+      labelTextStyle: WidgetStateProperty.resolveWith((states) {
+        final selected = states.contains(WidgetState.selected);
+        return GoogleFonts.manrope(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: selected ? scheme.primary : (isDark ? const Color(0xFFC5D6C8) : scheme.onSurfaceVariant),
+        );
+      }),
     ),
     chipTheme: ChipThemeData(
       showCheckmark: false,

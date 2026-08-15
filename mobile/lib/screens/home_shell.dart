@@ -8,6 +8,7 @@ import '../auth_prompt.dart';
 import '../biometric_prompt.dart';
 import '../biometric_service.dart';
 import '../event_actions.dart';
+import '../location_service.dart';
 import '../responsive.dart';
 import '../scroll_to_top.dart';
 import '../state/app_state.dart';
@@ -48,6 +49,43 @@ Route<T> fastRoute<T>(Widget page) {
   );
 }
 
+Color ryadomCardLine(BuildContext context) {
+  final dark = Theme.of(context).brightness == Brightness.dark;
+  return dark ? const Color(0xFF4A6354) : const Color(0xFFD5E0D0);
+}
+
+Future<bool> enableNearMe(BuildContext context, {required bool directory}) async {
+  final state = context.read<AppState>();
+  final gps = await LocationService.current();
+  if (!context.mounted) return false;
+  if (gps != null) {
+    if (directory) {
+      await state.setDirectoryNear(lat: gps.lat, lon: gps.lon);
+    } else {
+      await state.setNearOrigin(lat: gps.lat, lon: gps.lon);
+    }
+    return true;
+  }
+  final sid = directory
+      ? state.directorySettlementId
+      : (state.filterSettlementId ?? state.user?['settlement_id'] as int?);
+  if (sid != null) {
+    if (directory) {
+      await state.setDirectoryFilters(
+        category: state.directoryCategory,
+        settlementId: sid,
+        query: state.directoryQuery,
+      );
+      await state.setDirectoryNear();
+    } else {
+      await state.setNearOrigin();
+    }
+    return true;
+  }
+  showAppSnack(context, 'Выберите село в фильтрах или разрешите геолокацию');
+  return false;
+}
+
 void openAfisha(BuildContext context) {
   Navigator.push(
     context,
@@ -85,6 +123,7 @@ const sortLabels = {
   'oldest': 'Сначала старые',
   'price_asc': 'Цена ↑',
   'price_desc': 'Цена ↓',
+  'near': 'Рядом со мной',
 };
 
 const badgeLabels = {
@@ -110,14 +149,14 @@ class RyadomFilterChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final bg = selected
-        ? (isDark ? const Color(0xFF2F6B45) : const Color(0xFF1B6B3A))
-        : (isDark ? const Color(0xFF243328) : Colors.white);
+        ? (isDark ? const Color(0xFF3D8A58) : const Color(0xFF1B6B3A))
+        : (isDark ? const Color(0xFF2A3B30) : Colors.white);
     final fg = selected
-        ? (isDark ? const Color(0xFFE8FFF0) : Colors.white)
-        : (isDark ? const Color(0xFFD7E6D9) : const Color(0xFF1C2B1F));
+        ? (isDark ? Colors.white : Colors.white)
+        : (isDark ? const Color(0xFFEEF6EF) : const Color(0xFF1C2B1F));
     final border = selected
         ? Colors.transparent
-        : (isDark ? const Color(0xFF3A4F3E) : const Color(0xFFB7C9B8));
+        : (isDark ? const Color(0xFF5C7A66) : const Color(0xFFB7C9B8));
 
     return FilterChip(
       label: Text(label),
@@ -539,6 +578,20 @@ class _ListingsTabState extends State<_ListingsTab> {
                   Padding(
                     padding: const EdgeInsets.only(right: 8),
                     child: RyadomFilterChip(
+                      label: 'Рядом',
+                      selected: state.sort == 'near',
+                      onSelected: (_) async {
+                        if (state.sort == 'near') {
+                          await state.setNearOrigin(enabled: false);
+                        } else {
+                          await enableNearMe(context, directory: false);
+                        }
+                      },
+                    ),
+                  ),
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: RyadomFilterChip(
                       label: 'С фото',
                       selected: state.filterHasPhotos,
                       onSelected: (_) => state.applyListingFilters(hasPhotos: !state.filterHasPhotos),
@@ -815,7 +868,7 @@ class _ListingCard extends StatelessWidget {
                       ? scheme.error.withValues(alpha: 0.55)
                       : item['category'] == 'free'
                           ? scheme.tertiary.withValues(alpha: 0.55)
-                          : scheme.outlineVariant.withValues(alpha: 0.45),
+                          : ryadomCardLine(context),
               width: (item['is_pinned'] == true || item['is_urgent'] == true || item['category'] == 'free')
                   ? 1.6
                   : 1,
@@ -860,6 +913,11 @@ class _ListingCard extends StatelessWidget {
                           categoryLabels[item['category']] ?? '${item['category']}',
                           style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700, fontSize: 12),
                         ),
+                        if (item['distance_km'] is num)
+                          Text(
+                            '${item['distance_km']} км',
+                            style: TextStyle(color: scheme.onSurfaceVariant, fontWeight: FontWeight.w700, fontSize: 12),
+                          ),
                         if (item['is_pinned'] == true)
                           Container(
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -950,10 +1008,15 @@ class _EventsTabState extends State<EventsTab> {
   final scroll = ScrollController();
   List<dynamic> items = [];
   bool loading = true;
+  bool loadingMore = false;
+  bool hasMore = false;
+  int total = 0;
   String? error;
   /// null = all published ordered by API default upcoming-first mix; true upcoming; false past
   bool? upcomingOnly = true;
   int? settlementId;
+
+  static const _pageSize = 20;
 
   @override
   void initState() {
@@ -972,20 +1035,30 @@ class _EventsTabState extends State<EventsTab> {
     super.dispose();
   }
 
-  Future<void> _load() async {
-    setState(() {
-      loading = true;
-      error = null;
-    });
+  Future<void> _load({bool append = false}) async {
+    if (append) {
+      if (!hasMore || loadingMore || loading) return;
+      setState(() => loadingMore = true);
+    } else {
+      setState(() {
+        loading = true;
+        error = null;
+      });
+    }
     try {
-      final data = await context.read<AppState>().loadEvents(
+      final page = await context.read<AppState>().loadEvents(
             upcoming: upcomingOnly,
             settlementId: settlementId,
+            offset: append ? items.length : 0,
+            limit: _pageSize,
           );
       if (mounted) {
         setState(() {
-          items = data;
+          items = append ? [...items, ...page.items] : page.items;
+          total = page.total;
+          hasMore = items.length < total;
           loading = false;
+          loadingMore = false;
         });
       }
     } catch (e) {
@@ -993,6 +1066,7 @@ class _EventsTabState extends State<EventsTab> {
         setState(() {
           error = AppState.userFriendlyError(e);
           loading = false;
+          loadingMore = false;
         });
       }
     }
@@ -1073,7 +1147,7 @@ class _EventsTabState extends State<EventsTab> {
             controller: scroll,
             heroTag: 'scroll-top-events',
             child: RefreshIndicator(
-              onRefresh: _load,
+              onRefresh: () => _load(),
               child: loading && items.isEmpty
                   ? const Center(child: CircularProgressIndicator())
                   : error != null && items.isEmpty
@@ -1082,7 +1156,7 @@ class _EventsTabState extends State<EventsTab> {
                           children: [
                             adaptiveFillMessage(
                               context: context,
-                              child: errorState(context: context, message: error!, onRetry: _load),
+                              child: errorState(context: context, message: error!, onRetry: () => _load()),
                             ),
                           ],
                         )
@@ -1098,17 +1172,34 @@ class _EventsTabState extends State<EventsTab> {
                                     subtitle: 'Афиша района появится здесь',
                                     icon: Icons.event_outlined,
                                     actionLabel: 'Обновить',
-                                    onAction: _load,
+                                    onAction: () => _load(),
                                   ),
                                 ),
                               ],
                             )
-                          : ListView.separated(
+                          : NotificationListener<ScrollNotification>(
+                              onNotification: (n) {
+                                if (n.metrics.pixels >= n.metrics.maxScrollExtent - 240) {
+                                  _load(append: true);
+                                }
+                                return false;
+                              },
+                              child: ListView.separated(
                               controller: scroll,
                               padding: EdgeInsets.fromLTRB(16, 4, 16, context.listBottomPad),
-                              itemCount: items.length,
+                              itemCount: items.length + (hasMore ? 1 : 0),
                               separatorBuilder: (_, __) => const SizedBox(height: 12),
                               itemBuilder: (_, i) {
+                                if (i >= items.length) {
+                                  return Padding(
+                                    padding: const EdgeInsets.symmetric(vertical: 12),
+                                    child: Center(
+                                      child: loadingMore
+                                          ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2))
+                                          : TextButton(onPressed: () => _load(append: true), child: const Text('Ещё события')),
+                                    ),
+                                  );
+                                }
                                 final item = items[i] as Map<String, dynamic>;
                                 return Material(
                                   color: Theme.of(context).cardTheme.color,
@@ -1123,7 +1214,7 @@ class _EventsTabState extends State<EventsTab> {
                                       padding: const EdgeInsets.all(16),
                                       decoration: BoxDecoration(
                                         borderRadius: BorderRadius.circular(18),
-                                        border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.45)),
+                                        border: Border.all(color: ryadomCardLine(context)),
                                       ),
                                       child: Column(
                                         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1149,6 +1240,7 @@ class _EventsTabState extends State<EventsTab> {
                                 );
                               },
                             ),
+                              ),
             ),
           ),
         ),
@@ -1169,10 +1261,14 @@ class _TransportTabState extends State<_TransportTab> {
   final scroll = ScrollController();
   List<dynamic> items = [];
   bool loading = false;
+  bool loadingMore = false;
+  bool hasMore = false;
+  int total = 0;
   String? error;
   int? settlementId;
   String dayFilter = 'today';
   bool favoritesOnly = false;
+  static const _pageSize = 20;
 
   @override
   void initState() {
@@ -1195,30 +1291,41 @@ class _TransportTabState extends State<_TransportTab> {
     super.dispose();
   }
 
-  Future<void> _load() async {
+  Future<void> _load({bool append = false}) async {
     if (settlementId == null) {
       setState(() {
         items = [];
         loading = false;
         error = null;
+        hasMore = false;
       });
       return;
     }
-    setState(() {
-      loading = true;
-      error = null;
-    });
+    if (append) {
+      if (!hasMore || loadingMore || loading) return;
+      setState(() => loadingMore = true);
+    } else {
+      setState(() {
+        loading = true;
+        error = null;
+      });
+    }
     try {
-      final data = await context.read<AppState>().loadTransport(
+      final page = await context.read<AppState>().loadTransport(
             settlementId: settlementId,
             q: search.text.trim().isEmpty ? null : search.text,
             day: dayFilter,
             favoritesOnly: favoritesOnly,
+            offset: append ? items.length : 0,
+            limit: _pageSize,
           );
       if (mounted) {
         setState(() {
-          items = data;
+          items = append ? [...items, ...page.items] : page.items;
+          total = page.total;
+          hasMore = items.length < total;
           loading = false;
+          loadingMore = false;
         });
       }
     } catch (e) {
@@ -1226,6 +1333,7 @@ class _TransportTabState extends State<_TransportTab> {
         setState(() {
           error = AppState.userFriendlyError(e);
           loading = false;
+          loadingMore = false;
         });
       }
     }
@@ -1405,7 +1513,7 @@ class _TransportTabState extends State<_TransportTab> {
                   controller: scroll,
                   heroTag: 'scroll-top-transport',
                   child: RefreshIndicator(
-                    onRefresh: _load,
+                    onRefresh: () => _load(),
                     child: loading && items.isEmpty
                         ? const Center(child: CircularProgressIndicator())
                         : error != null && items.isEmpty
@@ -1414,7 +1522,7 @@ class _TransportTabState extends State<_TransportTab> {
                                 children: [
                                   adaptiveFillMessage(
                                     context: context,
-                                    child: errorState(context: context, message: error!, onRetry: _load),
+                                    child: errorState(context: context, message: error!, onRetry: () => _load()),
                                   ),
                                 ],
                               )
@@ -1432,17 +1540,34 @@ class _TransportTabState extends State<_TransportTab> {
                                               : 'Для этого населённого пункта расписаний пока нет',
                                           icon: Icons.directions_bus_outlined,
                                           actionLabel: 'Обновить',
-                                          onAction: _load,
+                                          onAction: () => _load(),
                                         ),
                                       ),
                                     ],
                                   )
-                                : ListView.separated(
+                                : NotificationListener<ScrollNotification>(
+                                    onNotification: (n) {
+                                      if (n.metrics.pixels >= n.metrics.maxScrollExtent - 240) {
+                                        _load(append: true);
+                                      }
+                                      return false;
+                                    },
+                                    child: ListView.separated(
                                     controller: scroll,
                                     padding: EdgeInsets.fromLTRB(16, 4, 16, context.listBottomPad),
-                                    itemCount: items.length,
+                                    itemCount: items.length + (hasMore ? 1 : 0),
                                     separatorBuilder: (_, __) => const SizedBox(height: 12),
                                     itemBuilder: (_, i) {
+                                      if (i >= items.length) {
+                                        return Padding(
+                                          padding: const EdgeInsets.symmetric(vertical: 12),
+                                          child: Center(
+                                            child: loadingMore
+                                                ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2))
+                                                : TextButton(onPressed: () => _load(append: true), child: const Text('Ещё маршруты')),
+                                          ),
+                                        );
+                                      }
                                       final item = Map<String, dynamic>.from(items[i] as Map);
                                       final number = item['route_number']?.toString();
                                       final id = item['id'];
@@ -1464,7 +1589,7 @@ class _TransportTabState extends State<_TransportTab> {
                                             padding: const EdgeInsets.all(16),
                                             decoration: BoxDecoration(
                                               borderRadius: BorderRadius.circular(18),
-                                              border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.45)),
+                                              border: Border.all(color: ryadomCardLine(context)),
                                             ),
                                             child: Row(
                                               crossAxisAlignment: CrossAxisAlignment.start,
@@ -1514,6 +1639,7 @@ class _TransportTabState extends State<_TransportTab> {
                                       );
                                     },
                                   ),
+                                    ),
                   ),
                 ),
         ),
@@ -1659,6 +1785,20 @@ class _DirectoryTabState extends State<_DirectoryTab> {
                       ),
                     ),
                   ),
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: RyadomFilterChip(
+                      label: 'Рядом',
+                      selected: state.directorySort == 'near',
+                      onSelected: (_) async {
+                        if (state.directorySort == 'near') {
+                          await state.setDirectoryNear(enabled: false);
+                        } else {
+                          await enableNearMe(context, directory: true);
+                        }
+                      },
+                    ),
+                  ),
                   ...dirCategories.map(
                     (c) => Padding(
                       padding: const EdgeInsets.only(right: 8),
@@ -1757,7 +1897,7 @@ class _DirectoryTabState extends State<_DirectoryTab> {
                         padding: const EdgeInsets.fromLTRB(14, 12, 14, 12),
                         decoration: BoxDecoration(
                           borderRadius: BorderRadius.circular(18),
-                          border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.45)),
+                          border: Border.all(color: ryadomCardLine(context)),
                         ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
@@ -1837,6 +1977,10 @@ class _DirectoryTabState extends State<_DirectoryTab> {
                               style: GoogleFonts.manrope(fontSize: 17, fontWeight: FontWeight.w800, height: 1.25),
                               softWrap: true,
                             ),
+                            if (item['distance_km'] is num) ...[
+                              const SizedBox(height: 4),
+                              Text('${item['distance_km']} км', style: TextStyle(color: scheme.onSurfaceVariant, fontWeight: FontWeight.w700, fontSize: 12)),
+                            ],
                             if (item['address'] != null) ...[
                               const SizedBox(height: 6),
                               Row(

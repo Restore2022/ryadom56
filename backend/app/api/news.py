@@ -2,14 +2,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 import uuid
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_optional_user, require_roles
 from app.core.database import get_db
 from app.models import DistrictNews, User, UserRole
-from app.schemas import NewsCreate, NewsOut, NewsUpdate
+from app.schemas import NewsCreate, NewsOut, NewsPageOut, NewsUpdate
 from app.services.audit import log_action
 
 router = APIRouter(prefix="/news", tags=["news"])
@@ -45,9 +45,11 @@ def _staff(user: User | None) -> bool:
     return bool(user and user.role in (UserRole.admin, UserRole.editor))
 
 
-@router.get("", response_model=list[NewsOut])
+@router.get("", response_model=NewsPageOut)
 def list_news(
     settlement_id: int | None = None,
+    limit: int = Query(default=20, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     user: User | None = Depends(get_optional_user),
 ):
@@ -58,8 +60,12 @@ def list_news(
         stmt = stmt.where(
             (DistrictNews.settlement_id == settlement_id) | (DistrictNews.settlement_id.is_(None))
         )
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total = int(db.execute(count_stmt).scalar_one())
     stmt = stmt.order_by(DistrictNews.is_pinned.desc(), DistrictNews.published_at.desc(), DistrictNews.created_at.desc())
-    return [to_out(r) for r in db.execute(stmt).scalars().all()]
+    stmt = stmt.offset(offset).limit(limit)
+    items = [to_out(r) for r in db.execute(stmt).scalars().all()]
+    return NewsPageOut(items=items, total=total, limit=limit, offset=offset)
 
 
 @router.get("/{news_id}", response_model=NewsOut)

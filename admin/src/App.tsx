@@ -5,6 +5,7 @@ import type {
   AdminChatMessage,
   AdminConversation,
   AuditLog,
+  ClientErrorLog,
   BlacklistEntry,
   DirectoryItem,
   DirectoryReport,
@@ -38,6 +39,12 @@ function hoursWaiting(iso: string) {
   const d = parseApiDate(iso);
   if (!d) return 0;
   return Math.max(0, Math.floor((Date.now() - d.getTime()) / 3600000));
+}
+
+function asItems<T>(data: T[] | { items?: T[] } | null | undefined): T[] {
+  if (!data) return [];
+  if (Array.isArray(data)) return data;
+  return data.items ?? [];
 }
 
 function canModerate(role: User['role']) {
@@ -576,6 +583,11 @@ function Shell({
           <NavLink to="/audit">
             <span className="nav-ico">≡</span> Лог действий
           </NavLink>
+          {mod && (
+            <NavLink to="/errors">
+              <span className="nav-ico">⚠</span> Сбои приложения
+            </NavLink>
+          )}
           {directory && (
             <NavLink to="/directory">
               <span className="nav-ico">◎</span> Справочник
@@ -1684,6 +1696,68 @@ function AuditPage() {
           </article>
         ))}
         {!items.length && <div className="empty">Записей пока нет</div>}
+      </div>
+    </div>
+  );
+}
+
+function ErrorsPage() {
+  const [items, setItems] = useState<ClientErrorLog[]>([]);
+  const [query, setQuery] = useState('');
+  const [error, setError] = useState('');
+
+  async function load(q = query) {
+    try {
+      const qs = q.trim() ? `?q=${encodeURIComponent(q.trim())}` : '';
+      setItems(await api<ClientErrorLog[]>(`/admin/client-errors${qs}`));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    }
+  }
+
+  useEffect(() => {
+    load('').catch(console.error);
+  }, []);
+
+  return (
+    <div>
+      <div className="page-head">
+        <div>
+          <h1>Сбои приложения</h1>
+          <p>Ошибки с телефонов пользователей</p>
+        </div>
+      </div>
+      <div className="toolbar">
+        <input
+          placeholder="Поиск по тексту, модели, версии…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <button className="btn" type="button" onClick={() => load(query)}>
+          Найти
+        </button>
+      </div>
+      {error && <p className="error">{error}</p>}
+      <div className="list">
+        {items.map((row) => (
+          <article key={row.id} className="row-card">
+            <div className="row-main">
+              <h3 className="row-title">{row.message}</h3>
+              <div className="meta">
+                {row.app_version && <span className="chip">{row.app_version}</span>}
+                {(row.device_brand || row.device_model) && (
+                  <span className="chip neutral">
+                    {[row.device_brand, row.device_model].filter(Boolean).join(' ')}
+                  </span>
+                )}
+                {row.screen && <span className="chip neutral">{row.screen}</span>}
+                <span className="chip neutral">{formatDate(row.created_at)}</span>
+              </div>
+              {row.stack && <p className="row-body">{row.stack.slice(0, 800)}</p>}
+            </div>
+          </article>
+        ))}
+        {!items.length && <div className="empty">Сбоев пока нет</div>}
       </div>
     </div>
   );
@@ -2851,12 +2925,12 @@ function EventsPage() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'draft' | 'scheduled' | 'published'>('all');
 
   async function load() {
-    const qs = statusFilter === 'all' ? '' : `?status=${statusFilter}`;
+    const qs = statusFilter === 'all' ? '?limit=500' : `?status=${statusFilter}&limit=500`;
     const [ev, s] = await Promise.all([
-      api<EventItem[]>(`/events${qs}`),
+      api<EventItem[] | { items: EventItem[] }>(`/events${qs}`),
       api<Settlement[]>('/settlements'),
     ]);
-    setItems(ev);
+    setItems(asItems(ev));
     setSettlements(s);
   }
 
@@ -3201,10 +3275,10 @@ function TransportPage() {
 
   async function load() {
     const [routes, s] = await Promise.all([
-      api<TransportRoute[]>('/transport'),
+      api<TransportRoute[] | { items: TransportRoute[] }>('/transport?limit=500'),
       api<Settlement[]>('/settlements'),
     ]);
-    setItems(routes);
+    setItems(asItems(routes));
     setSettlements(s);
   }
 
@@ -3527,10 +3601,10 @@ function NewsPage() {
 
   async function load() {
     const [news, s] = await Promise.all([
-      api<NewsItem[]>('/news'),
+      api<NewsItem[] | { items: NewsItem[] }>('/news?limit=500'),
       api<Settlement[]>('/settlements'),
     ]);
-    setItems(news);
+    setItems(asItems(news));
     setSettlements(s);
   }
 
@@ -4018,13 +4092,13 @@ function EditorialCalendarPage() {
 
   useEffect(() => {
     Promise.all([
-      api<EventItem[]>('/events'),
-      api<NewsItem[]>('/news'),
+      api<EventItem[] | { items: EventItem[] }>('/events?limit=500'),
+      api<NewsItem[] | { items: NewsItem[] }>('/news?limit=500'),
       api<DistrictAlert[]>('/alerts'),
     ])
       .then(([ev, n, a]) => {
-        setEvents(ev);
-        setNews(n);
+        setEvents(asItems(ev));
+        setNews(asItems(n));
         setAlerts(a);
       })
       .catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
@@ -4459,6 +4533,7 @@ export default function App() {
           <Route path="/reports" element={<ReportsPage canListings={canModerate(user!.role)} />} />
         )}
         <Route path="/audit" element={<AuditPage />} />
+        {canModerate(user!.role) && <Route path="/errors" element={<ErrorsPage />} />}
         {canEditDirectory(user!.role) && <Route path="/directory" element={<DirectoryPage />} />}
         {canEditDirectory(user!.role) && <Route path="/events" element={<EventsPage />} />}
         {canEditDirectory(user!.role) && <Route path="/calendar" element={<EditorialCalendarPage />} />}

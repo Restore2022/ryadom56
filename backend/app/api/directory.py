@@ -3,16 +3,18 @@ import re
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, get_optional_user, require_roles
 from app.core.database import get_db
+from app.core.geo import haversine_km, resolve_origin
 from app.models import (
     DirectoryCategory,
     DirectoryFavorite,
     DirectoryItem,
     DirectoryReport,
+    Settlement,
     User,
     UserRole,
 )
@@ -68,7 +70,7 @@ def maps_url(item: DirectoryItem) -> str | None:
     return None
 
 
-def to_out(item: DirectoryItem, favorited_ids: set[int] | None = None) -> DirectoryOut:
+def to_out(item: DirectoryItem, favorited_ids: set[int] | None = None, distance_km: float | None = None) -> DirectoryOut:
     return DirectoryOut(
         id=item.id,
         title=item.title,
@@ -89,6 +91,7 @@ def to_out(item: DirectoryItem, favorited_ids: set[int] | None = None) -> Direct
         view_count=item.view_count or 0,
         created_at=item.created_at,
         updated_at=item.updated_at,
+        distance_km=distance_km,
     )
 
 
@@ -114,6 +117,9 @@ def list_directory(
     category: DirectoryCategory | None = None,
     settlement_id: int | None = None,
     q: str | None = None,
+    sort: str = Query(default="title", pattern="^(title|near)$"),
+    lat: float | None = Query(default=None, ge=-90, le=90),
+    lon: float | None = Query(default=None, ge=-180, le=180),
     limit: int = Query(default=30, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -125,7 +131,10 @@ def list_directory(
         filters.append(DirectoryItem.is_published.is_(True))
     if category:
         filters.append(DirectoryItem.category == category)
-    if settlement_id:
+    origin = resolve_origin(db, lat, lon, settlement_id) if sort == "near" else None
+    if sort == "near" and origin is None:
+        raise HTTPException(status_code=400, detail="Для «рядом» нужны геолокация или выбранное село")
+    if settlement_id and sort != "near":
         filters.append(DirectoryItem.settlement_id == settlement_id)
     if q:
         like = f"%{q.strip()}%"
@@ -140,12 +149,30 @@ def list_directory(
         select(DirectoryItem)
         .options(selectinload(DirectoryItem.settlement))
         .where(*filters)
-        .order_by(DirectoryItem.title)
-        .offset(offset)
-        .limit(limit)
     )
+    if sort == "near" and origin is not None:
+        olat, olon = origin
+        plat = func.coalesce(DirectoryItem.lat, Settlement.lat)
+        plon = func.coalesce(DirectoryItem.lon, Settlement.lon)
+        dist = (plat - olat) * (plat - olat) + (plon - olon) * (plon - olon)
+        stmt = stmt.outerjoin(Settlement, Settlement.id == DirectoryItem.settlement_id).order_by(
+            case((plat.is_(None), 1), else_=0).asc(),
+            dist.asc(),
+            DirectoryItem.title,
+        )
+    else:
+        stmt = stmt.order_by(DirectoryItem.title)
+    stmt = stmt.offset(offset).limit(limit)
     fav_ids = favorite_ids_for(db, user)
-    items = [to_out(r, fav_ids) for r in db.execute(stmt).scalars().all()]
+    items = []
+    for r in db.execute(stmt).scalars().unique().all():
+        dist_km = None
+        if origin is not None:
+            ilat = r.lat if r.lat is not None else (r.settlement.lat if r.settlement else None)
+            ilon = r.lon if r.lon is not None else (r.settlement.lon if r.settlement else None)
+            if ilat is not None and ilon is not None:
+                dist_km = round(haversine_km(origin[0], origin[1], ilat, ilon), 1)
+        items.append(to_out(r, fav_ids, distance_km=dist_km))
     return DirectoryPageOut(items=items, total=total, limit=limit, offset=offset)
 
 

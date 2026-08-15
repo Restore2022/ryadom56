@@ -16,6 +16,7 @@ from app.core.security import hash_password
 from app.models import (
     AuditLog,
     BlacklistEntry,
+    ClientErrorLog,
     DirectoryFavorite,
     DirectoryItem,
     DirectoryReport,
@@ -43,6 +44,7 @@ from app.schemas import (
     BlacklistOut,
     BulkModerateIn,
     CategoryStat,
+    ClientErrorOut,
     DayStat,
     DirectoryReportOut,
     ListingOut,
@@ -1050,3 +1052,25 @@ def audit_log(
         )
         for r in rows
     ]
+
+
+@router.get("/client-errors", response_model=list[ClientErrorOut])
+def list_client_errors(
+    q: str | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(UserRole.admin, UserRole.moderator)),
+):
+    stmt = select(ClientErrorLog).order_by(ClientErrorLog.created_at.desc()).limit(limit)
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        stmt = stmt.where(
+            or_(
+                ClientErrorLog.message.ilike(like),
+                ClientErrorLog.stack.ilike(like),
+                ClientErrorLog.device_model.ilike(like),
+                ClientErrorLog.app_version.ilike(like),
+                ClientErrorLog.screen.ilike(like),
+            )
+        )
+    return db.execute(stmt).scalars().all()

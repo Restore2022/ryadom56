@@ -12,6 +12,16 @@ import '../biometric_service.dart';
 import '../pin_storage.dart';
 import '../push_service.dart';
 
+({List<dynamic> items, int total}) parsePage(dynamic data) {
+  if (data is Map) {
+    final items = (data['items'] as List<dynamic>?) ?? [];
+    final total = (data['total'] as num?)?.toInt() ?? items.length;
+    return (items: items, total: total);
+  }
+  final items = data is List ? List<dynamic>.from(data) : <dynamic>[];
+  return (items: items, total: items.length);
+}
+
 class AppState extends ChangeNotifier {
   AppState(this.api) {
     api.onUnauthorized = _handleUnauthorized;
@@ -54,6 +64,8 @@ class AppState extends ChangeNotifier {
   int? filterSettlementId;
   String filterQuery = '';
   String sort = 'newest';
+  double? nearLat;
+  double? nearLon;
   bool filterHasPhotos = false;
   double? filterPriceMin;
   double? filterPriceMax;
@@ -65,6 +77,9 @@ class AppState extends ChangeNotifier {
   String? directoryCategory;
   int? directorySettlementId;
   String directoryQuery = '';
+  String directorySort = 'title';
+  double? directoryNearLat;
+  double? directoryNearLon;
   bool directoryLoading = false;
 
   static const offlineMessage = ApiClient.offlineMessage;
@@ -416,17 +431,17 @@ class AppState extends ChangeNotifier {
       if (filterHasPhotos) params['has_photos'] = 'true';
       if (filterPriceMin != null) params['price_min'] = '${filterPriceMin!}';
       if (filterPriceMax != null) params['price_max'] = '${filterPriceMax!}';
+      if (sort == 'near') {
+        if (nearLat != null && nearLon != null) {
+          params['lat'] = '$nearLat';
+          params['lon'] = '$nearLon';
+        }
+      }
       final qs = params.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&');
       final data = await api.request('/listings?$qs', auth: true);
-      List<dynamic> items;
-      int total;
-      if (data is Map) {
-        items = (data['items'] as List<dynamic>?) ?? [];
-        total = (data['total'] as num?)?.toInt() ?? items.length;
-      } else {
-        items = data as List<dynamic>;
-        total = items.length;
-      }
+      final page = parsePage(data);
+      final items = page.items;
+      final total = page.total;
       if (append) {
         listings = [...listings, ...items];
       } else {
@@ -468,21 +483,20 @@ class AppState extends ChangeNotifier {
       final params = <String, String>{
         'limit': '$directoryPageSize',
         'offset': '$offset',
+        'sort': directorySort,
       };
       if (directoryCategory != null) params['category'] = directoryCategory!;
       if (directorySettlementId != null) params['settlement_id'] = '$directorySettlementId';
       if (directoryQuery.trim().isNotEmpty) params['q'] = directoryQuery.trim();
+      if (directorySort == 'near' && directoryNearLat != null && directoryNearLon != null) {
+        params['lat'] = '$directoryNearLat';
+        params['lon'] = '$directoryNearLon';
+      }
       final qs = params.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&');
       final data = await api.request('/directory?$qs', auth: true);
-      List<dynamic> items;
-      int total;
-      if (data is Map) {
-        items = (data['items'] as List<dynamic>?) ?? [];
-        total = (data['total'] as num?)?.toInt() ?? items.length;
-      } else {
-        items = data as List<dynamic>;
-        total = items.length;
-      }
+      final page = parsePage(data);
+      final items = page.items;
+      final total = page.total;
       if (append) {
         directory = [...directory, ...items];
       } else {
@@ -531,24 +545,33 @@ class AppState extends ChangeNotifier {
     return await api.request('/directory/$id') as Map<String, dynamic>;
   }
 
-  Future<List<dynamic>> loadNews({int? settlementId, bool useCacheOnError = true}) async {
-    final params = <String, String>{};
+  Future<({List<dynamic> items, int total})> loadNews({
+    int? settlementId,
+    bool useCacheOnError = true,
+    int offset = 0,
+    int limit = 20,
+  }) async {
+    final params = <String, String>{
+      'limit': '$limit',
+      'offset': '$offset',
+    };
     if (settlementId != null) params['settlement_id'] = '$settlementId';
     final qs = params.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&');
-    final path = qs.isEmpty ? '/news' : '/news?$qs';
+    final path = '/news?$qs';
     try {
-      final rows = await api.request(path) as List<dynamic>;
-      await _saveNewsCache(settlementId, rows);
+      final data = await api.request(path);
+      final page = parsePage(data);
+      if (offset == 0) await _saveNewsCache(settlementId, page.items);
       lastNewsFromCache = false;
       notifyListeners();
-      return rows;
+      return page;
     } catch (e) {
       if (!useCacheOnError) rethrow;
       final cached = await _loadNewsCache(settlementId);
       if (cached != null) {
         lastNewsFromCache = true;
         notifyListeners();
-        return cached;
+        return (items: cached, total: cached.length);
       }
       lastNewsFromCache = false;
       rethrow;
@@ -574,14 +597,23 @@ class AppState extends ChangeNotifier {
     return [];
   }
 
-  Future<List<dynamic>> loadEvents({bool? upcoming, String? q, int? settlementId}) async {
-    final params = <String, String>{};
+  Future<({List<dynamic> items, int total})> loadEvents({
+    bool? upcoming,
+    String? q,
+    int? settlementId,
+    int offset = 0,
+    int limit = 20,
+  }) async {
+    final params = <String, String>{
+      'limit': '$limit',
+      'offset': '$offset',
+    };
     if (upcoming != null) params['upcoming'] = upcoming ? '1' : '0';
     if (settlementId != null) params['settlement_id'] = '$settlementId';
     if (q != null && q.trim().isNotEmpty) params['q'] = q.trim();
     final qs = params.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&');
-    final path = qs.isEmpty ? '/events' : '/events?$qs';
-    return await api.request(path) as List<dynamic>;
+    final data = await api.request('/events?$qs');
+    return parsePage(data);
   }
 
   Future<Map<String, dynamic>> getEvent(int id) async {
@@ -602,27 +634,35 @@ class AppState extends ChangeNotifier {
     }
   }
 
-  Future<List<dynamic>> loadTransport({
+  Future<({List<dynamic> items, int total})> loadTransport({
     String? q,
     int? settlementId,
     String? day,
     bool favoritesOnly = false,
     bool useCacheOnError = true,
+    int offset = 0,
+    int limit = 20,
   }) async {
-    final params = <String, String>{};
+    final params = <String, String>{
+      'limit': '$limit',
+      'offset': '$offset',
+    };
     if (settlementId != null) params['settlement_id'] = '$settlementId';
     if (q != null && q.trim().isNotEmpty) params['q'] = q.trim();
     if (day != null && day.isNotEmpty) params['day'] = day;
     if (favoritesOnly) params['favorites_only'] = 'true';
     final qs = params.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&');
-    final path = qs.isEmpty ? '/transport' : '/transport?$qs';
+    final path = '/transport?$qs';
     try {
-      final rows = await api.request(path, auth: true) as List<dynamic>;
-      _syncTransportFavoriteIds(rows);
-      if (settlementId != null) await _saveTransportCache(settlementId, day ?? 'today', favoritesOnly, rows);
+      final data = await api.request(path, auth: true);
+      final page = parsePage(data);
+      _syncTransportFavoriteIds(page.items);
+      if (offset == 0 && settlementId != null) {
+        await _saveTransportCache(settlementId, day ?? 'today', favoritesOnly, page.items);
+      }
       lastTransportFromCache = false;
       notifyListeners();
-      return rows;
+      return page;
     } catch (e) {
       if (!useCacheOnError || settlementId == null) rethrow;
       final cached = await _loadTransportCache(settlementId, day ?? 'today', favoritesOnly);
@@ -630,7 +670,7 @@ class AppState extends ChangeNotifier {
         _syncTransportFavoriteIds(cached);
         lastTransportFromCache = true;
         notifyListeners();
-        return cached;
+        return (items: cached, total: cached.length);
       }
       lastTransportFromCache = false;
       rethrow;
@@ -707,7 +747,13 @@ class AppState extends ChangeNotifier {
       filterSettlementId = settlementId;
     }
     if (query != null) filterQuery = query;
-    if (sortBy != null) sort = sortBy;
+    if (sortBy != null) {
+      sort = sortBy;
+      if (sortBy != 'near') {
+        nearLat = null;
+        nearLon = null;
+      }
+    }
     if (hasPhotos != null) filterHasPhotos = hasPhotos;
     if (clearPriceMin) {
       filterPriceMin = null;
@@ -721,6 +767,33 @@ class AppState extends ChangeNotifier {
     }
     await _persistFilters();
     await loadListings();
+  }
+
+  Future<void> setNearOrigin({double? lat, double? lon, bool enabled = true}) async {
+    if (enabled) {
+      sort = 'near';
+      nearLat = lat;
+      nearLon = lon;
+    } else if (sort == 'near') {
+      sort = 'newest';
+      nearLat = null;
+      nearLon = null;
+    }
+    await _persistFilters();
+    await loadListings();
+  }
+
+  Future<void> setDirectoryNear({double? lat, double? lon, bool enabled = true}) async {
+    if (enabled) {
+      directorySort = 'near';
+      directoryNearLat = lat;
+      directoryNearLon = lon;
+    } else {
+      directorySort = 'title';
+      directoryNearLat = null;
+      directoryNearLon = null;
+    }
+    await loadDirectory();
   }
 
   Future<void> setListingFilters({
@@ -752,6 +825,9 @@ class AppState extends ChangeNotifier {
       filterSettlementId = (map['settlement_id'] as num?)?.toInt();
       filterQuery = map['query'] as String? ?? '';
       sort = map['sort'] as String? ?? 'newest';
+      if (sort == 'near' && filterSettlementId == null) {
+        sort = 'newest';
+      }
       filterHasPhotos = map['has_photos'] == true;
       filterPriceMin = (map['price_min'] as num?)?.toDouble();
       filterPriceMax = (map['price_max'] as num?)?.toDouble();

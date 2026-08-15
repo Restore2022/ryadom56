@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, get_optional_user, require_roles
 from app.core.database import get_db
+from app.core.geo import haversine_km, resolve_origin
 from app.models import (
     Favorite,
     Listing,
@@ -15,6 +16,7 @@ from app.models import (
     ListingMessage,
     ListingReport,
     ListingStatus,
+    Settlement,
     User,
     UserRole,
 )
@@ -136,6 +138,7 @@ def to_out(
     favorited_ids: set[int] | None = None,
     viewer: User | None = None,
     reveal_phone: bool = False,
+    distance_km: float | None = None,
 ) -> ListingOut:
     images = [
         ListingImageOut(id=img.id, url=image_url(img.path), sort_order=img.sort_order)
@@ -171,6 +174,7 @@ def to_out(
         is_favorited=bool(favorited_ids and item.id in favorited_ids),
         created_at=item.created_at,
         updated_at=item.updated_at,
+        distance_km=distance_km,
     )
 
 
@@ -393,12 +397,14 @@ def list_listings(
     category: ListingCategory | None = None,
     settlement_id: int | None = None,
     q: str | None = None,
-    sort: str = Query(default="newest", pattern="^(newest|oldest|price_asc|price_desc)$"),
+    sort: str = Query(default="newest", pattern="^(newest|oldest|price_asc|price_desc|near)$"),
     mine: bool = False,
     author_id: int | None = None,
     has_photos: bool | None = None,
     price_min: float | None = Query(default=None, ge=0),
     price_max: float | None = Query(default=None, ge=0),
+    lat: float | None = Query(default=None, ge=-90, le=90),
+    lon: float | None = Query(default=None, ge=-180, le=180),
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -419,9 +425,13 @@ def list_listings(
         stmt = stmt.where(Listing.status == ListingStatus.approved)
         if author_id is not None:
             stmt = stmt.where(Listing.author_id == author_id)
+    origin = resolve_origin(db, lat, lon, settlement_id) if sort == "near" else None
+    if sort == "near" and origin is None:
+        raise HTTPException(status_code=400, detail="Для «рядом» нужны геолокация или выбранное село")
+    near_filter_settlement = False if sort == "near" else True
     if category:
         stmt = stmt.where(Listing.category == category)
-    if settlement_id:
+    if settlement_id and near_filter_settlement:
         stmt = stmt.where(Listing.settlement_id == settlement_id)
     if q:
         like = f"%{q.strip()}%"
@@ -435,7 +445,16 @@ def list_listings(
     if price_max is not None:
         stmt = stmt.where(Listing.price.is_not(None), Listing.price <= price_max)
     price_nulls = case((Listing.price.is_(None), 1), else_=0)
-    if sort == "oldest":
+    if sort == "near" and origin is not None:
+        olat, olon = origin
+        dist = (Settlement.lat - olat) * (Settlement.lat - olat) + (Settlement.lon - olon) * (Settlement.lon - olon)
+        stmt = stmt.join(Settlement, Settlement.id == Listing.settlement_id).order_by(
+            Listing.is_pinned.desc(),
+            case((Settlement.lat.is_(None), 1), else_=0).asc(),
+            dist.asc(),
+            Listing.created_at.desc(),
+        )
+    elif sort == "oldest":
         stmt = stmt.order_by(Listing.is_pinned.desc(), Listing.created_at.asc())
     elif sort == "price_asc":
         stmt = stmt.order_by(Listing.is_pinned.desc(), price_nulls.asc(), Listing.price.asc(), Listing.created_at.desc())
@@ -453,7 +472,7 @@ def list_listings(
             count_stmt = count_stmt.where(Listing.author_id == author_id)
     if category:
         count_stmt = count_stmt.where(Listing.category == category)
-    if settlement_id:
+    if settlement_id and near_filter_settlement:
         count_stmt = count_stmt.where(Listing.settlement_id == settlement_id)
     if q:
         like = f"%{q.strip()}%"
@@ -470,7 +489,12 @@ def list_listings(
 
     stmt = stmt.offset(offset).limit(limit)
     fav_ids = favorite_ids_for(db, user)
-    items = [to_out(r, fav_ids, viewer=user) for r in db.execute(stmt).scalars().unique().all()]
+    items = []
+    for r in db.execute(stmt).scalars().unique().all():
+        dist_km = None
+        if origin is not None and r.settlement is not None and r.settlement.lat is not None and r.settlement.lon is not None:
+            dist_km = round(haversine_km(origin[0], origin[1], r.settlement.lat, r.settlement.lon), 1)
+        items.append(to_out(r, fav_ids, viewer=user, distance_km=dist_km))
     return ListingPageOut(items=items, total=total, limit=limit, offset=offset)
 
 
