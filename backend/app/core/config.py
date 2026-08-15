@@ -11,6 +11,8 @@ class Settings(BaseSettings):
         "http://localhost:5173",
         "http://127.0.0.1:5173",
         "http://localhost:3000",
+        "https://legac.ru",
+        "https://www.legac.ru",
     ]
     admin_email: str = "admin@ryadom56.ru"
     admin_password: str = "admin123"

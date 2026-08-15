@@ -46,8 +46,8 @@ flutter run
 
 > `flutter create .` один раз дописывает android/ios-обвязку к уже готовому `lib/`.
 
-**API URL в эмуляторе:** `http://10.0.2.2:8000/api` (уже в коде).  
-**На реальном телефоне:** укажите IP вашего ПК в LAN (в `lib/main.dart` / SharedPreferences `api_base`).
+**API URL на телефоне:** `https://legac.ru/api` (собирается через GitHub Actions).  
+**Локально / эмулятор:** `http://10.0.2.2:8000/api`.
 
 ## Что уже есть
 
@@ -72,6 +72,6 @@ flutter run
 
 ## Важно
 
-- Пока всё локально, без домена.
-- Пароль админа смените перед любой внешней раздачей.
+- Прод: домен **legac.ru**, API `https://legac.ru/api`.
+- Пароль админа смените перед широкой раздачей.
 - `secret_key` в `backend/app/core/config.py` — только для разработки.

@@ -79,7 +79,7 @@ jobs:
           } > android/key.properties
 
       - name: Build release APK
-        run: flutter build apk --release --no-tree-shake-icons --dart-define=API_BASE=http://155.212.174.201:8080/api
+        run: flutter build apk --release --no-tree-shake-icons --dart-define=API_BASE=https://legac.ru/api
 
       - name: Upload APK
         uses: actions/upload-artifact@v4

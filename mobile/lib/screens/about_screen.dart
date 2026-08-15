@@ -8,6 +8,8 @@ import 'home_shell.dart';
 import 'legal_doc_screen.dart';
 
 const supportPhone = '+79083211801';
+const supportEmail = 'info@legac.ru';
+const publicSite = 'https://legac.ru';
 
 class AboutScreen extends StatefulWidget {
   const AboutScreen({super.key});
@@ -31,6 +33,15 @@ class _AboutScreenState extends State<AboutScreen> {
   Future<void> _call() async {
     final uri = Uri(scheme: 'tel', path: supportPhone);
     await launchUrl(uri);
+  }
+
+  Future<void> _mail() async {
+    final uri = Uri(scheme: 'mailto', path: supportEmail);
+    await launchUrl(uri);
+  }
+
+  Future<void> _openSite() async {
+    await launchUrl(Uri.parse(publicSite), mode: LaunchMode.externalApplication);
   }
 
   Future<void> _checkUpdates() async {
@@ -108,6 +119,68 @@ class _AboutScreenState extends State<AboutScreen> {
               ),
             ),
           ),
+          const SizedBox(height: 10),
+          Material(
+            color: Theme.of(context).cardTheme.color,
+            borderRadius: BorderRadius.circular(16),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(16),
+              onTap: _mail,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Icon(Icons.mail_outline, color: scheme.primary),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Почта', style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12)),
+                          Text(
+                            supportEmail,
+                            style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 18),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Icon(Icons.chevron_right, color: scheme.primary),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 10),
+          Material(
+            color: Theme.of(context).cardTheme.color,
+            borderRadius: BorderRadius.circular(16),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(16),
+              onTap: _openSite,
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Icon(Icons.language, color: scheme.primary),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text('Сайт', style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12)),
+                          Text(
+                            'legac.ru',
+                            style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 18),
+                          ),
+                        ],
+                      ),
+                    ),
+                    Icon(Icons.chevron_right, color: scheme.primary),
+                  ],
+                ),
+              ),
+            ),
+          ),
           const SizedBox(height: 28),
           Text('Документы', style: GoogleFonts.unbounded(fontSize: 18, fontWeight: FontWeight.w600)),
           const SizedBox(height: 8),
@@ -140,7 +213,7 @@ class _AboutScreenState extends State<AboutScreen> {
           ),
           const SizedBox(height: 16),
           Text(
-            'Нажмите на номер, чтобы позвонить.',
+            'Нажмите телефон, почту или сайт — откроется звонок, письмо или браузер.',
             style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
           ),
         ],

@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <network-security-config>
-    <!-- LAN API during MVP; switch to HTTPS-only when domain is ready -->
+    <!-- HTTPS на legac.ru; cleartext оставлен для http-ссылок справочника -->
     <base-config cleartextTrafficPermitted="true">
         <trust-anchors>
             <certificates src="system" />

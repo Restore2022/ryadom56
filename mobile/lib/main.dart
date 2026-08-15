@@ -21,20 +21,29 @@ import 'theme.dart';
 
 final GlobalKey<NavigatorState> appNavigatorKey = GlobalKey<NavigatorState>();
 
+bool _isStaleApiBase(String apiBase) {
+  final u = apiBase.toLowerCase();
+  return u.contains('192.168.') ||
+      u.contains('127.0.0.1') ||
+      u.contains('localhost') ||
+      u.contains('10.0.2.2') ||
+      u.contains('10.0.3.2') ||
+      u.contains('155.212.174.201') ||
+      u.startsWith('http://legac.ru') ||
+      u.contains('www.legac.ru');
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await PushService.instance.init();
   final prefs = await SharedPreferences.getInstance();
   const fromBuild = String.fromEnvironment(
     'API_BASE',
-    defaultValue: 'http://155.212.174.201:8080/api',
+    defaultValue: kProductionApiBase,
   );
   var apiBase = prefs.getString('api_base') ?? fromBuild;
-  // Сбрасываем старые локальные адреса (LAN / localhost)
-  if (apiBase.contains('192.168.') ||
-      apiBase.contains('127.0.0.1') ||
-      apiBase.contains('localhost') ||
-      apiBase.contains('10.0.')) {
+  // LAN / старый IP:8080 / http без TLS — на прод-домен
+  if (_isStaleApiBase(apiBase)) {
     apiBase = fromBuild;
   }
   await prefs.setString('api_base', apiBase);

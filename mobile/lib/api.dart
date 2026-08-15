@@ -17,10 +17,12 @@ class ApiException implements Exception {
   String toString() => message;
 }
 
-class ApiClient {
-  ApiClient({this.baseUrl = 'http://155.212.174.201:8080/api'});
+const kProductionApiBase = 'https://legac.ru/api';
 
-  /// На телефоне: IP ПК в Wi‑Fi. В эмуляторе: http://10.0.2.2:8000/api
+class ApiClient {
+  ApiClient({this.baseUrl = kProductionApiBase});
+
+  /// Прод: https://legac.ru/api. Локально: http://10.0.2.2:8000/api
   final String baseUrl;
   void Function()? onUnauthorized;
 
