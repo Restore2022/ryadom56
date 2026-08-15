@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
+import '../time_format.dart';
 import '../ui_helpers.dart';
 
 class DeviceSessionsScreen extends StatefulWidget {
@@ -52,13 +53,7 @@ class _DeviceSessionsScreenState extends State<DeviceSessionsScreen> {
   }
 
   String _when(Map<String, dynamic> row) {
-    final raw = (row['last_seen_at'] ?? row['created_at'])?.toString();
-    if (raw == null || raw.isEmpty) return '';
-    final dt = DateTime.tryParse(raw);
-    if (dt == null) return raw;
-    final local = dt.toLocal();
-    String two(int n) => n.toString().padLeft(2, '0');
-    return '${two(local.day)}.${two(local.month)}.${local.year} ${two(local.hour)}:${two(local.minute)}';
+    return formatApiDateTime((row['last_seen_at'] ?? row['created_at'])?.toString(), sep: ' ');
   }
 
   Future<void> _revokeAll({required bool othersOnly}) async {

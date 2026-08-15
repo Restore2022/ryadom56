@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../auth_prompt.dart';
 import '../state/app_state.dart';
+import '../time_format.dart';
 import '../ui_helpers.dart';
 
 class ListingChatScreen extends StatefulWidget {
@@ -119,11 +120,7 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
   }
 
   String _fmtTime(String? iso) {
-    if (iso == null || iso.isEmpty) return '';
-    final dt = DateTime.tryParse(iso)?.toLocal();
-    if (dt == null) return '';
-    return '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}'
-        ' ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    return formatApiDateTime(iso, sep: ' ');
   }
 
   @override

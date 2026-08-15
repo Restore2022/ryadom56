@@ -35,8 +35,9 @@ function needsModeration(item: Listing) {
 }
 
 function hoursWaiting(iso: string) {
-  const ms = Date.now() - new Date(iso).getTime();
-  return Math.max(0, Math.floor(ms / 3600000));
+  const d = parseApiDate(iso);
+  if (!d) return 0;
+  return Math.max(0, Math.floor((Date.now() - d.getTime()) / 3600000));
 }
 
 function canModerate(role: User['role']) {
@@ -215,10 +216,26 @@ const REPORT_STATUS_LABEL: Record<string, string> = {
   dismissed: 'Отклонена',
 };
 
+function parseApiDate(value?: string | null): Date | null {
+  if (!value) return null;
+  let s = value.trim();
+  if (!s) return null;
+  s = s.replace(' ', 'T');
+  if (!/[zZ]|[+-]\d{2}:?\d{2}$/.test(s)) s = `${s}Z`;
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+function localDateKey(value?: string | null) {
+  const d = parseApiDate(value ?? null);
+  if (!d) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
 function toDatetimeLocal(value?: string | null) {
-  if (!value) return '';
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return '';
+  const d = parseApiDate(value ?? null);
+  if (!d) return '';
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
@@ -228,12 +245,9 @@ function fromDatetimeLocal(value: string): string {
 }
 
 function formatDate(value?: string | null) {
-  if (!value) return '—';
-  try {
-    return new Date(value).toLocaleString('ru-RU');
-  } catch {
-    return value;
-  }
+  const d = parseApiDate(value ?? null);
+  if (!d) return value ? value : '—';
+  return d.toLocaleString('ru-RU');
 }
 
 function useTheme() {
@@ -2165,7 +2179,7 @@ function ChatsModerationPage() {
                   <div className="row-main">
                     <div className="meta">
                       <strong>{m.sender_name || `#${m.sender_id}`}</strong>
-                      <span className="chip neutral">{new Date(m.created_at).toLocaleString('ru-RU')}</span>
+                      <span className="chip neutral">{formatDate(m.created_at)}</span>
                       {m.flagged && <span className="chip danger">Флаг</span>}
                     </div>
                     <p style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap' }}>{m.body}</p>
@@ -2305,8 +2319,11 @@ function UsersPage() {
   const [form, setForm] = useState(emptyForm);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [pushBusy, setPushBusy] = useState(false);
   const [query, setQuery] = useState('');
   const [suspicious, setSuspicious] = useState(false);
+  const [pushTitle, setPushTitle] = useState('Рядом56');
+  const [pushBody, setPushBody] = useState('');
 
   async function load() {
     const params = new URLSearchParams();
@@ -2348,6 +2365,8 @@ function UsersPage() {
       ...emptyForm,
       settlement_id: settlements[0]?.id || 0,
     });
+    setPushTitle('Рядом56');
+    setPushBody('');
     setError('');
   }
 
@@ -2371,6 +2390,8 @@ function UsersPage() {
       password2: '',
       badge: u.badge || '',
     });
+    setPushTitle('Рядом56');
+    setPushBody('');
     setError('');
   }
 
@@ -2453,6 +2474,33 @@ function UsersPage() {
     }
   }
 
+  async function sendPush() {
+    if (!selected || creating || busy || pushBusy) return;
+    const text = pushBody.trim();
+    if (!text) {
+      setError('Напишите текст пуша');
+      return;
+    }
+    if (!(await confirmAction(`Отправить пуш «${selected.full_name}»?`))) return;
+    setPushBusy(true);
+    setError('');
+    try {
+      const res = await api<{ ok?: boolean; devices?: number; message?: string }>(
+        `/admin/users/${selected.id}/push`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ title: pushTitle.trim() || 'Рядом56', body: text }),
+        },
+      );
+      pushToast(res.message || 'Сообщение отправлено');
+      setPushBody('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка отправки');
+    } finally {
+      setPushBusy(false);
+    }
+  }
+
   return (
     <div>
       <div className="page-head compact">
@@ -2501,6 +2549,7 @@ function UsersPage() {
                 <span className="chip">{ROLE_LABELS[u.role]}</span>
                 {u.badge ? <span className="chip neutral">{BADGE_LABELS[u.badge] || u.badge}</span> : null}
                 {!u.is_active && <span className="chip danger">Заблокирован</span>}
+                {u.has_push ? <span className="chip ok">Пуш</span> : <span className="chip neutral">Без пуша</span>}
               </div>
               <div className="device-grid">
                 <div>
@@ -2666,6 +2715,41 @@ function UsersPage() {
                     {selected.device_info}
                   </p>
                 )}
+              </div>
+              )}
+
+              {selected && !creating && (
+              <div className="panel" style={{ marginTop: 16, marginBottom: 0, padding: 14 }}>
+                <h3 style={{ margin: '0 0 10px', fontSize: 15 }}>Пуш этому пользователю</h3>
+                <p className="muted" style={{ margin: '0 0 10px' }}>
+                  {selected.has_push
+                    ? 'Токен есть — уйдёт на телефон и в колокольчик приложения.'
+                    : 'Токена нет: в колокольчик запишется, на телефон не придёт, пока человек не откроет приложение с пушами.'}
+                </p>
+                <label className="field">
+                  Заголовок
+                  <input
+                    maxLength={80}
+                    value={pushTitle}
+                    onChange={(e) => setPushTitle(e.target.value)}
+                    placeholder="Рядом56"
+                  />
+                </label>
+                <label className="field" style={{ marginTop: 10 }}>
+                  Текст
+                  <textarea
+                    rows={3}
+                    maxLength={400}
+                    value={pushBody}
+                    onChange={(e) => setPushBody(e.target.value)}
+                    placeholder="Короткое сообщение на телефон"
+                  />
+                </label>
+                <div style={{ marginTop: 12 }}>
+                  <button className="btn" type="button" disabled={busy || pushBusy} onClick={() => sendPush().catch(console.error)}>
+                    {pushBusy ? 'Отправка…' : 'Отправить пуш'}
+                  </button>
+                </div>
               </div>
               )}
 
@@ -3953,9 +4037,9 @@ function EditorialCalendarPage() {
 
   function itemsForDay(day: number) {
     const key = `${year}-${String(mon + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    const dayEvents = events.filter((e) => (e.publish_at || e.starts_at || '').startsWith(key));
-    const dayNews = news.filter((n) => (n.published_at || n.created_at || '').startsWith(key));
-    const dayAlerts = alerts.filter((a) => (a.starts_at || a.created_at || '').startsWith(key));
+    const dayEvents = events.filter((e) => localDateKey(e.publish_at || e.starts_at) === key);
+    const dayNews = news.filter((n) => localDateKey(n.published_at || n.created_at) === key);
+    const dayAlerts = alerts.filter((a) => localDateKey(a.starts_at || a.created_at) === key);
     return { dayEvents, dayNews, dayAlerts };
   }
 

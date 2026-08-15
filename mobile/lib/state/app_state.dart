@@ -8,6 +8,7 @@ import 'package:package_info_plus/package_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../api.dart';
+import '../biometric_service.dart';
 import '../pin_storage.dart';
 import '../push_service.dart';
 
@@ -21,6 +22,9 @@ class AppState extends ChangeNotifier {
   bool darkMode = false;
   bool hasPin = false;
   bool pinUnlocked = false;
+  bool biometricsEnabled = false;
+  bool biometricsAvailable = false;
+  String biometricsLabel = 'биометрии';
   Map<String, dynamic>? user;
   List<dynamic> settlements = [];
   List<dynamic> listings = [];
@@ -202,6 +206,7 @@ class AppState extends ChangeNotifier {
       preferredSettlementId = prefs.getInt(_settlementPrefKey);
       hasPin = await PinStorage.hasPin();
       _hasPinSession = (await PinStorage.readSessionToken()) != null;
+      await refreshBiometricsState();
       await _loadSavedFilters(prefs);
       await _loadViewHistory(prefs);
       try {
@@ -247,9 +252,47 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  Future<void> refreshBiometricsState() async {
+    biometricsAvailable = await BiometricService.isAvailable();
+    biometricsEnabled = await PinStorage.biometricsEnabled();
+    if (biometricsAvailable) {
+      biometricsLabel = await BiometricService.label();
+    } else {
+      biometricsLabel = 'биометрии';
+    }
+  }
+
+  Future<void> setBiometricsEnabled(bool enabled) async {
+    await PinStorage.setBiometricsEnabled(enabled);
+    biometricsEnabled = enabled;
+    notifyListeners();
+  }
+
+  Future<void> verifyAccountPassword(String password) async {
+    var token = await api.token;
+    token ??= await PinStorage.readSessionToken();
+    if (token != null && token.isNotEmpty) {
+      await api.setToken(token);
+    }
+    await api.request('/auth/verify-password', method: 'POST', auth: true, body: {
+      'password': password,
+    });
+  }
+
   Future<bool> unlockWithPin(String pin) async {
     final ok = await PinStorage.verifyPin(pin);
     if (!ok) return false;
+    return _restoreSessionAfterLocalUnlock();
+  }
+
+  Future<bool> unlockWithBiometrics() async {
+    if (!await PinStorage.biometricsEnabled()) return false;
+    final ok = await BiometricService.authenticate();
+    if (!ok) return false;
+    return _restoreSessionAfterLocalUnlock();
+  }
+
+  Future<bool> _restoreSessionAfterLocalUnlock() async {
     var token = await api.token;
     token ??= await PinStorage.readSessionToken();
     if (token == null || token.isEmpty) {
@@ -1074,6 +1117,16 @@ class AppState extends ChangeNotifier {
     ) as Map<String, dynamic>;
     notifyListeners();
     return user!;
+  }
+
+  Future<void> uploadAvatar(String filePath) async {
+    user = await api.uploadAvatar(filePath);
+    notifyListeners();
+  }
+
+  Future<void> deleteAvatar() async {
+    user = await api.request('/auth/me/avatar', method: 'DELETE', auth: true) as Map<String, dynamic>;
+    notifyListeners();
   }
 
   Future<Map<String, dynamic>> closeListing(int id, {required String reason, String? note}) async {

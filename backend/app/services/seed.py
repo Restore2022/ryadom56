@@ -32,6 +32,7 @@ USER_COLUMNS = {
     "badge": "VARCHAR(40)",
     "rating_score": "FLOAT",
     "token_version": "INTEGER DEFAULT 0",
+    "avatar_path": "VARCHAR(255)",
 }
 
 LISTING_COLUMNS = {
@@ -90,6 +91,7 @@ def init_db() -> None:
     Path("data/uploads").mkdir(parents=True, exist_ok=True)
     Path("data/uploads/events").mkdir(parents=True, exist_ok=True)
     Path("data/uploads/news").mkdir(parents=True, exist_ok=True)
+    Path("data/uploads/avatars").mkdir(parents=True, exist_ok=True)
     Path("data/releases").mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)
     _migrate_user_columns()

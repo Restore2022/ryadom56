@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../event_actions.dart';
 import '../state/app_state.dart';
+import '../time_format.dart';
 import '../ui_helpers.dart';
 
 class EventDetailScreen extends StatefulWidget {
@@ -55,12 +56,9 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
   }
 
   String _fmt(String? iso, {bool withTime = true}) {
-    if (iso == null || iso.isEmpty) return '—';
-    final dt = DateTime.tryParse(iso)?.toLocal();
-    if (dt == null) return iso;
-    final d = '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}';
-    if (!withTime) return d;
-    return '$d, ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+    final dt = parseApiTime(iso);
+    if (dt == null) return iso == null || iso.isEmpty ? '—' : iso;
+    return formatDateTimeLocal(dt, withTime: withTime);
   }
 
   Future<void> _share() async {

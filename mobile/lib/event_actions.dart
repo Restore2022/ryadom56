@@ -8,15 +8,14 @@ import 'package:share_plus/share_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'time_format.dart';
+
 const _remindersKey = 'event_reminders';
 
 String _fmtLocal(String? iso, {bool withTime = true}) {
-  if (iso == null || iso.isEmpty) return '';
-  final dt = DateTime.tryParse(iso)?.toLocal();
-  if (dt == null) return iso;
-  final d = '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}';
-  if (!withTime) return d;
-  return '$d, ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
+  final dt = parseApiTime(iso);
+  if (dt == null) return iso ?? '';
+  return formatDateTimeLocal(dt, withTime: withTime);
 }
 
 String _icsStamp(DateTime dt) {
@@ -56,11 +55,11 @@ Future<void> shareEvent(Map<String, dynamic> event) async {
 
 Future<void> addEventToCalendar(Map<String, dynamic> event) async {
   final title = event['title']?.toString() ?? 'Событие';
-  final starts = DateTime.tryParse(event['starts_at']?.toString() ?? '');
+  final starts = parseApiTime(event['starts_at']?.toString());
   if (starts == null) {
     throw Exception('Не удалось определить дату события');
   }
-  final ends = DateTime.tryParse(event['ends_at']?.toString() ?? '') ?? starts.add(const Duration(hours: 2));
+  final ends = parseApiTime(event['ends_at']?.toString()) ?? starts.add(const Duration(hours: 2));
   final place = [
     event['place_text']?.toString() ?? '',
     event['address']?.toString() ?? '',
@@ -124,7 +123,7 @@ Future<void> _writeReminders(SharedPreferences prefs, List<Map<String, dynamic>>
 Future<String> remindEventTomorrow(Map<String, dynamic> event) async {
   final id = event['id'];
   if (id is! int) throw Exception('Событие без id');
-  final starts = DateTime.tryParse(event['starts_at']?.toString() ?? '')?.toLocal();
+  final starts = parseApiTime(event['starts_at']?.toString());
   if (starts == null) throw Exception('Не удалось определить дату события');
   final remindOn = DateTime(starts.year, starts.month, starts.day).subtract(const Duration(days: 1));
   final today = DateTime.now();
@@ -144,7 +143,7 @@ Future<String> remindEventTomorrow(Map<String, dynamic> event) async {
         '${remindOn.year.toString().padLeft(4, '0')}-${remindOn.month.toString().padLeft(2, '0')}-${remindOn.day.toString().padLeft(2, '0')}',
   });
   await _writeReminders(prefs, items);
-  return _fmtLocal(starts.toIso8601String(), withTime: false);
+  return formatDateTimeLocal(starts, withTime: false);
 }
 
 Future<List<Map<String, dynamic>>> dueEventRemindersToday() async {

@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../auth_prompt.dart';
 import '../state/app_state.dart';
+import '../time_format.dart';
 import '../ui_helpers.dart';
 import 'author_listings_screen.dart';
 import 'create_listing_screen.dart';
@@ -433,7 +434,7 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                           _InfoRow(
                             icon: Icons.schedule_outlined,
                             label: 'Опубликовано',
-                            value: _fmtDate(data['created_at']?.toString()),
+                            value: formatApiDate(data['created_at']?.toString(), empty: '—'),
                           ),
                           if (isOwner && data['status'] == 'rejected' && data['moderation_note'] != null)
                             _InfoRow(
@@ -539,13 +540,6 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
       return price.toStringAsFixed(2);
     }
     return '$price';
-  }
-
-  String _fmtDate(String? iso) {
-    if (iso == null || iso.isEmpty) return '—';
-    final dt = DateTime.tryParse(iso)?.toLocal();
-    if (dt == null) return iso;
-    return '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}';
   }
 }
 

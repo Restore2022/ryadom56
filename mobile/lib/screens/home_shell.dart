@@ -1,13 +1,17 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../auth_prompt.dart';
+import '../biometric_prompt.dart';
+import '../biometric_service.dart';
 import '../event_actions.dart';
 import '../responsive.dart';
 import '../scroll_to_top.dart';
 import '../state/app_state.dart';
+import '../time_format.dart';
 import '../ui_helpers.dart';
 import '../update_service.dart';
 import 'about_screen.dart';
@@ -26,6 +30,7 @@ import 'my_listings_screen.dart';
 import 'my_reports_screen.dart';
 import 'news_list_screen.dart';
 import 'notifications_screen.dart';
+import 'pin_setup_screen.dart';
 import 'transport_detail_screen.dart';
 import 'view_history_screen.dart';
 
@@ -40,6 +45,18 @@ Route<T> fastRoute<T>(Widget page) {
     },
     transitionDuration: const Duration(milliseconds: 180),
     reverseTransitionDuration: const Duration(milliseconds: 140),
+  );
+}
+
+void openAfisha(BuildContext context) {
+  Navigator.push(
+    context,
+    fastRoute(
+      Scaffold(
+        appBar: AppBar(title: const Text('Афиша')),
+        body: const EventsTab(),
+      ),
+    ),
   );
 }
 
@@ -201,32 +218,16 @@ class _HomeShellState extends State<HomeShell> {
     }
   }
 
-  Future<void> _openProfile(BuildContext context) async {
-    await Navigator.push(
-      context,
-      fastRoute(
-        Scaffold(
-          appBar: AppBar(title: const Text('Профиль')),
-          body: const ProfileScreen(),
-        ),
-      ),
-    );
-    if (!context.mounted) return;
-    final state = context.read<AppState>();
-    await state.refreshUnreadNotifications();
-    await state.refreshUnreadChats();
-  }
-
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
-    final titles = ['Объявления', 'Афиша', 'Транспорт', 'Места', 'Чаты'];
+    final titles = ['Объявления', 'Чаты', 'Транспорт', 'Места', 'Профиль'];
     final pages = [
       const _ListingsTab(),
-      const _EventsTab(),
+      const ChatsTab(),
       const _TransportTab(),
       const _DirectoryTab(),
-      const ChatsTab(),
+      const ProfileScreen(),
     ];
     final useRail = context.useNavigationRail;
     final landscape = context.isLandscape;
@@ -237,13 +238,6 @@ class _HomeShellState extends State<HomeShell> {
 
     final destinations = <NavigationDestination>[
       const NavigationDestination(icon: Icon(Icons.storefront_outlined), selectedIcon: Icon(Icons.storefront), label: 'Лента'),
-      const NavigationDestination(icon: Icon(Icons.event_outlined), selectedIcon: Icon(Icons.event), label: 'Афиша'),
-      const NavigationDestination(
-        icon: Icon(Icons.directions_bus_outlined),
-        selectedIcon: Icon(Icons.directions_bus),
-        label: 'Транспорт',
-      ),
-      const NavigationDestination(icon: Icon(Icons.map_outlined), selectedIcon: Icon(Icons.map), label: 'Места'),
       NavigationDestination(
         icon: Badge(
           isLabelVisible: chatBadge,
@@ -257,17 +251,17 @@ class _HomeShellState extends State<HomeShell> {
         ),
         label: 'Чаты',
       ),
+      const NavigationDestination(
+        icon: Icon(Icons.directions_bus_outlined),
+        selectedIcon: Icon(Icons.directions_bus),
+        label: 'Транспорт',
+      ),
+      const NavigationDestination(icon: Icon(Icons.map_outlined), selectedIcon: Icon(Icons.map), label: 'Места'),
+      const NavigationDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: 'Профиль'),
     ];
 
     final railDestinations = [
       const NavigationRailDestination(icon: Icon(Icons.storefront_outlined), selectedIcon: Icon(Icons.storefront), label: Text('Лента')),
-      const NavigationRailDestination(icon: Icon(Icons.event_outlined), selectedIcon: Icon(Icons.event), label: Text('Афиша')),
-      const NavigationRailDestination(
-        icon: Icon(Icons.directions_bus_outlined),
-        selectedIcon: Icon(Icons.directions_bus),
-        label: Text('Транспорт'),
-      ),
-      const NavigationRailDestination(icon: Icon(Icons.map_outlined), selectedIcon: Icon(Icons.map), label: Text('Места')),
       NavigationRailDestination(
         icon: Badge(
           isLabelVisible: chatBadge,
@@ -281,6 +275,13 @@ class _HomeShellState extends State<HomeShell> {
         ),
         label: const Text('Чаты'),
       ),
+      const NavigationRailDestination(
+        icon: Icon(Icons.directions_bus_outlined),
+        selectedIcon: Icon(Icons.directions_bus),
+        label: Text('Транспорт'),
+      ),
+      const NavigationRailDestination(icon: Icon(Icons.map_outlined), selectedIcon: Icon(Icons.map), label: Text('Места')),
+      const NavigationRailDestination(icon: Icon(Icons.person_outline), selectedIcon: Icon(Icons.person), label: Text('Профиль')),
     ];
 
     return Scaffold(
@@ -289,17 +290,18 @@ class _HomeShellState extends State<HomeShell> {
         toolbarHeight: landscape && !context.isTablet ? 48 : kToolbarHeight,
         actions: [
           IconButton(
-            tooltip: 'Подать объявление',
-            onPressed: () => _openCreate(context),
-            icon: const Icon(Icons.add_circle_outline),
-          ),
-          IconButton(
-            tooltip: 'Профиль',
-            onPressed: () => _openProfile(context),
+            tooltip: 'Уведомления',
+            onPressed: () async {
+              final ok = await ensureLoggedIn(context, message: 'Войдите, чтобы видеть уведомления');
+              if (!ok || !context.mounted) return;
+              await Navigator.push(context, fastRoute(const NotificationsScreen()));
+              if (!context.mounted) return;
+              await context.read<AppState>().refreshUnreadNotifications();
+            },
             icon: Badge(
               isLabelVisible: profileBadge,
               label: Text(profileLabel),
-              child: const Icon(Icons.person_outline),
+              child: const Icon(Icons.notifications_outlined),
             ),
           ),
         ],
@@ -317,6 +319,13 @@ class _HomeShellState extends State<HomeShell> {
           Expanded(child: context.constrainContent(pages[index])),
         ],
       ),
+      floatingActionButton: index == 0
+          ? FloatingActionButton(
+              tooltip: 'Подать объявление',
+              onPressed: () => _openCreate(context),
+              child: const Icon(Icons.add),
+            )
+          : null,
       bottomNavigationBar: useRail
           ? null
           : NavigationBar(
@@ -930,14 +939,14 @@ class _ListingCard extends StatelessWidget {
   }
 }
 
-class _EventsTab extends StatefulWidget {
-  const _EventsTab();
+class EventsTab extends StatefulWidget {
+  const EventsTab({super.key});
 
   @override
-  State<_EventsTab> createState() => _EventsTabState();
+  State<EventsTab> createState() => _EventsTabState();
 }
 
-class _EventsTabState extends State<_EventsTab> {
+class _EventsTabState extends State<EventsTab> {
   final scroll = ScrollController();
   List<dynamic> items = [];
   bool loading = true;
@@ -987,14 +996,6 @@ class _EventsTabState extends State<_EventsTab> {
         });
       }
     }
-  }
-
-  String _fmtWhen(String? iso) {
-    if (iso == null || iso.isEmpty) return '';
-    final dt = DateTime.tryParse(iso)?.toLocal();
-    if (dt == null) return '';
-    return '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}'
-        ' · ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
   }
 
   @override
@@ -1128,7 +1129,7 @@ class _EventsTabState extends State<_EventsTab> {
                                         crossAxisAlignment: CrossAxisAlignment.start,
                                         children: [
                                           Text(
-                                            _fmtWhen(item['starts_at']?.toString()),
+                                            formatApiDateTime(item['starts_at']?.toString()),
                                             style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700, fontSize: 12),
                                           ),
                                           const SizedBox(height: 6),
@@ -1985,7 +1986,7 @@ class ProfileScreen extends StatelessWidget {
     final pad = context.isLandscape ? 12.0 : 16.0;
     if (user == null) {
       return ListView(
-        padding: EdgeInsets.all(pad),
+        padding: EdgeInsets.fromLTRB(pad, pad, pad, context.listBottomPad),
         children: [
           Container(
             padding: const EdgeInsets.all(20),
@@ -2026,6 +2027,14 @@ class ProfileScreen extends StatelessWidget {
             child: const Text('Создать аккаунт'),
           ),
           const SizedBox(height: 16),
+          ListTile(
+            leading: const Icon(Icons.event_outlined),
+            title: const Text('Афиша'),
+            subtitle: const Text('События района'),
+            trailing: const Icon(Icons.chevron_right),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            onTap: () => openAfisha(context),
+          ),
           ListTile(
             leading: const Icon(Icons.location_city_outlined),
             title: const Text('Район'),
@@ -2082,7 +2091,7 @@ class ProfileScreen extends StatelessWidget {
       );
     }
     return ListView(
-      padding: EdgeInsets.all(pad),
+      padding: EdgeInsets.fromLTRB(pad, pad, pad, context.listBottomPad),
       children: [
         Container(
           padding: const EdgeInsets.all(20),
@@ -2094,30 +2103,35 @@ class ProfileScreen extends StatelessWidget {
               end: Alignment.bottomRight,
             ),
           ),
-          child: Column(
+          child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text('Рядом56', style: GoogleFonts.unbounded(color: Colors.white, fontSize: 14)),
-              const SizedBox(height: 8),
-              Text(user!['full_name'] as String, style: GoogleFonts.unbounded(color: Colors.white, fontSize: 26)),
-              const SizedBox(height: 6),
-              Text(user!['email'] as String, style: const TextStyle(color: Colors.white70)),
-              if (user!['phone'] != null) Text(user!['phone'] as String, style: const TextStyle(color: Colors.white70)),
+              _ProfileAvatar(user: user),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Рядом56', style: GoogleFonts.unbounded(color: Colors.white, fontSize: 14)),
+                    const SizedBox(height: 8),
+                    Text(user['full_name'] as String, style: GoogleFonts.unbounded(color: Colors.white, fontSize: 24)),
+                    const SizedBox(height: 6),
+                    Text(user['email'] as String, style: const TextStyle(color: Colors.white70)),
+                    if (user['phone'] != null) Text(user['phone'] as String, style: const TextStyle(color: Colors.white70)),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
         const SizedBox(height: 16),
         ListTile(
-          leading: Badge(
-            isLabelVisible: state.unreadNotifications > 0,
-            label: Text('${state.unreadNotifications}'),
-            child: const Icon(Icons.notifications_outlined),
-          ),
-          title: const Text('Уведомления'),
-          subtitle: const Text('Одобрения, отклонения, жалобы'),
+          leading: const Icon(Icons.event_outlined),
+          title: const Text('Афиша'),
+          subtitle: const Text('События района'),
           trailing: const Icon(Icons.chevron_right),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          onTap: () => Navigator.push(context, fastRoute(const NotificationsScreen())),
+          onTap: () => openAfisha(context),
         ),
         ListTile(
           leading: const Icon(Icons.inventory_2_outlined),
@@ -2162,10 +2176,57 @@ class ProfileScreen extends StatelessWidget {
         ListTile(
           leading: const Icon(Icons.manage_accounts_outlined),
           title: const Text('Редактировать профиль'),
-          subtitle: const Text('Имя, телефон, пароль'),
+          subtitle: const Text('Имя, телефон, фото, пароль'),
           trailing: const Icon(Icons.chevron_right),
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           onTap: () => Navigator.push(context, fastRoute(const EditProfileScreen())),
+        ),
+        if (state.biometricsAvailable)
+          SwitchListTile(
+            value: state.biometricsEnabled,
+            title: Text('Вход по ${state.biometricsLabel}'),
+            subtitle: const Text('PIN останется запасным'),
+            secondary: const Icon(Icons.fingerprint),
+            onChanged: (enabled) async {
+              if (enabled) {
+                final by = state.biometricsLabel;
+                final passed = await BiometricService.authenticate(
+                  reason: 'Подтвердите, чтобы включить вход по $by',
+                );
+                if (!passed || !context.mounted) return;
+              }
+              await state.setBiometricsEnabled(enabled);
+            },
+          ),
+        ListTile(
+          leading: const Icon(Icons.pin_outlined),
+          title: const Text('Сменить PIN'),
+          subtitle: const Text('Нужен текущий код'),
+          trailing: const Icon(Icons.chevron_right),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          onTap: () async {
+            final ok = await Navigator.push<bool>(
+              context,
+              fastRoute(const PinSetupScreen(mode: PinSetupMode.change)),
+            );
+            if (ok == true && context.mounted) showAppSnack(context, 'PIN обновлён');
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.lock_reset_outlined),
+          title: const Text('Сбросить PIN'),
+          subtitle: const Text('Через пароль аккаунта'),
+          trailing: const Icon(Icons.chevron_right),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          onTap: () async {
+            final confirmed = await confirmAccountPassword(context, title: 'Сброс PIN');
+            if (!confirmed || !context.mounted) return;
+            final ok = await Navigator.push<bool>(
+              context,
+              fastRoute(const PinSetupScreen(mode: PinSetupMode.reset)),
+            );
+            if (ok == true && context.mounted) showAppSnack(context, 'PIN обновлён');
+          },
         ),
         ListTile(
           leading: const Icon(Icons.phonelink_erase_outlined),
@@ -2228,6 +2289,108 @@ class ProfileScreen extends StatelessWidget {
           child: const Text('Выйти'),
         ),
       ],
+    );
+  }
+}
+
+class _ProfileAvatar extends StatefulWidget {
+  const _ProfileAvatar({required this.user});
+
+  final Map<String, dynamic> user;
+
+  @override
+  State<_ProfileAvatar> createState() => _ProfileAvatarState();
+}
+
+class _ProfileAvatarState extends State<_ProfileAvatar> {
+  bool _busy = false;
+
+  Future<void> _changePhoto() async {
+    if (_busy) return;
+    final hasPhoto = (context.read<AppState>().user?['avatar_url'] ?? widget.user['avatar_url'])
+            ?.toString()
+            .isNotEmpty ==
+        true;
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.photo_camera_outlined),
+                title: const Text('Камера'),
+                onTap: () => Navigator.pop(ctx, 'camera'),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined),
+                title: const Text('Галерея'),
+                onTap: () => Navigator.pop(ctx, 'gallery'),
+              ),
+              if (hasPhoto)
+                ListTile(
+                  leading: Icon(Icons.delete_outline, color: Theme.of(ctx).colorScheme.error),
+                  title: const Text('Убрать фото'),
+                  onTap: () => Navigator.pop(ctx, 'delete'),
+                ),
+            ],
+          ),
+        );
+      },
+    );
+    if (action == null || !mounted) return;
+    setState(() => _busy = true);
+    try {
+      if (action == 'delete') {
+        await context.read<AppState>().deleteAvatar();
+        if (mounted) showAppSnack(context, 'Фото убрано');
+        return;
+      }
+      final source = action == 'camera' ? ImageSource.camera : ImageSource.gallery;
+      final shot = await ImagePicker().pickImage(source: source, imageQuality: 55, maxWidth: 720);
+      if (shot == null || !mounted) return;
+      await context.read<AppState>().uploadAvatar(shot.path);
+      if (mounted) showAppSnack(context, 'Фото обновлено');
+    } catch (e) {
+      if (mounted) showAppSnack(context, AppState.userFriendlyError(e), error: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final state = context.watch<AppState>();
+    final url = state.mediaUrl(widget.user['avatar_url']?.toString() ?? state.user?['avatar_url']?.toString());
+    final name = (state.user?['full_name'] ?? widget.user['full_name'] ?? '?').toString();
+    final letter = name.isNotEmpty ? name.substring(0, 1).toUpperCase() : '?';
+    return GestureDetector(
+      onTap: _busy ? null : _changePhoto,
+      child: Stack(
+        children: [
+          CircleAvatar(
+            radius: 36,
+            backgroundColor: Colors.white.withValues(alpha: 0.22),
+            backgroundImage: url.isNotEmpty ? NetworkImage(url) : null,
+            child: url.isEmpty
+                ? Text(letter, style: GoogleFonts.unbounded(color: Colors.white, fontSize: 26, fontWeight: FontWeight.w600))
+                : null,
+          ),
+          Positioned(
+            right: 0,
+            bottom: 0,
+            child: CircleAvatar(
+              radius: 12,
+              backgroundColor: Colors.white,
+              child: _busy
+                  ? const SizedBox(width: 12, height: 12, child: CircularProgressIndicator(strokeWidth: 2))
+                  : Icon(Icons.camera_alt, size: 14, color: Theme.of(context).colorScheme.primary),
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

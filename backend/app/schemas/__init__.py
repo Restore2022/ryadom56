@@ -80,6 +80,8 @@ class UserOut(BaseModel):
     rating_score: float | None = None
     listings_count: int = 0
     reports_against: int = 0
+    has_push: bool = False
+    avatar_url: str | None = None
 
     class Config:
         from_attributes = True
@@ -95,6 +97,7 @@ class PublicUserOut(BaseModel):
     reports_against: int = 0
     member_since: datetime | None = None
     is_active: bool = True
+    avatar_url: str | None = None
 
 
 class RegisterIn(BaseModel):
@@ -379,6 +382,18 @@ class UserRoleUpdate(BaseModel):
     email: EmailStr | None = None
     password: str | None = Field(default=None, min_length=6, max_length=128)
     badge: str | None = Field(default=None, max_length=40)
+
+
+class AdminPushIn(BaseModel):
+    title: str = Field(default="Рядом56", max_length=80)
+    body: str = Field(min_length=1, max_length=400)
+
+
+class AdminPushOut(BaseModel):
+    ok: bool = True
+    notification_id: int
+    devices: int = 0
+    message: str
 
 
 class AdminUserCreate(BaseModel):

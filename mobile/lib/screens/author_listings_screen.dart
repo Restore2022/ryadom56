@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
+import '../time_format.dart';
 import 'home_shell.dart';
 import 'listing_detail_screen.dart';
 
@@ -60,12 +61,7 @@ class _AuthorListingsScreenState extends State<AuthorListingsScreen> {
     }
   }
 
-  String _fmtMemberSince(String? iso) {
-    if (iso == null || iso.isEmpty) return '';
-    final dt = DateTime.tryParse(iso)?.toLocal();
-    if (dt == null) return '';
-    return 'с ${dt.month.toString().padLeft(2, '0')}.${dt.year}';
-  }
+  String _fmtMemberSince(String? iso) => formatApiMonthYear(iso);
 
   @override
   Widget build(BuildContext context) {
@@ -99,14 +95,39 @@ class _AuthorListingsScreenState extends State<AuthorListingsScreen> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              Text(
-                                p['full_name'] as String? ?? widget.authorName,
-                                style: GoogleFonts.unbounded(fontSize: 20, fontWeight: FontWeight.w600),
+                              Row(
+                                children: [
+                                  CircleAvatar(
+                                    radius: 22,
+                                    backgroundColor: scheme.primaryContainer,
+                                    backgroundImage: (p['avatar_url'] != null && '${p['avatar_url']}'.isNotEmpty)
+                                        ? NetworkImage(state.mediaUrl(p['avatar_url']?.toString()))
+                                        : null,
+                                    child: (p['avatar_url'] == null || '${p['avatar_url']}'.isEmpty)
+                                        ? Text(
+                                            (widget.authorName.isNotEmpty ? widget.authorName.substring(0, 1) : '?').toUpperCase(),
+                                            style: GoogleFonts.unbounded(fontWeight: FontWeight.w700),
+                                          )
+                                        : null,
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(
+                                    child: Column(
+                                      crossAxisAlignment: CrossAxisAlignment.start,
+                                      children: [
+                                        Text(
+                                          p['full_name'] as String? ?? widget.authorName,
+                                          style: GoogleFonts.unbounded(fontSize: 20, fontWeight: FontWeight.w600),
+                                        ),
+                                        if (p['settlement_name'] != null) ...[
+                                          const SizedBox(height: 4),
+                                          Text('${p['settlement_name']}', style: TextStyle(color: scheme.onSurfaceVariant)),
+                                        ],
+                                      ],
+                                    ),
+                                  ),
+                                ],
                               ),
-                              if (p['settlement_name'] != null) ...[
-                                const SizedBox(height: 4),
-                                Text('${p['settlement_name']}', style: TextStyle(color: scheme.onSurfaceVariant)),
-                              ],
                               const SizedBox(height: 12),
                               Wrap(
                                 spacing: 8,

@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../scroll_to_top.dart';
 import '../state/app_state.dart';
+import '../time_format.dart';
 import '../ui_helpers.dart';
 
 class NewsListScreen extends StatefulWidget {
@@ -58,12 +59,7 @@ class _NewsListScreenState extends State<NewsListScreen> {
     }
   }
 
-  String _fmtDate(String? iso) {
-    if (iso == null || iso.isEmpty) return '';
-    final dt = DateTime.tryParse(iso)?.toLocal();
-    if (dt == null) return '';
-    return '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}';
-  }
+  String _fmtDate(String? iso) => formatApiDate(iso);
 
   void _openDetail(Map<String, dynamic> item) {
     final scheme = Theme.of(context).colorScheme;

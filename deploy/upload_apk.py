@@ -15,9 +15,9 @@ if not PASS:
 REMOTE = "/opt/ryadom56"
 REMOTE_APK = f"{REMOTE}/backend/data/releases/ryadom56-latest.apk"
 LOCAL_APK = Path(__file__).resolve().parents[1] / "mobile" / "apk" / "app-release.apk"
-VERSION_NAME = "0.21.0"
-VERSION_CODE = 33
-APK_FILENAME = "ryadom56-0.21.0.apk"
+VERSION_NAME = "0.22.0"
+VERSION_CODE = 34
+APK_FILENAME = "ryadom56-0.22.0.apk"
 
 
 def run(c: paramiko.SSHClient, cmd: str, timeout: int = 120) -> str:
@@ -43,6 +43,9 @@ def main() -> None:
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
     c.connect(HOST, username="root", password=PASS, timeout=60, allow_agent=False, look_for_keys=False)
+    transport = c.get_transport()
+    if transport:
+        transport.set_keepalive(15)
 
     run(c, f"mkdir -p {REMOTE}/backend/data/releases")
     run(c, f"ls -la {REMOTE}/backend/data/releases || true")
@@ -50,7 +53,7 @@ def main() -> None:
     print("Uploading via SFTP...")
     sftp = c.open_sftp()
     tmp = REMOTE_APK + ".tmp"
-    sftp.put(str(LOCAL_APK), tmp)
+    sftp.put(str(LOCAL_APK), tmp, confirm=False)
     sftp.close()
     run(c, f"mv -f {tmp} {REMOTE_APK} && ls -la {REMOTE_APK} && chmod 644 {REMOTE_APK}")
 
@@ -68,7 +71,10 @@ try:
     row.version_name = {VERSION_NAME!r}
     row.version_code = {VERSION_CODE}
     row.force_update = False
-    row.notes = f"Ryadom56 {VERSION_NAME}: install over the current app (same icon)."
+    row.notes = (
+        "Профиль справа, чаты вместо афиши, уведомления в шапке, "
+        "фото профиля, вход по отпечатку или лицу (PIN запасной)."
+    )
     row.apk_filename = {APK_FILENAME!r}
     db.commit()
     print("DB OK", row.version_name, row.version_code, row.apk_filename)

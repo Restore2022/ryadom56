@@ -2,9 +2,10 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import hmac
 import logging
+from pathlib import Path
 import secrets
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from fastapi.security import HTTPAuthorizationCredentials
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
@@ -39,6 +40,12 @@ _RESET_OK = "Если такой email есть в системе, мы отпр
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 
+def avatar_url_for(path: str | None) -> str | None:
+    if not path:
+        return None
+    return f"/uploads/{path.replace(chr(92), '/')}"
+
+
 def enrich_user_out(db: Session, user: User) -> UserOut:
     listings_count = int(
         db.execute(
@@ -61,6 +68,7 @@ def enrich_user_out(db: Session, user: User) -> UserOut:
     data = UserOut.model_validate(user)
     data.listings_count = listings_count
     data.reports_against = reports_against
+    data.avatar_url = avatar_url_for(user.avatar_path)
     return data
 
 
@@ -316,6 +324,7 @@ def public_profile(user_id: int, db: Session = Depends(get_db)):
         reports_against=reports_against,
         member_since=u.created_at,
         is_active=u.is_active,
+        avatar_url=avatar_url_for(u.avatar_path),
     )
 
 
@@ -353,7 +362,68 @@ def update_me(
     db_user = db.execute(
         select(User).options(selectinload(User.settlement)).where(User.id == user.id)
     ).scalar_one()
-    return db_user
+    return enrich_user_out(db, db_user)
+
+
+AVATAR_ROOT = Path("data/uploads/avatars")
+MAX_AVATAR_BYTES = 6 * 1024 * 1024
+_AVATAR_TYPES = {"image/jpeg": ".jpg", "image/jpg": ".jpg", "image/png": ".png", "image/webp": ".webp"}
+
+
+@router.post("/me/avatar", response_model=UserOut)
+async def upload_avatar(
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    db_user = db.execute(
+        select(User).options(selectinload(User.settlement)).where(User.id == user.id)
+    ).scalar_one()
+    raw = await file.read()
+    if not raw:
+        raise HTTPException(status_code=400, detail="Пустой файл")
+    if len(raw) > MAX_AVATAR_BYTES:
+        raise HTTPException(status_code=400, detail="Фото больше 6 МБ")
+    ext = _AVATAR_TYPES.get((file.content_type or "").lower())
+    if raw[:3] == b"\xff\xd8\xff":
+        ext = ".jpg"
+    elif raw[:8] == b"\x89PNG\r\n\x1a\n":
+        ext = ".png"
+    elif len(raw) >= 12 and raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        ext = ".webp"
+    elif not ext:
+        raise HTTPException(status_code=400, detail="Допустимы JPG, PNG, WEBP")
+    AVATAR_ROOT.mkdir(parents=True, exist_ok=True)
+    name = f"{user.id}_{secrets.token_hex(8)}{ext}"
+    rel = f"avatars/{name}"
+    (AVATAR_ROOT / name).write_bytes(raw)
+    if db_user.avatar_path:
+        old = Path("data/uploads") / db_user.avatar_path
+        if old.is_file() and old.resolve().parent == AVATAR_ROOT.resolve():
+            old.unlink(missing_ok=True)
+    db_user.avatar_path = rel
+    db.commit()
+    db_user = db.execute(
+        select(User).options(selectinload(User.settlement)).where(User.id == user.id)
+    ).scalar_one()
+    return enrich_user_out(db, db_user)
+
+
+@router.delete("/me/avatar", response_model=UserOut)
+def delete_avatar(
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    db_user = db.execute(
+        select(User).options(selectinload(User.settlement)).where(User.id == user.id)
+    ).scalar_one()
+    if db_user.avatar_path:
+        old = Path("data/uploads") / db_user.avatar_path
+        if old.is_file() and old.resolve().parent == (Path("data/uploads") / "avatars").resolve():
+            old.unlink(missing_ok=True)
+    db_user.avatar_path = None
+    db.commit()
+    return enrich_user_out(db, db_user)
 
 
 def _payload_from_creds(creds: HTTPAuthorizationCredentials | None) -> dict:
@@ -401,7 +471,7 @@ def report_device(
     )
     db.commit()
     db.refresh(db_user)
-    return db_user
+    return enrich_user_out(db, db_user)
 
 
 @router.get("/sessions", response_model=list[SessionOut])

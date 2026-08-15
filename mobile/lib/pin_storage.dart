@@ -11,6 +11,7 @@ class PinStorage {
   static const _saltKey = 'ryadom_login_pin_salt';
   static const _tokenKey = 'ryadom_pin_session_token';
   static const _flagKey = 'ryadom_pin_enabled';
+  static const _bioKey = 'ryadom_biometrics_enabled';
 
   static String _hash(String pin, String salt) {
     return sha256.convert(utf8.encode('ryadom56|$salt|$pin')).toString();
@@ -47,6 +48,21 @@ class PinStorage {
     await prefs.remove(_saltKey);
     await prefs.remove(_tokenKey);
     await prefs.remove(_flagKey);
+    await prefs.remove(_bioKey);
+  }
+
+  static Future<bool> biometricsEnabled() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_bioKey) == true;
+  }
+
+  static Future<void> setBiometricsEnabled(bool enabled) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (enabled) {
+      await prefs.setBool(_bioKey, true);
+    } else {
+      await prefs.remove(_bioKey);
+    }
   }
 
   static Future<void> saveSessionToken(String? token) async {

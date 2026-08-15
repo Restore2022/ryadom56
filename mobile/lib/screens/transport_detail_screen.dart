@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import '../auth_prompt.dart';
 import '../state/app_state.dart';
+import '../time_format.dart';
 import '../ui_helpers.dart';
 
 class TransportDetailScreen extends StatefulWidget {
@@ -37,10 +38,7 @@ class _TransportDetailScreenState extends State<TransportDetailScreen> {
   }
 
   String _fmtUpdated(String? iso) {
-    if (iso == null || iso.isEmpty) return '—';
-    final dt = DateTime.tryParse(iso)?.toLocal();
-    if (dt == null) return iso;
-    return '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}';
+    return formatApiDate(iso, empty: '—');
   }
 
   Future<void> _reportOutdated() async {

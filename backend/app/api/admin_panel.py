@@ -32,6 +32,7 @@ from app.models import (
     TransportRoute,
     User,
     UserRole,
+    UserSession,
 )
 from app.schemas import (
     AdminAlertsOut,
@@ -49,13 +50,15 @@ from app.schemas import (
     ReportStatusUpdate,
     SettlementStat,
     StatsOut,
+    AdminPushIn,
+    AdminPushOut,
     AdminUserCreate,
     UserOut,
     UserRoleUpdate,
 )
 from app.services.audit import log_action
 from app.services.blacklist import looks_like_chat_spam, match_blacklist, normalize_phone, normalize_word
-from app.services.notify import notify_user
+from app.services.notify import fcm_tokens_for_user, notify_user
 from app.services.sessions import revoke_all_sessions
 
 
@@ -66,6 +69,33 @@ def _chat_flag_reasons(db: Session, body: str) -> list[str]:
     if looks_like_chat_spam(body):
         reasons.append("подозрение на спам/ссылки")
     return reasons
+
+
+def _attach_push_flags(db: Session, users: list[User]) -> list[UserOut]:
+    if not users:
+        return []
+    ids = [u.id for u in users]
+    session_ids = set(
+        db.execute(
+            select(UserSession.user_id).where(
+                UserSession.user_id.in_(ids),
+                UserSession.revoked_at.is_(None),
+                UserSession.fcm_token.is_not(None),
+                UserSession.fcm_token != "",
+            )
+        ).scalars().all()
+    )
+    out: list[UserOut] = []
+    for u in users:
+        item = UserOut.model_validate(u)
+        item.has_push = bool((u.fcm_token or "").strip()) or u.id in session_ids
+        item.avatar_url = f"/uploads/{u.avatar_path.replace(chr(92), '/')}" if u.avatar_path else None
+        out.append(item)
+    return out
+
+
+def _user_out(db: Session, user: User) -> UserOut:
+    return _attach_push_flags(db, [user])[0]
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -326,7 +356,7 @@ def list_users(
         hot = {ip for ip, n in ip_counts.items() if n >= 2}
         users = [u for u in users if u.last_ip and u.last_ip in hot]
         users.sort(key=lambda u: (u.last_ip or "", -(u.id)))
-    return users
+    return _attach_push_flags(db, users)
 
 
 @router.post("/users", response_model=UserOut)
@@ -367,9 +397,10 @@ def create_user(
         details=f"{user.email} role={user.role.value} active={user.is_active}",
     )
     db.commit()
-    return db.execute(
+    created = db.execute(
         select(User).options(selectinload(User.settlement)).where(User.id == user.id)
     ).scalar_one()
+    return _user_out(db, created)
 
 
 @router.get("/users/export")
@@ -457,7 +488,7 @@ def update_user(
     target = db.execute(
         select(User).options(selectinload(User.settlement)).where(User.id == user_id)
     ).scalar_one()
-    return target
+    return _user_out(db, target)
 
 
 @router.post("/users/{user_id}/revoke-sessions")
@@ -480,6 +511,56 @@ def admin_revoke_sessions(
     )
     db.commit()
     return {"ok": True, "message": f"Выполнен выход на всех устройствах ({n})"}
+
+
+@router.post("/users/{user_id}/push", response_model=AdminPushOut)
+def admin_push_user(
+    user_id: int,
+    payload: AdminPushIn,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_roles(UserRole.admin)),
+):
+    target = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    title = (payload.title or "").strip() or "Рядом56"
+    body = (payload.body or "").strip()
+    if not body:
+        raise HTTPException(status_code=400, detail="Напишите текст сообщения")
+    item = notify_user(
+        db,
+        user_id=target.id,
+        type="admin_message",
+        title=title,
+        body=body,
+    )
+    devices = len(fcm_tokens_for_user(db, target.id))
+    log_action(
+        db,
+        actor=admin,
+        action="user.push",
+        entity_type="user",
+        entity_id=target.id,
+        details=f"title={title[:40]} devices={devices}",
+    )
+    db.commit()
+    if devices:
+        message = f"Пуш отправлен на {devices} {_devices_word(devices)}"
+    else:
+        message = "Сохранено в уведомлениях приложения, но пуш не ушёл — нет токена (человек не открывал приложение с пушами)"
+    return AdminPushOut(ok=True, notification_id=item.id, devices=devices, message=message)
+
+
+def _devices_word(n: int) -> str:
+    n = abs(n) % 100
+    if 11 <= n <= 14:
+        return "устройств"
+    last = n % 10
+    if last == 1:
+        return "устройство"
+    if 2 <= last <= 4:
+        return "устройства"
+    return "устройств"
 
 
 @router.get("/blacklist", response_model=list[BlacklistOut])

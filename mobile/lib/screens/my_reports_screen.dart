@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
+import '../time_format.dart';
 import '../ui_helpers.dart';
 import 'listing_detail_screen.dart';
 import 'home_shell.dart';
@@ -61,12 +62,7 @@ class _MyReportsScreenState extends State<MyReportsScreen> {
     }
   }
 
-  String _fmtDate(String? iso) {
-    if (iso == null || iso.isEmpty) return '';
-    final dt = DateTime.tryParse(iso)?.toLocal();
-    if (dt == null) return '';
-    return '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}.${dt.year}';
-  }
+  String _fmtDate(String? iso) => formatApiDate(iso);
 
   @override
   Widget build(BuildContext context) {

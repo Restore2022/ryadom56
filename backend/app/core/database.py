@@ -1,9 +1,32 @@
 from collections.abc import Generator
+from datetime import datetime, timezone
 
-from sqlalchemy import create_engine
+from sqlalchemy import DateTime, create_engine
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+from sqlalchemy.types import TypeDecorator
 
 from app.core.config import settings
+
+
+class UtcDateTime(TypeDecorator):
+    """SQLite отдаёт naive datetime — помечаем как UTC, чтобы API слал +00:00."""
+
+    impl = DateTime
+    cache_ok = True
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return None
+        if isinstance(value, datetime) and value.tzinfo is not None:
+            return value.astimezone(timezone.utc).replace(tzinfo=None)
+        return value
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return None
+        if isinstance(value, datetime) and value.tzinfo is None:
+            return value.replace(tzinfo=timezone.utc)
+        return value
 
 
 # Local default: sync SQLite (no aiosqlite required)

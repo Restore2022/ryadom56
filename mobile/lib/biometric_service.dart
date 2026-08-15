@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 import 'package:local_auth/local_auth.dart';
 import 'package:local_auth_android/local_auth_android.dart';
 
@@ -36,6 +37,19 @@ class BiometricService {
       if (types.contains(BiometricType.fingerprint)) return 'Войти по отпечатку';
     } catch (_) {}
     return 'Войти по биометрии';
+  }
+
+  static IconData iconForTypes(List<BiometricType> types) {
+    if (types.contains(BiometricType.face)) return Icons.face_unlock_outlined;
+    return Icons.fingerprint;
+  }
+
+  static Future<IconData> icon() async {
+    try {
+      return iconForTypes(await _auth.getAvailableBiometrics());
+    } catch (_) {
+      return Icons.fingerprint;
+    }
   }
 
   static Future<bool> authenticate({String reason = 'Подтвердите вход в Рядом56'}) async {

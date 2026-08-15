@@ -160,6 +160,7 @@ export type User = {
   device_info?: string | null;
   last_seen_at?: string | null;
   badge?: string | null;
+  has_push?: boolean;
 };
 
 export type ListingSnapshot = {

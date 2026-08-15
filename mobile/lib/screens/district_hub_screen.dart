@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../scroll_to_top.dart';
 import '../state/app_state.dart';
+import '../time_format.dart';
 import 'event_detail_screen.dart';
 import 'home_shell.dart';
 import 'news_list_screen.dart';
@@ -90,14 +91,6 @@ class _DistrictHubScreenState extends State<DistrictHubScreen> {
       default:
         return scheme.onPrimaryContainer;
     }
-  }
-
-  String _fmtWhen(String? iso) {
-    if (iso == null || iso.isEmpty) return '';
-    final dt = DateTime.tryParse(iso)?.toLocal();
-    if (dt == null) return '';
-    return '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}'
-        ' · ${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
   }
 
   @override
@@ -213,7 +206,7 @@ class _DistrictHubScreenState extends State<DistrictHubScreen> {
                       final item = e as Map<String, dynamic>;
                       return _HubCard(
                         title: '${item['title']}',
-                        subtitle: '${_fmtWhen(item['starts_at']?.toString())} · ${item['place_text'] ?? ''}',
+                        subtitle: '${formatApiDateTime(item['starts_at']?.toString())} · ${item['place_text'] ?? ''}',
                         onTap: () => Navigator.push(context, fastRoute(EventDetailScreen(item: item))),
                       );
                     }),

@@ -3,26 +3,43 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
+import '../biometric_prompt.dart';
 import '../pin_storage.dart';
 import '../state/app_state.dart';
 
-/// Обязательная настройка 5-значного PIN (защита входа в аккаунт на устройстве).
+enum PinSetupMode { create, change, reset }
+
+/// Настройка, смена или сброс 5-значного PIN.
 class PinSetupScreen extends StatefulWidget {
-  const PinSetupScreen({super.key, this.allowSkip = false});
+  const PinSetupScreen({
+    super.key,
+    this.allowSkip = false,
+    this.mode = PinSetupMode.create,
+  });
 
   final bool allowSkip;
+  final PinSetupMode mode;
 
   @override
   State<PinSetupScreen> createState() => _PinSetupScreenState();
 }
 
 class _PinSetupScreenState extends State<PinSetupScreen> with SingleTickerProviderStateMixin {
+  String _current = '';
   String _first = '';
   String _confirm = '';
+  bool _currentVerified = false;
   bool _confirming = false;
   String? _error;
   bool _busy = false;
   late final AnimationController _shake;
+
+  bool get _needCurrentPin => widget.mode == PinSetupMode.change && !_currentVerified;
+
+  String get _active {
+    if (_needCurrentPin) return _current;
+    return _confirming ? _confirm : _first;
+  }
 
   @override
   void initState() {
@@ -36,21 +53,41 @@ class _PinSetupScreenState extends State<PinSetupScreen> with SingleTickerProvid
     super.dispose();
   }
 
-  String get _current => _confirming ? _confirm : _first;
-
   Future<void> _onDigit(String d) async {
     if (_busy) return;
     HapticFeedback.selectionClick();
     setState(() {
       _error = null;
-      if (_confirming) {
+      if (_needCurrentPin) {
+        if (_current.length < 5) _current += d;
+      } else if (_confirming) {
         if (_confirm.length < 5) _confirm += d;
       } else {
         if (_first.length < 5) _first += d;
       }
     });
-    final value = _confirming ? _confirm : _first;
-    if (value.length < 5) return;
+    if (_active.length < 5) return;
+
+    if (_needCurrentPin) {
+      setState(() => _busy = true);
+      final ok = await PinStorage.verifyPin(_current);
+      if (!mounted) return;
+      if (!ok) {
+        HapticFeedback.heavyImpact();
+        _shake.forward(from: 0);
+        setState(() {
+          _error = 'Неверный PIN';
+          _current = '';
+          _busy = false;
+        });
+        return;
+      }
+      setState(() {
+        _currentVerified = true;
+        _busy = false;
+      });
+      return;
+    }
 
     if (!_confirming) {
       await Future<void>.delayed(const Duration(milliseconds: 180));
@@ -84,7 +121,15 @@ class _PinSetupScreenState extends State<PinSetupScreen> with SingleTickerProvid
       if (!mounted) return;
       state.hasPin = true;
       state.markPinUnlocked();
-      Navigator.pushNamedAndRemoveUntil(context, '/home', (route) => false);
+      if (widget.mode == PinSetupMode.create) {
+        await offerBiometricsIfAvailable(context);
+      }
+      if (!mounted) return;
+      if (widget.mode == PinSetupMode.create || !Navigator.canPop(context)) {
+        Navigator.pushNamedAndRemoveUntil(context, '/home', (route) => false);
+      } else {
+        Navigator.pop(context, true);
+      }
     } catch (_) {
       if (mounted) {
         setState(() {
@@ -99,7 +144,11 @@ class _PinSetupScreenState extends State<PinSetupScreen> with SingleTickerProvid
     if (_busy) return;
     setState(() {
       _error = null;
-      if (_confirming) {
+      if (_needCurrentPin) {
+        if (_current.isNotEmpty) {
+          _current = _current.substring(0, _current.length - 1);
+        }
+      } else if (_confirming) {
         if (_confirm.isNotEmpty) {
           _confirm = _confirm.substring(0, _confirm.length - 1);
         } else {
@@ -119,74 +168,98 @@ class _PinSetupScreenState extends State<PinSetupScreen> with SingleTickerProvid
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
-    final title = _confirming ? 'Повторите PIN' : 'Придумайте PIN';
-    final subtitle = _confirming
-        ? 'Введите тот же код ещё раз'
-        : '5 цифр — чтобы посторонние не открыли ваш аккаунт на этом телефоне';
+    late final String title;
+    late final String subtitle;
+    if (_needCurrentPin) {
+      title = 'Текущий PIN';
+      subtitle = 'Сначала введите действующий код';
+    } else if (_confirming) {
+      title = 'Повторите PIN';
+      subtitle = 'Введите тот же код ещё раз';
+    } else if (widget.mode == PinSetupMode.create) {
+      title = 'Придумайте PIN';
+      subtitle = '5 цифр — чтобы посторонние не открыли ваш аккаунт на этом телефоне';
+    } else {
+      title = 'Новый PIN';
+      subtitle = '5 цифр. Если биометрия не сработает, войдёте этим кодом';
+    }
+    final canLeave = widget.mode != PinSetupMode.create;
 
-    return Scaffold(
-      body: SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-          child: Column(
-            children: [
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  'Рядом56',
-                  style: GoogleFonts.unbounded(
-                    fontSize: 22,
-                    fontWeight: FontWeight.w700,
-                    color: scheme.primary,
+    return PopScope(
+      canPop: canLeave,
+      child: Scaffold(
+        body: SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            child: Column(
+              children: [
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Row(
+                    children: [
+                      if (canLeave)
+                        IconButton(
+                          onPressed: () => Navigator.maybePop(context),
+                          icon: const Icon(Icons.arrow_back),
+                        ),
+                      Text(
+                        'Рядом56',
+                        style: GoogleFonts.unbounded(
+                          fontSize: 22,
+                          fontWeight: FontWeight.w700,
+                          color: scheme.primary,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
-              ),
-              const Spacer(flex: 2),
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 280),
-                transitionBuilder: (child, anim) => FadeTransition(
-                  opacity: anim,
-                  child: ScaleTransition(scale: Tween(begin: 0.96, end: 1.0).animate(anim), child: child),
+                const Spacer(flex: 2),
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 280),
+                  transitionBuilder: (child, anim) => FadeTransition(
+                    opacity: anim,
+                    child: ScaleTransition(scale: Tween(begin: 0.96, end: 1.0).animate(anim), child: child),
+                  ),
+                  child: Column(
+                    key: ValueKey('$title$_confirming$_currentVerified'),
+                    children: [
+                      Text(
+                        title,
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.unbounded(fontSize: 26, fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 10),
+                      Text(
+                        subtitle,
+                        textAlign: TextAlign.center,
+                        style: GoogleFonts.manrope(fontSize: 16, height: 1.35, color: scheme.onSurfaceVariant),
+                      ),
+                    ],
+                  ),
                 ),
-                child: Column(
-                  key: ValueKey(_confirming),
-                  children: [
-                    Text(
-                      title,
-                      textAlign: TextAlign.center,
-                      style: GoogleFonts.unbounded(fontSize: 26, fontWeight: FontWeight.w700),
-                    ),
-                    const SizedBox(height: 10),
-                    Text(
-                      subtitle,
-                      textAlign: TextAlign.center,
-                      style: GoogleFonts.manrope(fontSize: 16, height: 1.35, color: scheme.onSurfaceVariant),
-                    ),
-                  ],
+                const SizedBox(height: 36),
+                AnimatedBuilder(
+                  animation: _shake,
+                  builder: (context, child) {
+                    final t = Curves.elasticIn.transform(_shake.value);
+                    final dx = (1 - t) * 10 * ((_shake.value * 8).floor().isEven ? 1 : -1);
+                    return Transform.translate(offset: Offset(dx, 0), child: child);
+                  },
+                  child: _PinDots(filled: _active.length, error: _error != null),
                 ),
-              ),
-              const SizedBox(height: 36),
-              AnimatedBuilder(
-                animation: _shake,
-                builder: (context, child) {
-                  final t = Curves.elasticIn.transform(_shake.value);
-                  final dx = (1 - t) * 10 * ((_shake.value * 8).floor().isEven ? 1 : -1);
-                  return Transform.translate(offset: Offset(dx, 0), child: child);
-                },
-                child: _PinDots(filled: _current.length, error: _error != null),
-              ),
-              if (_error != null) ...[
-                const SizedBox(height: 14),
-                Text(_error!, style: TextStyle(color: scheme.error, fontWeight: FontWeight.w600)),
-              ],
-              const Spacer(flex: 3),
-              _PinPad(onDigit: _onDigit, onBackspace: _onBackspace, enabled: !_busy),
-              if (widget.allowSkip) ...[
+                if (_error != null) ...[
+                  const SizedBox(height: 14),
+                  Text(_error!, style: TextStyle(color: scheme.error, fontWeight: FontWeight.w600)),
+                ],
+                const Spacer(flex: 3),
+                _PinPad(onDigit: _onDigit, onBackspace: _onBackspace, enabled: !_busy),
+                if (widget.allowSkip) ...[
+                  const SizedBox(height: 8),
+                  TextButton(onPressed: _busy ? null : _skip, child: const Text('Не сейчас')),
+                ],
                 const SizedBox(height: 8),
-                TextButton(onPressed: _busy ? null : _skip, child: const Text('Не сейчас')),
               ],
-              const SizedBox(height: 8),
-            ],
+            ),
           ),
         ),
       ),

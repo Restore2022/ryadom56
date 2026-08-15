@@ -240,4 +240,44 @@ class ApiClient {
       throw _fromNetwork(e);
     }
   }
+
+  Future<Map<String, dynamic>> uploadAvatar(String filePath) async {
+    final uri = Uri.parse('$baseUrl/auth/me/avatar');
+    final req = http.MultipartRequest('POST', uri);
+    final t = await token;
+    if (t != null) req.headers['Authorization'] = 'Bearer $t';
+    final file = File(filePath);
+    if (!await file.exists()) {
+      throw ApiException('Файл фото не найден');
+    }
+    final size = await file.length();
+    if (size > 6 * 1024 * 1024) {
+      throw ApiException('Фото больше 6 МБ. Выберите другое или сожмите изображение');
+    }
+    final lower = filePath.toLowerCase();
+    if (!(lower.endsWith('.jpg') || lower.endsWith('.jpeg') || lower.endsWith('.png') || lower.endsWith('.webp'))) {
+      throw ApiException('Допустимы только JPG, PNG или WEBP');
+    }
+    final type = lower.endsWith('.png')
+        ? MediaType('image', 'png')
+        : lower.endsWith('.webp')
+            ? MediaType('image', 'webp')
+            : MediaType('image', 'jpeg');
+    req.files.add(await http.MultipartFile.fromPath('file', filePath, contentType: type));
+    try {
+      final streamed = await req.send().timeout(const Duration(seconds: 60));
+      final res = await http.Response.fromStream(streamed);
+      if (res.statusCode == 401) {
+        onUnauthorized?.call();
+      }
+      if (res.statusCode >= 400) {
+        throw _fromResponse(res);
+      }
+      return jsonDecode(res.body) as Map<String, dynamic>;
+    } on ApiException {
+      rethrow;
+    } catch (e) {
+      throw _fromNetwork(e);
+    }
+  }
 }

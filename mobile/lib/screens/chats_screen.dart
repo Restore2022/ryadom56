@@ -5,6 +5,7 @@ import 'package:provider/provider.dart';
 import '../auth_prompt.dart';
 import '../responsive.dart';
 import '../state/app_state.dart';
+import '../time_format.dart';
 import '../ui_helpers.dart';
 import 'listing_chat_screen.dart';
 
@@ -54,17 +55,6 @@ class _ChatsTabState extends State<ChatsTab> {
         loading = false;
       });
     }
-  }
-
-  String _fmtWhen(String? iso) {
-    if (iso == null || iso.isEmpty) return '';
-    final dt = DateTime.tryParse(iso)?.toLocal();
-    if (dt == null) return '';
-    final now = DateTime.now();
-    if (dt.year == now.year && dt.month == now.month && dt.day == now.day) {
-      return '${dt.hour.toString().padLeft(2, '0')}:${dt.minute.toString().padLeft(2, '0')}';
-    }
-    return '${dt.day.toString().padLeft(2, '0')}.${dt.month.toString().padLeft(2, '0')}';
   }
 
   @override
@@ -195,7 +185,7 @@ class _ChatsTabState extends State<ChatsTab> {
                                               ),
                                             ),
                                             Text(
-                                              _fmtWhen(item['last_message_at']?.toString()),
+                                              formatApiChatList(item['last_message_at']?.toString()),
                                               style: TextStyle(
                                                 color: scheme.onSurfaceVariant,
                                                 fontSize: 12,

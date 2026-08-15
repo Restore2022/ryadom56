@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models import Notification, User
+from app.models import Notification, User, UserSession
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +54,29 @@ def notify_user(
     return item
 
 
+def fcm_tokens_for_user(db: Session, user_id: int) -> list[str]:
+    """Токены с профиля и активных сессий — пуш на все телефоны человека."""
+    tokens: list[str] = []
+    user = db.get(User, user_id)
+    if user:
+        t = (user.fcm_token or "").strip()
+        if t:
+            tokens.append(t)
+    rows = db.execute(
+        select(UserSession.fcm_token).where(
+            UserSession.user_id == user_id,
+            UserSession.revoked_at.is_(None),
+            UserSession.fcm_token.is_not(None),
+            UserSession.fcm_token != "",
+        )
+    ).scalars().all()
+    for raw in rows:
+        t = (raw or "").strip()
+        if t:
+            tokens.append(t)
+    return list(dict.fromkeys(tokens))
+
+
 def notify_broadcast(
     db: Session,
     *,
@@ -86,6 +109,19 @@ def notify_broadcast(
         token = (user.fcm_token or "").strip()
         if token:
             tokens.append(token)
+    if users:
+        session_tokens = db.execute(
+            select(UserSession.fcm_token).where(
+                UserSession.user_id.in_([u.id for u in users]),
+                UserSession.revoked_at.is_(None),
+                UserSession.fcm_token.is_not(None),
+                UserSession.fcm_token != "",
+            )
+        ).scalars().all()
+        for raw in session_tokens:
+            t = (raw or "").strip()
+            if t:
+                tokens.append(t)
     db.flush()
     data = {
         "type": type,
@@ -109,12 +145,11 @@ def _try_push(
     title: str,
     body: str,
     data: dict | None = None,
-) -> None:
-    user = db.get(User, user_id)
-    token = (getattr(user, "fcm_token", None) or "").strip() if user else ""
-    if not token:
-        return
-    _fcm_send_many([token], title=title, body=body, data=data or {})
+) -> int:
+    tokens = fcm_tokens_for_user(db, user_id)
+    if not tokens:
+        return 0
+    return _fcm_send_many(tokens, title=title, body=body, data=data or {})
 
 
 def _service_account_path() -> Path | None:
@@ -173,12 +208,12 @@ def _fcm_project_id() -> str:
     return "ryadom56"
 
 
-def _fcm_send_many(tokens: list[str], *, title: str, body: str, data: dict) -> None:
+def _fcm_send_many(tokens: list[str], *, title: str, body: str, data: dict) -> int:
     if not tokens:
-        return
+        return 0
     access = _fcm_access_token()
     if not access:
-        return
+        return 0
     project = _fcm_project_id()
     url = f"https://fcm.googleapis.com/v1/projects/{project}/messages:send"
     unique = list(dict.fromkeys(tokens))
@@ -218,3 +253,4 @@ def _fcm_send_many(tokens: list[str], *, title: str, body: str, data: dict) -> N
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             logger.warning("FCM v1 failed token=…%s: %s", token[-8:], exc)
     logger.info("FCM v1 sent ok=%s / %s", ok, len(unique))
+    return ok

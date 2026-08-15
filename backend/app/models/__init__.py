@@ -1,10 +1,10 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, Enum, Float, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.database import Base
+from app.core.database import Base, UtcDateTime
 
 
 class UserRole(str, enum.Enum):
@@ -72,18 +72,19 @@ class User(Base):
     role: Mapped[UserRole] = mapped_column(Enum(UserRole), default=UserRole.user)
     accepted_terms: Mapped[bool] = mapped_column(Boolean, default=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
     last_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     device_brand: Mapped[str | None] = mapped_column(String(80), nullable=True)
     device_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     device_os: Mapped[str | None] = mapped_column(String(80), nullable=True)
     app_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
     device_info: Mapped[str | None] = mapped_column(Text, nullable=True)
-    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
     fcm_token: Mapped[str | None] = mapped_column(String(512), nullable=True)
     badge: Mapped[str | None] = mapped_column(String(40), nullable=True)  # new|trusted|caution
     rating_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     token_version: Mapped[int] = mapped_column(Integer, default=0)
+    avatar_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     settlement: Mapped["Settlement"] = relationship(back_populates="users")
     listings: Mapped[list["Listing"]] = relationship(back_populates="author")
@@ -108,9 +109,9 @@ class UserSession(Base):
     app_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
     last_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
     fcm_token: Mapped[str | None] = mapped_column(String(512), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
+    last_seen_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
 
     user: Mapped["User"] = relationship(back_populates="sessions")
 
@@ -134,9 +135,9 @@ class Listing(Base):
     previous_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
     close_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
     close_note: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        UtcDateTime(), server_default=func.now(), onupdate=func.now()
     )
 
     author: Mapped["User"] = relationship(back_populates="listings")
@@ -155,7 +156,7 @@ class ListingImage(Base):
     listing_id: Mapped[int] = mapped_column(ForeignKey("listings.id"), nullable=False, index=True)
     path: Mapped[str] = mapped_column(String(255), nullable=False)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
 
     listing: Mapped["Listing"] = relationship(back_populates="images")
 
@@ -176,9 +177,9 @@ class DirectoryItem(Base):
     lon: Mapped[float | None] = mapped_column(Float, nullable=True)
     is_published: Mapped[bool] = mapped_column(Boolean, default=True)
     view_count: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        UtcDateTime(), server_default=func.now(), onupdate=func.now()
     )
 
     settlement: Mapped["Settlement | None"] = relationship()
@@ -193,7 +194,7 @@ class LegalDocument(Base):
     body: Mapped[str] = mapped_column(Text, nullable=False)
     version: Mapped[str] = mapped_column(String(32), default="1.0")
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        UtcDateTime(), server_default=func.now(), onupdate=func.now()
     )
 
 
@@ -203,22 +204,22 @@ class Event(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False)
-    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
-    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    starts_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, index=True)
+    ends_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
     place_text: Mapped[str] = mapped_column(String(255), nullable=False)
     settlement_id: Mapped[int | None] = mapped_column(ForeignKey("settlements.id"), nullable=True)
     address: Mapped[str | None] = mapped_column(String(255), nullable=True)
     lat: Mapped[float | None] = mapped_column(Float, nullable=True)
     lon: Mapped[float | None] = mapped_column(Float, nullable=True)
     cover_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    publish_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True, index=True)
+    publish_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True, index=True)
     is_published: Mapped[bool] = mapped_column(Boolean, default=True)
     view_count: Mapped[int] = mapped_column(Integer, default=0)
     favorite_add_count: Mapped[int] = mapped_column(Integer, default=0)
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        UtcDateTime(), server_default=func.now(), onupdate=func.now()
     )
 
     settlement: Mapped["Settlement | None"] = relationship()
@@ -245,9 +246,9 @@ class TransportRoute(Base):
     view_count: Mapped[int] = mapped_column(Integer, default=0)
     favorite_count: Mapped[int] = mapped_column(Integer, default=0)
     outdated_reports: Mapped[int] = mapped_column(Integer, default=0)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        UtcDateTime(), server_default=func.now(), onupdate=func.now()
     )
 
     settlement: Mapped["Settlement | None"] = relationship()
@@ -259,7 +260,7 @@ class TransportFavorite(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     route_id: Mapped[int] = mapped_column(ForeignKey("transport_routes.id"), nullable=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
 
 
 class DistrictNews(Base):
@@ -272,11 +273,11 @@ class DistrictNews(Base):
     settlement_id: Mapped[int | None] = mapped_column(ForeignKey("settlements.id"), nullable=True)
     is_published: Mapped[bool] = mapped_column(Boolean, default=True)
     is_pinned: Mapped[bool] = mapped_column(Boolean, default=False)
-    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    published_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        UtcDateTime(), server_default=func.now(), onupdate=func.now()
     )
 
     settlement: Mapped["Settlement | None"] = relationship()
@@ -292,12 +293,12 @@ class DistrictAlert(Base):
     kind: Mapped[str] = mapped_column(String(20), default="info")  # info | warn | danger
     priority: Mapped[int] = mapped_column(Integer, default=0)  # выше = важнее
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    starts_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
+    ends_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        UtcDateTime(), server_default=func.now(), onupdate=func.now()
     )
 
 
@@ -312,7 +313,7 @@ class ListingMessage(Base):
     buyer_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
 
 
 class Favorite(Base):
@@ -321,7 +322,7 @@ class Favorite(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     listing_id: Mapped[int] = mapped_column(ForeignKey("listings.id"), nullable=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
 
     user: Mapped["User"] = relationship(back_populates="favorites")
     listing: Mapped["Listing"] = relationship()
@@ -337,8 +338,8 @@ class ListingReport(Base):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="open")  # open / reviewed / dismissed
     moderator_reply: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
+    reviewed_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
     reviewed_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
     listing: Mapped["Listing"] = relationship()
@@ -352,7 +353,7 @@ class DirectoryFavorite(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     directory_id: Mapped[int] = mapped_column(ForeignKey("directory_items.id"), nullable=False, index=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
 
     user: Mapped["User"] = relationship()
     directory_item: Mapped["DirectoryItem"] = relationship()
@@ -368,8 +369,8 @@ class DirectoryReport(Base):
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="open")  # open / reviewed / dismissed
     moderator_reply: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
+    reviewed_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
     reviewed_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
 
     directory_item: Mapped["DirectoryItem"] = relationship()
@@ -386,7 +387,7 @@ class AuditLog(Base):
     entity_type: Mapped[str] = mapped_column(String(40), nullable=False)
     entity_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     details: Mapped[str | None] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
 
     actor: Mapped["User"] = relationship()
 
@@ -401,7 +402,7 @@ class Notification(Base):
     body: Mapped[str | None] = mapped_column(Text, nullable=True)
     listing_id: Mapped[int | None] = mapped_column(ForeignKey("listings.id"), nullable=True)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
 
     user: Mapped["User"] = relationship()
     listing: Mapped["Listing | None"] = relationship()
@@ -415,7 +416,7 @@ class BlacklistEntry(Base):
     value: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
     note: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
 
     created_by: Mapped["User | None"] = relationship()
 
@@ -428,10 +429,10 @@ class PasswordReset(Base):
     email: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
-    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
-    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    used_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
     created_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
 
     user: Mapped["User"] = relationship()
 
@@ -448,5 +449,5 @@ class AppUpdate(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     apk_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+        UtcDateTime(), server_default=func.now(), onupdate=func.now()
     )

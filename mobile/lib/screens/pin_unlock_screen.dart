@@ -3,9 +3,12 @@ import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
+import '../biometric_prompt.dart';
+import '../biometric_service.dart';
 import '../state/app_state.dart';
+import 'pin_setup_screen.dart';
 
-/// Красивый ввод PIN для разблокировки / быстрого входа.
+/// Вход по отпечатку / лицу, PIN — запасной способ.
 class PinUnlockScreen extends StatefulWidget {
   const PinUnlockScreen({super.key, this.asGate = true});
 
@@ -20,6 +23,11 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> with TickerProviderSt
   String _pin = '';
   String? _error;
   bool _busy = false;
+  bool _bioEnabled = false;
+  bool _bioAvailable = false;
+  bool _showPinPad = true;
+  String _bioButton = 'Войти по отпечатку или лицу';
+  IconData _bioIcon = Icons.fingerprint;
   late final AnimationController _shake;
   late final AnimationController _enter;
 
@@ -28,6 +36,7 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> with TickerProviderSt
     super.initState();
     _shake = AnimationController(vsync: this, duration: const Duration(milliseconds: 420));
     _enter = AnimationController(vsync: this, duration: const Duration(milliseconds: 520))..forward();
+    WidgetsBinding.instance.addPostFrameCallback((_) => _prepareBiometrics());
   }
 
   @override
@@ -35,6 +44,51 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> with TickerProviderSt
     _shake.dispose();
     _enter.dispose();
     super.dispose();
+  }
+
+  Future<void> _prepareBiometrics() async {
+    final state = context.read<AppState>();
+    await state.refreshBiometricsState();
+    if (!mounted) return;
+    final available = state.biometricsAvailable;
+    final enabled = state.biometricsEnabled;
+    setState(() {
+      _bioAvailable = available;
+      _bioEnabled = enabled;
+      _showPinPad = !enabled;
+    });
+    if (available) {
+      _bioButton = await BiometricService.buttonLabel();
+      _bioIcon = await BiometricService.icon();
+      if (mounted) setState(() {});
+    }
+    if (_bioEnabled && mounted) {
+      await Future<void>.delayed(const Duration(milliseconds: 280));
+      if (mounted) await _unlockWithBiometrics();
+    }
+  }
+
+  Future<void> _unlockWithBiometrics() async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _error = null;
+    });
+    final ok = await context.read<AppState>().unlockWithBiometrics();
+    if (!mounted) return;
+    if (ok) {
+      HapticFeedback.lightImpact();
+      if (!widget.asGate) {
+        Navigator.pushNamedAndRemoveUntil(context, '/home', (route) => false);
+        return;
+      }
+      setState(() => _busy = false);
+      return;
+    }
+    setState(() {
+      _busy = false;
+      _showPinPad = true;
+    });
   }
 
   Future<void> _onDigit(String d) async {
@@ -52,7 +106,6 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> with TickerProviderSt
     if (ok) {
       HapticFeedback.lightImpact();
       if (widget.asGate) {
-        // RootGate перерисуется сам (pinUnlocked).
         setState(() => _busy = false);
       } else {
         Navigator.pushNamedAndRemoveUntil(context, '/home', (route) => false);
@@ -85,11 +138,28 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> with TickerProviderSt
     }
   }
 
+  Future<void> _forgotPin() async {
+    if (_busy) return;
+    final ok = await confirmAccountPassword(context, title: 'Сброс PIN');
+    if (!ok || !mounted) return;
+    await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => const PinSetupScreen(mode: PinSetupMode.reset),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final fade = CurvedAnimation(parent: _enter, curve: Curves.easeOutCubic);
     final scale = Tween(begin: 0.94, end: 1.0).animate(fade);
+    final subtitle = _bioEnabled && !_showPinPad
+        ? 'Войдите по отпечатку или лицу.\nPIN — запасной способ.'
+        : _bioEnabled
+            ? 'Введите PIN, если биометрия не сработала'
+            : 'Введите PIN для доступа';
 
     return Scaffold(
       body: SafeArea(
@@ -112,30 +182,89 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> with TickerProviderSt
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Введите PIN для доступа',
-                    style: GoogleFonts.manrope(fontSize: 17, color: scheme.onSurfaceVariant),
+                    subtitle,
+                    textAlign: TextAlign.center,
+                    style: GoogleFonts.manrope(fontSize: 17, height: 1.3, color: scheme.onSurfaceVariant),
                   ),
                   const Spacer(flex: 2),
-                  AnimatedBuilder(
-                    animation: _shake,
-                    builder: (context, child) {
-                      final t = Curves.elasticIn.transform(_shake.value);
-                      final dx = (1 - t) * 12 * ((_shake.value * 8).floor().isEven ? 1 : -1);
-                      return Transform.translate(offset: Offset(dx, 0), child: child);
-                    },
-                    child: _UnlockDots(filled: _pin.length, error: _error != null),
-                  ),
-                  if (_error != null) ...[
-                    const SizedBox(height: 14),
-                    Text(_error!, style: TextStyle(color: scheme.error, fontWeight: FontWeight.w600)),
+                  if (_bioEnabled && !_showPinPad) ...[
+                    const Spacer(flex: 1),
+                    Material(
+                      color: scheme.primary.withValues(alpha: 0.12),
+                      shape: const CircleBorder(),
+                      child: InkWell(
+                        customBorder: const CircleBorder(),
+                        onTap: _busy ? null : _unlockWithBiometrics,
+                        child: SizedBox(
+                          width: 132,
+                          height: 132,
+                          child: Icon(_bioIcon, size: 64, color: scheme.primary),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 18),
+                    FilledButton(
+                      onPressed: _busy ? null : _unlockWithBiometrics,
+                      child: Text(_bioButton),
+                    ),
+                    const Spacer(flex: 3),
+                    TextButton(
+                      onPressed: _busy
+                          ? null
+                          : () => setState(() {
+                                _showPinPad = true;
+                                _error = null;
+                              }),
+                      child: const Text('Ввести PIN'),
+                    ),
+                  ] else ...[
+                    AnimatedBuilder(
+                      animation: _shake,
+                      builder: (context, child) {
+                        final t = Curves.elasticIn.transform(_shake.value);
+                        final dx = (1 - t) * 12 * ((_shake.value * 8).floor().isEven ? 1 : -1);
+                        return Transform.translate(offset: Offset(dx, 0), child: child);
+                      },
+                      child: _UnlockDots(filled: _pin.length, error: _error != null),
+                    ),
+                    if (_error != null) ...[
+                      const SizedBox(height: 14),
+                      Text(_error!, style: TextStyle(color: scheme.error, fontWeight: FontWeight.w600)),
+                    ],
+                    const Spacer(flex: 3),
+                    _UnlockPad(
+                      onDigit: _onDigit,
+                      onBackspace: _onBackspace,
+                      onBiometric: _bioEnabled ? _unlockWithBiometrics : null,
+                      enabled: !_busy,
+                    ),
+                    const SizedBox(height: 8),
+                    if (_bioEnabled)
+                      TextButton(
+                        onPressed: _busy ? null : _unlockWithBiometrics,
+                        child: Text(_bioButton),
+                      ),
+                    if (_bioAvailable && !_bioEnabled)
+                      TextButton(
+                        onPressed: _busy
+                            ? null
+                            : () async {
+                                await offerBiometricsIfAvailable(context);
+                                if (!mounted) return;
+                                await _prepareBiometrics();
+                              },
+                        child: const Text('Включить отпечаток или лицо'),
+                      ),
                   ],
-                  const Spacer(flex: 3),
-                  _UnlockPad(onDigit: _onDigit, onBackspace: _onBackspace, enabled: !_busy),
-                  const SizedBox(height: 8),
                   TextButton(
                     onPressed: _busy ? null : _usePassword,
                     child: const Text('Войти по паролю'),
                   ),
+                  if (_showPinPad)
+                    TextButton(
+                      onPressed: _busy ? null : _forgotPin,
+                      child: const Text('Забыли PIN?'),
+                    ),
                   const SizedBox(height: 4),
                 ],
               ),
@@ -193,29 +322,41 @@ class _UnlockDots extends StatelessWidget {
   }
 }
 
-// Reuse pad widgets from setup via private duplication kept minimal — import pad from setup file.
-// setup file's pad is private; duplicate thin wrappers:
-
 class _UnlockPad extends StatelessWidget {
-  const _UnlockPad({required this.onDigit, required this.onBackspace, this.enabled = true});
+  const _UnlockPad({
+    required this.onDigit,
+    required this.onBackspace,
+    this.onBiometric,
+    this.enabled = true,
+  });
 
   final ValueChanged<String> onDigit;
   final VoidCallback onBackspace;
+  final VoidCallback? onBiometric;
   final bool enabled;
 
   @override
   Widget build(BuildContext context) {
-    // Delegate to shared visual from PinSetupScreen file by embedding identical pad.
-    return _SharedPinPad(onDigit: onDigit, onBackspace: onBackspace, enabled: enabled);
+    return _SharedPinPad(
+      onDigit: onDigit,
+      onBackspace: onBackspace,
+      onBiometric: onBiometric,
+      enabled: enabled,
+    );
   }
 }
 
-/// Public-ish pad used by unlock (mirrors setup pad visuals).
 class _SharedPinPad extends StatelessWidget {
-  const _SharedPinPad({required this.onDigit, required this.onBackspace, this.enabled = true});
+  const _SharedPinPad({
+    required this.onDigit,
+    required this.onBackspace,
+    this.onBiometric,
+    this.enabled = true,
+  });
 
   final ValueChanged<String> onDigit;
   final VoidCallback onBackspace;
+  final VoidCallback? onBiometric;
   final bool enabled;
 
   @override
@@ -224,7 +365,7 @@ class _SharedPinPad extends StatelessWidget {
       ['1', '2', '3'],
       ['4', '5', '6'],
       ['7', '8', '9'],
-      ['', '0', '⌫'],
+      ['bio', '0', '⌫'],
     ];
     final scheme = Theme.of(context).colorScheme;
     return Column(
@@ -234,7 +375,14 @@ class _SharedPinPad extends StatelessWidget {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: row.map((label) {
-              if (label.isEmpty) return const SizedBox(width: 76, height: 76);
+              if (label == 'bio') {
+                if (onBiometric == null) return const SizedBox(width: 76, height: 76);
+                return _KeyBtn(
+                  enabled: enabled,
+                  onTap: onBiometric!,
+                  child: Icon(Icons.fingerprint, color: scheme.primary, size: 32),
+                );
+              }
               final isBack = label == '⌫';
               return _KeyBtn(
                 enabled: enabled,

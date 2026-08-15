@@ -2,6 +2,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
+from datetime import datetime, timezone
+
+from fastapi.encoders import ENCODERS_BY_TYPE
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -24,9 +27,20 @@ from app.core.database import SessionLocal
 from app.services.seed import init_db, seed_db
 
 
+def _json_utc(value: datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    iso = value.astimezone(timezone.utc).isoformat()
+    return iso[:-6] + "Z" if iso.endswith("+00:00") else iso
+
+
+ENCODERS_BY_TYPE[datetime] = _json_utc
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Path("data/uploads").mkdir(parents=True, exist_ok=True)
+    Path("data/uploads/avatars").mkdir(parents=True, exist_ok=True)
     init_db()
     with SessionLocal() as session:
         seed_db(session)
