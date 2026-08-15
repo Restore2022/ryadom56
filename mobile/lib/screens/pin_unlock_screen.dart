@@ -26,7 +26,7 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> with TickerProviderSt
   bool _bioEnabled = false;
   bool _bioAvailable = false;
   bool _showPinPad = true;
-  String _bioButton = 'Войти по отпечатку или лицу';
+  String _bioButton = 'Войти по отпечатку';
   IconData _bioIcon = Icons.fingerprint;
   late final AnimationController _shake;
   late final AnimationController _enter;
@@ -35,7 +35,11 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> with TickerProviderSt
   void initState() {
     super.initState();
     _shake = AnimationController(vsync: this, duration: const Duration(milliseconds: 420));
-    _enter = AnimationController(vsync: this, duration: const Duration(milliseconds: 520))..forward();
+    _enter = AnimationController(vsync: this, duration: const Duration(milliseconds: 420))..forward();
+    final state = context.read<AppState>();
+    _bioEnabled = state.biometricsEnabled;
+    _bioAvailable = state.biometricsAvailable;
+    _showPinPad = !_bioEnabled;
     WidgetsBinding.instance.addPostFrameCallback((_) => _prepareBiometrics());
   }
 
@@ -52,19 +56,28 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> with TickerProviderSt
     if (!mounted) return;
     final available = state.biometricsAvailable;
     final enabled = state.biometricsEnabled;
+    var button = _bioButton;
+    var icon = _bioIcon;
+    if (available) {
+      button = await BiometricService.buttonLabel();
+      icon = await BiometricService.icon();
+    }
+    if (!mounted) return;
     setState(() {
       _bioAvailable = available;
       _bioEnabled = enabled;
       _showPinPad = !enabled;
+      _bioButton = button;
+      _bioIcon = icon;
     });
-    if (available) {
-      _bioButton = await BiometricService.buttonLabel();
-      _bioIcon = await BiometricService.icon();
-      if (mounted) setState(() {});
-    }
     if (_bioEnabled && mounted) {
-      await Future<void>.delayed(const Duration(milliseconds: 280));
-      if (mounted) await _unlockWithBiometrics();
+      if (_enter.isAnimating) {
+        await _enter.forward();
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 240));
+      if (mounted && !_showPinPad && (ModalRoute.of(context)?.isCurrent ?? true)) {
+        await _unlockWithBiometrics();
+      }
     }
   }
 
@@ -154,7 +167,6 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> with TickerProviderSt
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final fade = CurvedAnimation(parent: _enter, curve: Curves.easeOutCubic);
-    final scale = Tween(begin: 0.94, end: 1.0).animate(fade);
     final subtitle = _bioEnabled && !_showPinPad
         ? 'Войдите по отпечатку или лицу.\nPIN — запасной способ.'
         : _bioEnabled
@@ -165,109 +177,124 @@ class _PinUnlockScreenState extends State<PinUnlockScreen> with TickerProviderSt
       body: SafeArea(
         child: FadeTransition(
           opacity: fade,
-          child: ScaleTransition(
-            scale: scale,
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
-              child: Column(
-                children: [
-                  const SizedBox(height: 12),
-                  Text(
-                    'Рядом56',
-                    style: GoogleFonts.unbounded(
-                      fontSize: 28,
-                      fontWeight: FontWeight.w700,
-                      color: scheme.primary,
-                    ),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const SizedBox(height: 12),
+                Text(
+                  'Рядом56',
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.unbounded(
+                    fontSize: 28,
+                    fontWeight: FontWeight.w700,
+                    color: scheme.primary,
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    subtitle,
-                    textAlign: TextAlign.center,
-                    style: GoogleFonts.manrope(fontSize: 17, height: 1.3, color: scheme.onSurfaceVariant),
-                  ),
-                  const Spacer(flex: 2),
-                  if (_bioEnabled && !_showPinPad) ...[
-                    const Spacer(flex: 1),
-                    Material(
-                      color: scheme.primary.withValues(alpha: 0.12),
-                      shape: const CircleBorder(),
-                      child: InkWell(
-                        customBorder: const CircleBorder(),
-                        onTap: _busy ? null : _unlockWithBiometrics,
-                        child: SizedBox(
-                          width: 132,
-                          height: 132,
-                          child: Icon(_bioIcon, size: 64, color: scheme.primary),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(height: 18),
-                    FilledButton(
-                      onPressed: _busy ? null : _unlockWithBiometrics,
-                      child: Text(_bioButton),
-                    ),
-                    const Spacer(flex: 3),
-                    TextButton(
-                      onPressed: _busy
-                          ? null
-                          : () => setState(() {
-                                _showPinPad = true;
-                                _error = null;
-                              }),
-                      child: const Text('Ввести PIN'),
-                    ),
-                  ] else ...[
-                    AnimatedBuilder(
-                      animation: _shake,
-                      builder: (context, child) {
-                        final t = Curves.elasticIn.transform(_shake.value);
-                        final dx = (1 - t) * 12 * ((_shake.value * 8).floor().isEven ? 1 : -1);
-                        return Transform.translate(offset: Offset(dx, 0), child: child);
-                      },
-                      child: _UnlockDots(filled: _pin.length, error: _error != null),
-                    ),
-                    if (_error != null) ...[
-                      const SizedBox(height: 14),
-                      Text(_error!, style: TextStyle(color: scheme.error, fontWeight: FontWeight.w600)),
-                    ],
-                    const Spacer(flex: 3),
-                    _UnlockPad(
-                      onDigit: _onDigit,
-                      onBackspace: _onBackspace,
-                      onBiometric: _bioEnabled ? _unlockWithBiometrics : null,
-                      enabled: !_busy,
-                    ),
-                    const SizedBox(height: 8),
-                    if (_bioEnabled)
-                      TextButton(
-                        onPressed: _busy ? null : _unlockWithBiometrics,
-                        child: Text(_bioButton),
-                      ),
-                    if (_bioAvailable && !_bioEnabled)
-                      TextButton(
-                        onPressed: _busy
-                            ? null
-                            : () async {
-                                await offerBiometricsIfAvailable(context);
-                                if (!mounted) return;
-                                await _prepareBiometrics();
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  subtitle,
+                  textAlign: TextAlign.center,
+                  style: GoogleFonts.manrope(fontSize: 17, height: 1.3, color: scheme.onSurfaceVariant),
+                ),
+                Expanded(
+                  child: _bioEnabled && !_showPinPad
+                      ? Column(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            Center(
+                              child: Material(
+                                color: scheme.primary.withValues(alpha: 0.12),
+                                shape: const CircleBorder(),
+                                child: InkWell(
+                                  customBorder: const CircleBorder(),
+                                  onTap: _busy ? null : _unlockWithBiometrics,
+                                  child: SizedBox(
+                                    width: 132,
+                                    height: 132,
+                                    child: Icon(_bioIcon, size: 64, color: scheme.primary),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 20),
+                            FilledButton(
+                              onPressed: _busy ? null : _unlockWithBiometrics,
+                              child: Text(_bioButton, textAlign: TextAlign.center),
+                            ),
+                            const SizedBox(height: 8),
+                            TextButton(
+                              onPressed: _busy
+                                  ? null
+                                  : () => setState(() {
+                                        _showPinPad = true;
+                                        _error = null;
+                                      }),
+                              child: const Text('Ввести PIN'),
+                            ),
+                          ],
+                        )
+                      : Column(
+                          children: [
+                            const Spacer(flex: 2),
+                            AnimatedBuilder(
+                              animation: _shake,
+                              builder: (context, child) {
+                                if (_shake.value == 0) return child!;
+                                final t = Curves.elasticIn.transform(_shake.value);
+                                final dx = (1 - t) * 12 * ((_shake.value * 8).floor().isEven ? 1 : -1);
+                                return Transform.translate(offset: Offset(dx, 0), child: child);
                               },
-                        child: const Text('Включить отпечаток или лицо'),
-                      ),
-                  ],
+                              child: _UnlockDots(filled: _pin.length, error: _error != null),
+                            ),
+                            if (_error != null) ...[
+                              const SizedBox(height: 14),
+                              Text(
+                                _error!,
+                                textAlign: TextAlign.center,
+                                style: TextStyle(color: scheme.error, fontWeight: FontWeight.w600),
+                              ),
+                            ],
+                            const Spacer(flex: 3),
+                            _UnlockPad(
+                              onDigit: _onDigit,
+                              onBackspace: _onBackspace,
+                              onBiometric: _bioEnabled ? _unlockWithBiometrics : null,
+                              enabled: !_busy,
+                            ),
+                            const SizedBox(height: 8),
+                            if (_bioEnabled)
+                              TextButton(
+                                onPressed: _busy ? null : _unlockWithBiometrics,
+                                child: Text(_bioButton, textAlign: TextAlign.center),
+                              ),
+                            if (_bioAvailable && !_bioEnabled)
+                              TextButton(
+                                onPressed: _busy
+                                    ? null
+                                    : () async {
+                                        await offerBiometricsIfAvailable(context);
+                                        if (!mounted) return;
+                                        await _prepareBiometrics();
+                                      },
+                                child: const Text('Включить отпечаток или лицо', textAlign: TextAlign.center),
+                              ),
+                          ],
+                        ),
+                ),
+                TextButton(
+                  onPressed: _busy ? null : _usePassword,
+                  child: const Text('Войти по паролю'),
+                ),
+                if (_showPinPad)
                   TextButton(
-                    onPressed: _busy ? null : _usePassword,
-                    child: const Text('Войти по паролю'),
+                    onPressed: _busy ? null : _forgotPin,
+                    child: const Text('Забыли PIN?'),
                   ),
-                  if (_showPinPad)
-                    TextButton(
-                      onPressed: _busy ? null : _forgotPin,
-                      child: const Text('Забыли PIN?'),
-                    ),
-                  const SizedBox(height: 4),
-                ],
-              ),
+                const SizedBox(height: 4),
+              ],
             ),
           ),
         ),
