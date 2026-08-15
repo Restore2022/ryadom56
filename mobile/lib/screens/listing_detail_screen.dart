@@ -284,14 +284,15 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
     Future<void> openChat() async {
       final loggedIn = await ensureLoggedIn(context, message: 'Войдите, чтобы написать автору');
       if (!loggedIn || !mounted) return;
-      final template = 'Здравствуйте! Интересует объявление «${data!['title']}».';
+      final title = data!['title']?.toString() ?? 'объявление';
+      final template = 'Здравствуйте! Интересует объявление «$title».';
       final authorName = data['author_name']?.toString();
       await Navigator.push(
         context,
         fastRoute(
           ListingChatScreen(
             listingId: widget.listingId,
-            listingTitle: data['title'] as String,
+            listingTitle: title,
             // покупатель: тред = он сам; продавец отвечает из вкладки «Чаты» с peerId
             peerName: authorName,
             initialMessage: template,
@@ -391,7 +392,7 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                           ),
                           const SizedBox(height: 14),
                           Text(
-                            data['title'] as String,
+                            data['title']?.toString() ?? 'Объявление',
                             style: GoogleFonts.unbounded(fontSize: 24, fontWeight: FontWeight.w600, height: 1.2),
                           ),
                           if (data['price'] != null) ...[
@@ -405,11 +406,13 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                               ),
                             ),
                           ],
-                          const SizedBox(height: 18),
-                          Text(
-                            data['description'] as String,
-                            style: GoogleFonts.manrope(fontSize: 16, height: 1.55),
-                          ),
+                          if ((data['description']?.toString() ?? '').trim().isNotEmpty) ...[
+                            const SizedBox(height: 18),
+                            Text(
+                              data['description'].toString(),
+                              style: GoogleFonts.manrope(fontSize: 16, height: 1.55),
+                            ),
+                          ],
                           const SizedBox(height: 22),
                           const Divider(),
                           const SizedBox(height: 12),

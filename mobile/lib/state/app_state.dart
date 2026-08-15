@@ -1240,6 +1240,7 @@ class AppState extends ChangeNotifier {
     viewHistory.insert(0, {
       'id': id,
       'title': item['title'],
+      'description': item['description'],
       'category': item['category'],
       'price': item['price'],
       'settlement_name': item['settlement_name'],

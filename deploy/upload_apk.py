@@ -15,9 +15,9 @@ if not PASS:
 REMOTE = "/opt/ryadom56"
 REMOTE_APK = f"{REMOTE}/backend/data/releases/ryadom56-latest.apk"
 LOCAL_APK = Path(__file__).resolve().parents[1] / "mobile" / "apk" / "app-release.apk"
-VERSION_NAME = "0.23.0"
-VERSION_CODE = 35
-APK_FILENAME = "ryadom56-0.23.0.apk"
+VERSION_NAME = "0.23.1"
+VERSION_CODE = 36
+APK_FILENAME = "ryadom56-0.23.1.apk"
 
 
 def run(c: paramiko.SSHClient, cmd: str, timeout: int = 120) -> str:
@@ -58,9 +58,8 @@ def main() -> None:
     run(c, f"mv -f {tmp} {REMOTE_APK} && ls -la {REMOTE_APK} && chmod 644 {REMOTE_APK}")
 
     notes = (
-        "Рядом со мной: сортировка объявлений и мест по селу или GPS. "
-        "Пагинация новостей, афиши и транспорта. Темнее чипы в тёмной теме. "
-        "Сбои приложения уходят в админку."
+        "Исправлено падение карточки объявления, если нет текста описания "
+        "(часто из истории просмотров)."
     )
     py = f"""# coding: utf-8
 from sqlalchemy import select
