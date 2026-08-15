@@ -8,6 +8,7 @@ import '../auth_prompt.dart';
 import '../biometric_prompt.dart';
 import '../biometric_service.dart';
 import '../event_actions.dart';
+import '../listing_templates.dart';
 import '../location_service.dart';
 import '../responsive.dart';
 import '../scroll_to_top.dart';
@@ -659,13 +660,38 @@ class _ListingsTabState extends State<_ListingsTab> {
                 hasScrollBody: false,
                 child: adaptiveFillMessage(
                   context: context,
-                  child: emptyState(
-                    context: context,
-                    title: 'Пока нет объявлений',
-                    subtitle: 'Измените фильтры или подайте своё объявление',
-                    icon: Icons.storefront_outlined,
-                    actionLabel: 'Обновить',
-                    onAction: () => state.loadListings(),
+                  child: Builder(
+                    builder: (context) {
+                      final copy = emptyListingCopy(state.filterCategory);
+                      final example = templateFor(state.filterCategory);
+                      return emptyState(
+                        context: context,
+                        title: copy.title,
+                        subtitle: copy.subtitle,
+                        icon: Icons.storefront_outlined,
+                        actionLabel: example != null ? 'Подать такое' : 'Обновить',
+                        onAction: () async {
+                          if (example == null) {
+                            await state.loadListings();
+                            return;
+                          }
+                          final ok = await ensureLoggedIn(context, message: 'Войдите, чтобы подать объявление');
+                          if (!ok || !context.mounted) return;
+                          await Navigator.push(
+                            context,
+                            fastRoute(
+                              CreateListingScreen(
+                                initial: {
+                                  'category': example.category,
+                                  'title': example.exampleTitle,
+                                  'description': example.exampleDescription,
+                                },
+                              ),
+                            ),
+                          );
+                        },
+                      );
+                    },
                   ),
                 ),
               )
@@ -2171,6 +2197,30 @@ class ProfileScreen extends StatelessWidget {
             child: const Text('Создать аккаунт'),
           ),
           const SizedBox(height: 16),
+          ListTile(
+            leading: const Icon(Icons.favorite_border),
+            title: const Text('Избранное'),
+            subtitle: const Text('Сохраняйте объявления — войдите, чтобы не потерять'),
+            trailing: const Icon(Icons.chevron_right),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            onTap: () => Navigator.push(context, fastRoute(const FavoritesScreen())),
+          ),
+          ListTile(
+            leading: const Icon(Icons.chat_bubble_outline),
+            title: const Text('Чаты'),
+            subtitle: const Text('Пишите авторам без телефона с порога'),
+            trailing: const Icon(Icons.chevron_right),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (_) => Scaffold(
+                  appBar: AppBar(title: const Text('Чаты')),
+                  body: const ChatsTab(),
+                ),
+              ),
+            ),
+          ),
           ListTile(
             leading: const Icon(Icons.event_outlined),
             title: const Text('Афиша'),

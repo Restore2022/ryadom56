@@ -32,6 +32,7 @@ from app.models import (
     TransportFavorite,
     TransportRoute,
     User,
+    UserReport,
     UserRole,
     UserSession,
 )
@@ -56,6 +57,7 @@ from app.schemas import (
     AdminPushOut,
     AdminUserCreate,
     UserOut,
+    UserReportOut,
     UserRoleUpdate,
 )
 from app.services.audit import log_action
@@ -126,7 +128,10 @@ def stats(
     open_directory_reports = int(
         db.execute(select(func.count(DirectoryReport.id)).where(DirectoryReport.status == "open")).scalar_one()
     )
-    open_reports = open_listing_reports + open_directory_reports
+    open_user_reports = int(
+        db.execute(select(func.count(UserReport.id)).where(UserReport.status == "open")).scalar_one()
+    )
+    open_reports = open_listing_reports + open_directory_reports + open_user_reports
 
     listing_by_settlement = {
         sid: int(n)
@@ -326,6 +331,9 @@ def alerts(
         )
         + int(
             db.execute(select(func.count(DirectoryReport.id)).where(DirectoryReport.status == "open")).scalar_one()
+        )
+        + int(
+            db.execute(select(func.count(UserReport.id)).where(UserReport.status == "open")).scalar_one()
         ),
     )
 
@@ -475,8 +483,15 @@ def update_user(
         if not settlement:
             raise HTTPException(status_code=400, detail="Населённый пункт не найден")
     before = f"role={target.role.value}, active={target.is_active}"
+    was_active = target.is_active
     for key, value in data.items():
         setattr(target, key, value)
+    if target.is_active and not was_active:
+        target.ban_reason = None
+    elif not target.is_active and was_active and not (target.ban_reason or "").strip():
+        target.ban_reason = "Заблокирован модератором"
+    if target.is_active:
+        target.ban_reason = None
 
     log_action(
         db,
@@ -848,6 +863,89 @@ def update_report(
         moderator_reply=report.moderator_reply,
         created_at=report.created_at,
     )
+
+
+def _user_report_out(r: UserReport) -> UserReportOut:
+    return UserReportOut(
+        id=r.id,
+        target_id=r.target_id,
+        target_name=r.target.full_name if r.target else None,
+        reporter_id=r.reporter_id,
+        reporter_name=r.reporter.full_name if r.reporter else None,
+        listing_id=r.listing_id,
+        listing_title=r.listing.title if r.listing else None,
+        reason=r.reason,
+        note=r.note,
+        status=r.status,
+        moderator_reply=r.moderator_reply,
+        created_at=r.created_at,
+    )
+
+
+@router.get("/user-reports", response_model=list[UserReportOut])
+def list_user_reports(
+    status_filter: str | None = Query(default="open", alias="status"),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(UserRole.moderator, UserRole.admin)),
+):
+    stmt = select(UserReport).options(
+        selectinload(UserReport.target),
+        selectinload(UserReport.reporter),
+        selectinload(UserReport.listing),
+    )
+    if status_filter:
+        stmt = stmt.where(UserReport.status == status_filter)
+    stmt = stmt.order_by(UserReport.created_at.desc())
+    rows = db.execute(stmt).scalars().unique().all()
+    return [_user_report_out(r) for r in rows]
+
+
+@router.patch("/user-reports/{report_id}", response_model=UserReportOut)
+def update_user_report(
+    report_id: int,
+    payload: ReportStatusUpdate,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(UserRole.moderator, UserRole.admin)),
+):
+    report = db.execute(
+        select(UserReport)
+        .options(
+            selectinload(UserReport.target),
+            selectinload(UserReport.reporter),
+            selectinload(UserReport.listing),
+        )
+        .where(UserReport.id == report_id)
+    ).scalar_one_or_none()
+    if not report:
+        raise HTTPException(status_code=404, detail="Жалоба не найдена")
+    report.status = payload.status
+    report.reviewed_at = datetime.now(timezone.utc)
+    report.reviewed_by_id = user.id
+    reply = (payload.moderator_reply or "").strip() or None
+    report.moderator_reply = reply
+    log_action(
+        db,
+        actor=user,
+        action=f"user_report.{payload.status}",
+        entity_type="user_report",
+        entity_id=report.id,
+        details=f"target={report.target_id}; reply={reply or ''}",
+    )
+    who = report.target.full_name if report.target else f"#{report.target_id}"
+    status_label = "просмотрена" if payload.status == "reviewed" else "отклонена"
+    body = f"Ваша жалоба на пользователя «{who}» {status_label}."
+    if reply:
+        body = f"{body} Ответ: {reply}"
+    notify_user(
+        db,
+        user_id=report.reporter_id,
+        type="user_report_update",
+        title="Жалоба на человека",
+        body=body,
+        listing_id=report.listing_id,
+    )
+    db.commit()
+    return _user_report_out(report)
 
 
 @router.get("/chats", response_model=list[AdminConversationOut])

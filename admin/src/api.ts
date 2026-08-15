@@ -151,6 +151,7 @@ export type User = {
   settlement?: Settlement | null;
   role: 'user' | 'moderator' | 'editor' | 'admin';
   is_active: boolean;
+  ban_reason?: string | null;
   created_at?: string;
   last_ip?: string | null;
   device_brand?: string | null;
@@ -214,6 +215,21 @@ export type DirectoryReport = {
   directory_title?: string | null;
   reporter_id: number;
   reporter_name?: string | null;
+  reason: string;
+  note?: string | null;
+  moderator_reply?: string | null;
+  status: string;
+  created_at: string;
+};
+
+export type UserReport = {
+  id: number;
+  target_id: number;
+  target_name?: string | null;
+  reporter_id: number;
+  reporter_name?: string | null;
+  listing_id?: number | null;
+  listing_title?: string | null;
   reason: string;
   note?: string | null;
   moderator_reply?: string | null;

@@ -1,6 +1,7 @@
 from pathlib import Path
 import json
 import uuid
+from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 from sqlalchemy import case, exists, func, or_, select
 from sqlalchemy.orm import Session, selectinload
@@ -18,6 +19,7 @@ from app.models import (
     ListingStatus,
     Settlement,
     User,
+    UserReport,
     UserRole,
 )
 from app.schemas import (
@@ -25,6 +27,7 @@ from app.schemas import (
     ConversationOut,
     ListingCloseIn,
     ListingCreate,
+    ListingExtendIn,
     ListingImageOut,
     ListingImagesReorderIn,
     ListingMessageIn,
@@ -41,6 +44,7 @@ from app.services.audit import log_action
 from app.services.blacklist import looks_like_chat_spam, match_blacklist
 from app.services.notify import notify_user
 from app.services.rate_limit import limiter
+from app.services.trust import maybe_autoban_from_listing_reports
 
 router = APIRouter(prefix="/listings", tags=["listings"])
 
@@ -63,6 +67,7 @@ CLOSE_REASON_LABELS = {
     "sold": "Продали / отдали",
     "not_relevant": "Неактуально",
     "busy": "Пока занят / нет времени",
+    "expired": "Истёк срок публикации",
     "other": "Другое",
 }
 
@@ -175,6 +180,8 @@ def to_out(
         created_at=item.created_at,
         updated_at=item.updated_at,
         distance_km=distance_km,
+        lifetime_days=int(getattr(item, "lifetime_days", None) or 30),
+        expires_at=getattr(item, "expires_at", None),
     )
 
 
@@ -195,6 +202,54 @@ def favorite_ids_for(db: Session, user: User | None) -> set[int]:
         return set()
     rows = db.execute(select(Favorite.listing_id).where(Favorite.user_id == user.id)).scalars().all()
     return set(rows)
+
+
+def normalize_lifetime(days: int | None) -> int:
+    return 60 if days == 60 else 30
+
+
+def utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def set_expiry_from(item: Listing, start: datetime, days: int | None = None) -> None:
+    life = normalize_lifetime(days if days is not None else getattr(item, "lifetime_days", 30))
+    item.lifetime_days = life
+    item.expires_at = start + timedelta(days=life)
+
+
+def archive_expired_listings(db: Session) -> None:
+    now = utcnow()
+    rows = db.execute(
+        select(Listing).where(
+            Listing.status == ListingStatus.approved,
+            Listing.expires_at.is_not(None),
+            Listing.expires_at <= now,
+        )
+    ).scalars().all()
+    if not rows:
+        return
+    for item in rows:
+        item.status = ListingStatus.archived
+        item.close_reason = "expired"
+        item.close_note = CLOSE_REASON_LABELS["expired"]
+        item.is_pinned = False
+    db.commit()
+
+
+def author_replied_to_buyer(db: Session, listing: Listing, viewer: User | None) -> bool:
+    if not viewer or viewer.id == listing.author_id:
+        return False
+    found = db.execute(
+        select(ListingMessage.id)
+        .where(
+            ListingMessage.listing_id == listing.id,
+            ListingMessage.buyer_id == viewer.id,
+            ListingMessage.sender_id == listing.author_id,
+        )
+        .limit(1)
+    ).scalar_one_or_none()
+    return found is not None
 
 
 @router.get("/admin/all", response_model=list[ListingOut])
@@ -410,6 +465,7 @@ def list_listings(
     db: Session = Depends(get_db),
     user: User | None = Depends(get_optional_user),
 ):
+    archive_expired_listings(db)
     if price_min is not None and price_max is not None and price_min > price_max:
         raise HTTPException(status_code=400, detail="Цена «от» больше цены «до»")
     stmt = select(Listing).options(
@@ -504,13 +560,15 @@ def get_listing(
     db: Session = Depends(get_db),
     user: User | None = Depends(get_optional_user),
 ):
+    archive_expired_listings(db)
     item = load_listing(db, listing_id)
     if not item:
         raise HTTPException(status_code=404, detail="Объявление не найдено")
     if item.status != ListingStatus.approved:
         if not user or (user.id != item.author_id and user.role not in (UserRole.admin, UserRole.moderator)):
             raise HTTPException(status_code=404, detail="Объявление не найдено")
-    return to_out(item, favorite_ids_for(db, user), viewer=user)
+    reveal = author_replied_to_buyer(db, item, user)
+    return to_out(item, favorite_ids_for(db, user), viewer=user, reveal_phone=reveal)
 
 
 @router.post("", response_model=ListingOut)
@@ -525,6 +583,7 @@ def create_listing(
         raise HTTPException(status_code=429, detail="Слишком много объявлений за час. Попробуйте позже")
     data = payload.model_dump()
     as_draft = bool(data.pop("as_draft", False))
+    lifetime_days = normalize_lifetime(data.pop("lifetime_days", 30))
     if data.get("price") is not None and data["price"] < 0:
         raise HTTPException(status_code=400, detail="Цена не может быть отрицательной")
     if not as_draft:
@@ -538,6 +597,7 @@ def create_listing(
         price=data.get("price"),
         contact_phone=data.get("contact_phone"),
         is_urgent=bool(data.get("is_urgent", False)),
+        lifetime_days=lifetime_days,
         status=ListingStatus.draft if as_draft else ListingStatus.pending,
     )
     db.add(item)
@@ -563,6 +623,8 @@ def update_listing(
         raise HTTPException(status_code=403, detail="Нет доступа")
     data = payload.model_dump(exclude_unset=True)
     as_draft = data.pop("as_draft", None)
+    if "lifetime_days" in data:
+        data["lifetime_days"] = normalize_lifetime(data.get("lifetime_days"))
     was_approved = item.status == ListingStatus.approved
     if was_approved and item.author_id == user.id and as_draft is not True:
         item.previous_snapshot = snapshot_listing(item)
@@ -602,7 +664,41 @@ def close_listing(
     item.close_note = (payload.note or "").strip() or CLOSE_REASON_LABELS.get(payload.reason)
     db.commit()
     item = load_listing(db, listing_id)
-    return to_out(item, favorite_ids_for(db, user))
+    return to_out(item, favorite_ids_for(db, user), viewer=user)
+
+
+@router.post("/{listing_id}/extend", response_model=ListingOut)
+def extend_listing(
+    listing_id: int,
+    payload: ListingExtendIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    archive_expired_listings(db)
+    item = load_listing(db, listing_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Объявление не найдено")
+    if item.author_id != user.id and user.role not in (UserRole.admin, UserRole.moderator):
+        raise HTTPException(status_code=403, detail="Нет доступа")
+    days = normalize_lifetime(payload.days)
+    now = utcnow()
+    if item.status == ListingStatus.approved:
+        base = item.expires_at if item.expires_at and item.expires_at > now else now
+        set_expiry_from(item, base, days)
+    elif item.status == ListingStatus.archived and item.close_reason == "expired":
+        ensure_active_slot(db, user.id, exclude_id=item.id)
+        item.status = ListingStatus.approved
+        item.close_reason = None
+        item.close_note = None
+        set_expiry_from(item, now, days)
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Продлить можно опубликованное объявление или снятое по сроку. Остальные — через «Снова».",
+        )
+    db.commit()
+    item = load_listing(db, listing_id)
+    return to_out(item, favorite_ids_for(db, user), viewer=user)
 
 
 @router.post("/{listing_id}/republish", response_model=ListingOut)
@@ -696,6 +792,8 @@ def delete_listing(
         db.delete(fav)
     for report in db.execute(select(ListingReport).where(ListingReport.listing_id == listing_id)).scalars().all():
         db.delete(report)
+    for urep in db.execute(select(UserReport).where(UserReport.listing_id == listing_id)).scalars().all():
+        urep.listing_id = None
     log_action(
         db,
         actor=user,
@@ -752,27 +850,8 @@ def report_listing(
         body=f'"{item.title}" проверят модераторы',
         listing_id=item.id,
     )
-    against = int(
-        db.execute(
-            select(func.count(ListingReport.id))
-            .join(Listing, Listing.id == ListingReport.listing_id)
-            .where(Listing.author_id == item.author_id, ListingReport.status.in_(["open", "reviewed"]))
-        ).scalar_one()
-    )
     author = db.execute(select(User).where(User.id == item.author_id)).scalar_one()
-    if against >= 5 and author.is_active and author.role == UserRole.user:
-        author.is_active = False
-        author.badge = "caution"
-        notify_user(
-            db,
-            user_id=author.id,
-            type="account_limited",
-            title="Аккаунт ограничен",
-            body="Слишком много жалоб на объявления. Напишите в поддержку.",
-            listing_id=None,
-        )
-    elif against >= 2:
-        author.badge = "caution"
+    maybe_autoban_from_listing_reports(db, author)
     db.commit()
     return {"ok": True}
 
@@ -859,6 +938,11 @@ def post_message(
         raise HTTPException(
             status_code=400,
             detail="Сообщение похоже на спам. Уберите ссылки и рекламу — пишите по делу объявления",
+        )
+    if not limiter.allow(f"chat-day:{user.id}", limit=50, window_sec=86400):
+        raise HTTPException(
+            status_code=429,
+            detail="Лимит сообщений на сегодня (50). Напишите завтра — без капчи, просто пауза от спама.",
         )
     buyer_id = _resolve_thread_buyer_id(item, user, payload.peer_id)
     if user.id == item.author_id:
@@ -1072,6 +1156,7 @@ def moderate_listing(
     if payload.status == ListingStatus.approved:
         item.auto_flagged = False
         item.previous_snapshot = None
+        set_expiry_from(item, utcnow(), getattr(item, "lifetime_days", 30))
     if payload.status in (ListingStatus.rejected, ListingStatus.archived):
         item.is_pinned = False
     log_action(

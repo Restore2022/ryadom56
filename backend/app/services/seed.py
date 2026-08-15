@@ -33,6 +33,7 @@ USER_COLUMNS = {
     "rating_score": "FLOAT",
     "token_version": "INTEGER DEFAULT 0",
     "avatar_path": "VARCHAR(255)",
+    "ban_reason": "VARCHAR(255)",
 }
 
 LISTING_COLUMNS = {
@@ -42,6 +43,8 @@ LISTING_COLUMNS = {
     "is_pinned": "BOOLEAN DEFAULT 0",
     "auto_flagged": "BOOLEAN DEFAULT 0",
     "previous_snapshot": "TEXT",
+    "lifetime_days": "INTEGER DEFAULT 30",
+    "expires_at": "DATETIME",
 }
 
 REPORT_COLUMNS = {
@@ -101,6 +104,7 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     _migrate_user_columns()
     _migrate_listing_columns()
+    _backfill_listing_expiry()
     _migrate_directory_columns()
     _migrate_report_columns()
     _migrate_event_columns()
@@ -131,6 +135,34 @@ def _migrate_listing_columns() -> None:
         for name, sql_type in LISTING_COLUMNS.items():
             if name not in existing:
                 conn.execute(text(f"ALTER TABLE listings ADD COLUMN {name} {sql_type}"))
+
+
+def _backfill_listing_expiry() -> None:
+    inspector = inspect(engine)
+    if "listings" not in inspector.get_table_names():
+        return
+    existing = {col["name"] for col in inspector.get_columns("listings")}
+    if "expires_at" not in existing:
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE listings
+                SET lifetime_days = COALESCE(lifetime_days, 30)
+                WHERE lifetime_days IS NULL
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                UPDATE listings
+                SET expires_at = datetime(created_at, '+30 days')
+                WHERE status = 'approved' AND expires_at IS NULL
+                """
+            )
+        )
 
 
 def _migrate_directory_columns() -> None:

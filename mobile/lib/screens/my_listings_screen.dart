@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../state/app_state.dart';
+import '../time_format.dart';
 import '../ui_helpers.dart';
 import 'create_listing_screen.dart';
 import 'home_shell.dart';
@@ -12,6 +13,7 @@ const closeReasons = {
   'sold': 'Продали / отдали',
   'not_relevant': 'Неактуально',
   'busy': 'Пока занят / нет времени',
+  'expired': 'Истёк срок',
   'other': 'Другое',
 };
 
@@ -80,6 +82,42 @@ class _MyListingsScreenState extends State<MyListingsScreen> {
       fastRoute(CreateListingScreen(listingId: item['id'] as int, initial: item)),
     );
     if (ok == true) await _load();
+  }
+
+  Future<void> _extend(Map<String, dynamic> item) async {
+    int days = 30;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            return AlertDialog(
+              title: const Text('Продлить'),
+              content: SegmentedButton<int>(
+                segments: const [
+                  ButtonSegment(value: 30, label: Text('30 дней')),
+                  ButtonSegment(value: 60, label: Text('60 дней')),
+                ],
+                selected: {days},
+                onSelectionChanged: (v) => setLocal(() => days = v.first),
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+                FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Продлить')),
+              ],
+            );
+          },
+        );
+      },
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await context.read<AppState>().extendListing(item['id'] as int, days: days);
+      await _load();
+      if (mounted) showAppSnack(context, 'Срок продлён');
+    } catch (e) {
+      if (mounted) showAppSnack(context, AppState.userFriendlyError(e), error: true);
+    }
   }
 
   Future<void> _republish(Map<String, dynamic> item) async {
@@ -248,6 +286,8 @@ class _MyListingsScreenState extends State<MyListingsScreen> {
                                       final canClose = status == 'approved' || status == 'pending';
                                       final canRepublish =
                                           status == 'archived' || status == 'rejected' || status == 'draft';
+                                      final canExtend = status == 'approved' ||
+                                          (status == 'archived' && item['close_reason'] == 'expired');
                                       final canDelete =
                                           status == 'draft' || status == 'rejected' || status == 'archived';
                                       return Material(
@@ -327,6 +367,14 @@ class _MyListingsScreenState extends State<MyListingsScreen> {
                                                           style: TextStyle(color: scheme.error, fontSize: 12, height: 1.3),
                                                         ),
                                                       ],
+                                                      if (item['expires_at'] != null &&
+                                                          (status == 'approved' || item['close_reason'] == 'expired')) ...[
+                                                        const SizedBox(height: 4),
+                                                        Text(
+                                                          _expiryLine(item),
+                                                          style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+                                                        ),
+                                                      ],
                                                       const SizedBox(height: 8),
                                                       Wrap(
                                                         spacing: 4,
@@ -337,6 +385,8 @@ class _MyListingsScreenState extends State<MyListingsScreen> {
                                                               onPressed: () => _republish(item),
                                                               child: Text(status == 'draft' ? 'Отправить' : 'Снова'),
                                                             ),
+                                                          if (canExtend)
+                                                            TextButton(onPressed: () => _extend(item), child: const Text('Продлить')),
                                                           if (canClose)
                                                             TextButton(onPressed: () => _close(item), child: const Text('Снять')),
                                                           if (canDelete)
@@ -361,6 +411,17 @@ class _MyListingsScreenState extends State<MyListingsScreen> {
                   ],
                 ),
     );
+  }
+
+  String _expiryLine(Map item) {
+    final iso = item['expires_at']?.toString();
+    final dt = parseApiTime(iso);
+    final date = formatApiDate(iso, empty: '—');
+    if (dt == null) return 'Срок: $date';
+    final days = dt.difference(DateTime.now()).inDays;
+    if (item['close_reason'] == 'expired' || days < 0) return 'Срок истёк $date — нажмите Продлить';
+    if (days == 0) return 'Снимается сегодня';
+    return 'До $date · ещё $days дн.';
   }
 
   Widget _chip(String key, String label, dynamic count) {

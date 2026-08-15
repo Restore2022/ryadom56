@@ -1068,6 +1068,15 @@ class AppState extends ChangeNotifier {
     );
   }
 
+  Future<void> reportUser(int userId, {required String reason, String? note, int? listingId}) async {
+    await api.request(
+      '/auth/users/$userId/report',
+      method: 'POST',
+      auth: true,
+      body: {'reason': reason, 'note': note, 'listing_id': listingId},
+    );
+  }
+
   Future<void> reportDirectory(int id, {required String reason, String? note}) async {
     await api.request(
       '/directory/$id/report',
@@ -1211,6 +1220,18 @@ class AppState extends ChangeNotifier {
       method: 'POST',
       auth: true,
       body: {'reason': reason, 'note': note},
+    ) as Map<String, dynamic>;
+    await loadListings();
+    notifyListeners();
+    return updated;
+  }
+
+  Future<Map<String, dynamic>> extendListing(int id, {int days = 30}) async {
+    final updated = await api.request(
+      '/listings/$id/extend',
+      method: 'POST',
+      auth: true,
+      body: {'days': days == 60 ? 60 : 30},
     ) as Map<String, dynamic>;
     await loadListings();
     notifyListeners();

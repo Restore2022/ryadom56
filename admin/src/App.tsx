@@ -20,6 +20,7 @@ import type {
   Stats,
   TransportRoute,
   User,
+  UserReport,
 } from './api';
 import './App.css';
 
@@ -204,6 +205,7 @@ const CLOSE_REASON_LABEL: Record<string, string> = {
   sold: 'Продали / отдали',
   not_relevant: 'Неактуально',
   busy: 'Пока занят',
+  expired: 'Истёк срок',
   other: 'Другое',
 };
 
@@ -211,6 +213,7 @@ const REPORT_REASON_LABEL: Record<string, string> = {
   spam: 'Спам',
   fraud: 'Мошенничество',
   prohibited: 'Запрещённый контент',
+  abuse: 'Оскорбления',
   other: 'Другое',
   wrong_phone: 'Неверный телефон',
   wrong_address: 'Неверный адрес',
@@ -1388,14 +1391,15 @@ function ModerationPage() {
 
 function ReportsPage({ canListings }: { canListings: boolean }) {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<'listings' | 'directory'>(canListings ? 'listings' : 'directory');
+  const [tab, setTab] = useState<'listings' | 'directory' | 'users'>(canListings ? 'listings' : 'directory');
   const [items, setItems] = useState<ListingReport[]>([]);
   const [dirItems, setDirItems] = useState<DirectoryReport[]>([]);
+  const [userItems, setUserItems] = useState<UserReport[]>([]);
   const [status, setStatus] = useState('open');
   const [error, setError] = useState('');
   const [replyModal, setReplyModal] = useState<{
-    kind: 'listing' | 'directory';
-    report: ListingReport | DirectoryReport;
+    kind: 'listing' | 'directory' | 'user';
+    report: ListingReport | DirectoryReport | UserReport;
     next: 'reviewed' | 'dismissed';
   } | null>(null);
   const [moderatorReply, setModeratorReply] = useState('');
@@ -1408,6 +1412,9 @@ function ReportsPage({ canListings }: { canListings: boolean }) {
       if (tab === 'listings') {
         if (!canListings) return;
         setItems(await api<ListingReport[]>(`/admin/reports${qs}`));
+      } else if (tab === 'users') {
+        if (!canListings) return;
+        setUserItems(await api<UserReport[]>(`/admin/user-reports${qs}`));
       } else {
         setDirItems(await api<DirectoryReport[]>(`/admin/directory-reports${qs}`));
       }
@@ -1421,8 +1428,8 @@ function ReportsPage({ canListings }: { canListings: boolean }) {
   }, [status, tab, canListings]);
 
   function openReplyModal(
-    kind: 'listing' | 'directory',
-    report: ListingReport | DirectoryReport,
+    kind: 'listing' | 'directory' | 'user',
+    report: ListingReport | DirectoryReport | UserReport,
     next: 'reviewed' | 'dismissed',
   ) {
     setReplyModal({ kind, report, next });
@@ -1444,7 +1451,12 @@ function ReportsPage({ canListings }: { canListings: boolean }) {
       if (!(await confirmAction('Отклонить эту жалобу?'))) return;
     }
     const next = replyModal.next;
-    const listingId = replyModal.kind === 'listing' ? (replyModal.report as ListingReport).listing_id : null;
+    const listingId =
+      replyModal.kind === 'listing'
+        ? (replyModal.report as ListingReport).listing_id
+        : replyModal.kind === 'user'
+          ? (replyModal.report as UserReport).listing_id ?? null
+          : null;
     const shouldOpen = openListingAfter && listingId != null;
     setBusy(true);
     setError('');
@@ -1452,7 +1464,9 @@ function ReportsPage({ canListings }: { canListings: boolean }) {
       const path =
         replyModal.kind === 'listing'
           ? `/admin/reports/${replyModal.report.id}`
-          : `/admin/directory-reports/${replyModal.report.id}`;
+          : replyModal.kind === 'user'
+            ? `/admin/user-reports/${replyModal.report.id}`
+            : `/admin/directory-reports/${replyModal.report.id}`;
       await api(path, {
         method: 'PATCH',
         body: JSON.stringify({
@@ -1479,7 +1493,8 @@ function ReportsPage({ canListings }: { canListings: boolean }) {
     navigate(`/moderation?listingId=${listingId}`);
   }
 
-  const titleOf = (r: ListingReport | DirectoryReport) => {
+  const titleOf = (r: ListingReport | DirectoryReport | UserReport) => {
+    if ('target_id' in r) return r.target_name || `Пользователь #${r.target_id}`;
     if ('listing_id' in r) return r.listing_title || `Объявление #${r.listing_id}`;
     return r.directory_title || `Контакт #${r.directory_id}`;
   };
@@ -1489,7 +1504,7 @@ function ReportsPage({ canListings }: { canListings: boolean }) {
       <div className="page-head">
         <div>
           <h1>Жалобы</h1>
-          <p>Объявления и неверные контакты справочника</p>
+          <p>Объявления, люди и неверные контакты справочника</p>
         </div>
       </div>
       <div className="toolbar">
@@ -1509,6 +1524,15 @@ function ReportsPage({ canListings }: { canListings: boolean }) {
         >
           Справочник
         </button>
+        {canListings && (
+          <button
+            className={tab === 'users' ? 'btn' : 'btn ghost'}
+            type="button"
+            onClick={() => setTab('users')}
+          >
+            Люди
+          </button>
+        )}
         <select value={status} onChange={(e) => setStatus(e.target.value)}>
           <option value="open">Открытые</option>
           <option value="reviewed">Просмотренные</option>
@@ -1592,6 +1616,44 @@ function ReportsPage({ canListings }: { canListings: boolean }) {
           ))}
         {tab === 'listings' && !items.length && <div className="empty">Жалоб нет</div>}
         {tab === 'directory' && !dirItems.length && <div className="empty">Жалоб на контакты нет</div>}
+        {tab === 'users' &&
+          userItems.map((r) => (
+            <article key={r.id} className="row-card">
+              <div className="row-main">
+                <h3 className="row-title">{r.target_name || `Пользователь #${r.target_id}`}</h3>
+                <div className="meta">
+                  <span className="chip warn">{REPORT_REASON_LABEL[r.reason] || r.reason}</span>
+                  <span className="chip neutral">{r.reporter_name}</span>
+                  <span className="chip">{REPORT_STATUS_LABEL[r.status] || r.status}</span>
+                  {r.listing_title ? <span className="chip">с объявления</span> : null}
+                </div>
+                {r.note && <p className="row-body">{r.note}</p>}
+                {r.listing_title && <p className="muted">Объявление: {r.listing_title}</p>}
+                {r.moderator_reply && <p className="muted">Ответ: {r.moderator_reply}</p>}
+                <p className="muted">{formatDate(r.created_at)}</p>
+              </div>
+              <div className="actions">
+                <button className="btn ghost" type="button" onClick={() => navigate(`/users`)}>
+                  К пользователям
+                </button>
+                {r.status === 'open' && (
+                  <>
+                    <button className="btn" type="button" onClick={() => openReplyModal('user', r, 'reviewed')}>
+                      Просмотрено
+                    </button>
+                    <button
+                      className="btn secondary"
+                      type="button"
+                      onClick={() => openReplyModal('user', r, 'dismissed')}
+                    >
+                      Отклонить
+                    </button>
+                  </>
+                )}
+              </div>
+            </article>
+          ))}
+        {tab === 'users' && !userItems.length && <div className="empty">Жалоб на людей нет</div>}
       </div>
 
       {replyModal && (
@@ -1610,7 +1672,7 @@ function ReportsPage({ canListings }: { canListings: boolean }) {
                 rows={3}
               />
             </label>
-            {replyModal.kind === 'listing' && (
+            {replyModal.kind !== 'directory' && (replyModal.kind === 'listing' || (replyModal.report as UserReport).listing_id) && (
               <label className="check-inline" style={{ marginTop: 12 }}>
                 <input
                   type="checkbox"
@@ -2623,6 +2685,7 @@ function UsersPage() {
                 <span className="chip">{ROLE_LABELS[u.role]}</span>
                 {u.badge ? <span className="chip neutral">{BADGE_LABELS[u.badge] || u.badge}</span> : null}
                 {!u.is_active && <span className="chip danger">Заблокирован</span>}
+                {!u.is_active && u.ban_reason ? <span className="chip warn">{u.ban_reason}</span> : null}
                 {u.has_push ? <span className="chip ok">Пуш</span> : <span className="chip neutral">Без пуша</span>}
               </div>
               <div className="device-grid">
@@ -2727,6 +2790,9 @@ function UsersPage() {
                     <option value="0">Заблокирован</option>
                   </select>
                 </label>
+                {!creating && selected && !form.is_active && selected.ban_reason ? (
+                  <p className="muted">Причина блокировки: {selected.ban_reason}. Снимите блок статусом «Активен».</p>
+                ) : null}
                 <label className="field">
                   Метка
                   <select value={form.badge} onChange={(e) => setForm({ ...form, badge: e.target.value })}>

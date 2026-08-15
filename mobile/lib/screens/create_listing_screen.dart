@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
+import '../listing_draft.dart';
+import '../listing_templates.dart';
 import '../state/app_state.dart';
 
 class CreateListingScreen extends StatefulWidget {
@@ -26,9 +29,12 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
   String category = 'goods';
   int? settlementId;
   bool isUrgent = false;
+  int lifetimeDays = 30;
   String? error;
   bool busy = false;
   bool savedOnExit = false;
+  bool restoredLocal = false;
+  Timer? _localSaveTimer;
   final List<XFile> photos = [];
   final List<Map<String, dynamic>> existingImages = [];
   final picker = ImagePicker();
@@ -51,6 +57,7 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
       if (p != null) price.text = '$p';
       phone.text = (initial['contact_phone'] as String?) ?? (user?['phone'] as String?) ?? '';
       isUrgent = initial['is_urgent'] == true;
+      lifetimeDays = initial['lifetime_days'] == 60 ? 60 : 30;
       final imgs = (initial['images'] as List?) ?? [];
       for (final img in imgs) {
         if (img is Map<String, dynamic>) {
@@ -64,15 +71,83 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
       settlementId = user?['settlement_id'] as int?;
       phone.text = (user?['phone'] as String?) ?? '';
     }
+    title.addListener(_scheduleLocalSave);
+    description.addListener(_scheduleLocalSave);
+    price.addListener(_scheduleLocalSave);
+    phone.addListener(_scheduleLocalSave);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _restoreLocalDraft());
   }
 
   @override
   void dispose() {
+    _localSaveTimer?.cancel();
     title.dispose();
     description.dispose();
     price.dispose();
     phone.dispose();
     super.dispose();
+  }
+
+  void _scheduleLocalSave() {
+    _localSaveTimer?.cancel();
+    _localSaveTimer = Timer(const Duration(milliseconds: 600), () {
+      _persistLocal();
+    });
+  }
+
+  ListingLocalDraft _snapshot() {
+    return ListingLocalDraft(
+      title: title.text,
+      description: description.text,
+      category: category,
+      settlementId: settlementId,
+      price: price.text,
+      phone: phone.text,
+      isUrgent: isUrgent,
+      lifetimeDays: lifetimeDays,
+      photoPaths: photos.map((e) => e.path).toList(),
+    );
+  }
+
+  Future<void> _persistLocal() async {
+    await ListingLocalDraft.save(widget.listingId, _snapshot());
+  }
+
+  Future<void> _restoreLocalDraft() async {
+    final draft = await ListingLocalDraft.load(widget.listingId);
+    if (draft == null || !mounted) return;
+    setState(() {
+      if (draft.title.isNotEmpty) title.text = draft.title;
+      if (draft.description.isNotEmpty) description.text = draft.description;
+      category = draft.category;
+      if (draft.settlementId != null) settlementId = draft.settlementId;
+      if (draft.price.isNotEmpty) price.text = draft.price;
+      if (draft.phone.isNotEmpty) phone.text = draft.phone;
+      isUrgent = draft.isUrgent;
+      lifetimeDays = draft.lifetimeDays;
+      final have = photos.map((e) => e.path).toSet();
+      for (final path in draft.photoPaths) {
+        if (!have.contains(path)) photos.add(XFile(path));
+      }
+      restoredLocal = true;
+    });
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Вернули черновик: текст и фото, которые успели набрать')),
+    );
+  }
+
+  void _applyTemplate(ListingTemplate t) {
+    final titleLooksEmpty = title.text.trim().isEmpty || listingTemplates.any((x) => x.exampleTitle == title.text.trim());
+    final descLooksEmpty =
+        description.text.trim().isEmpty || listingTemplates.any((x) => x.exampleDescription == description.text.trim());
+    setState(() {
+      category = t.category;
+      if (t.category == 'free') price.clear();
+      if (titleLooksEmpty) title.text = t.exampleTitle;
+      if (descLooksEmpty) description.text = t.exampleDescription;
+    });
+    _scheduleLocalSave();
   }
 
   Future<void> _pickSource() async {
@@ -105,12 +180,14 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
       final shot = await picker.pickImage(source: ImageSource.camera, imageQuality: 40, maxWidth: 1280);
       if (shot == null) return;
       setState(() => photos.add(shot));
+      _scheduleLocalSave();
     } else {
       final remaining = maxPhotos - totalPhotoCount;
       if (remaining <= 0) return;
       final picked = await picker.pickMultiImage(imageQuality: 40, maxWidth: 1280);
       if (picked.isEmpty) return;
       setState(() => photos.addAll(picked.take(remaining)));
+      _scheduleLocalSave();
     }
   }
 
@@ -307,13 +384,44 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
             ),
           ),
           const SizedBox(height: 16),
-          TextField(controller: title, decoration: const InputDecoration(labelText: 'Заголовок', border: OutlineInputBorder())),
+          Text('Шаблоны', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 4),
+          Text(
+            'Подставят заголовок и текст — потом поправьте под себя.',
+            style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 12),
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              for (final t in listingTemplates)
+                ChoiceChip(
+                  label: Text(t.chipLabel),
+                  selected: category == t.category,
+                  onSelected: (_) => _applyTemplate(t),
+                ),
+            ],
+          ),
+          const SizedBox(height: 16),
+          TextField(
+            controller: title,
+            decoration: InputDecoration(
+              labelText: 'Заголовок',
+              hintText: templateFor(category)?.titleHint ?? 'Кратко, что предлагаете',
+              border: const OutlineInputBorder(),
+            ),
+          ),
           const SizedBox(height: 12),
           TextField(
             controller: description,
             minLines: 4,
             maxLines: 8,
-            decoration: const InputDecoration(labelText: 'Описание', border: OutlineInputBorder()),
+            decoration: InputDecoration(
+              labelText: 'Описание',
+              hintText: templateFor(category)?.descriptionHint ?? 'Состояние, размер, где забрать',
+              border: const OutlineInputBorder(),
+            ),
           ),
           const SizedBox(height: 12),
           DropdownButtonFormField<String>(
@@ -332,6 +440,7 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
                 category = v ?? 'goods';
                 if (category == 'free') price.clear();
               });
+              _scheduleLocalSave();
             },
           ),
           const SizedBox(height: 12),
@@ -341,7 +450,10 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
             items: settlements
                 .map((s) => DropdownMenuItem<int>(value: s['id'] as int, child: Text(s['display_name'] as String)))
                 .toList(),
-            onChanged: (v) => setState(() => settlementId = v),
+            onChanged: (v) {
+              setState(() => settlementId = v);
+              _scheduleLocalSave();
+            },
           ),
           if (category != 'free') ...[
             const SizedBox(height: 12),
@@ -364,9 +476,31 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             value: isUrgent,
-            onChanged: (v) => setState(() => isUrgent = v),
+            onChanged: (v) {
+              setState(() => isUrgent = v);
+              _scheduleLocalSave();
+            },
             title: const Text('Срочно'),
             subtitle: const Text('Выделить объявление в ленте'),
+          ),
+          const SizedBox(height: 4),
+          Text('Срок публикации', style: Theme.of(context).textTheme.titleSmall),
+          const SizedBox(height: 4),
+          Text(
+            'Через это время объявление снимется само. Можно продлить в «Мои».',
+            style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 12),
+          ),
+          const SizedBox(height: 8),
+          SegmentedButton<int>(
+            segments: const [
+              ButtonSegment(value: 30, label: Text('30 дней')),
+              ButtonSegment(value: 60, label: Text('60 дней')),
+            ],
+            selected: {lifetimeDays},
+            onSelectionChanged: (v) {
+              setState(() => lifetimeDays = v.first);
+              _scheduleLocalSave();
+            },
           ),
           if (widget.isEdit) ...[
             const SizedBox(height: 8),
@@ -404,6 +538,7 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
   }
 
   Future<void> _autosaveDraft() async {
+    await _persistLocal();
     if (!_hasContent || settlementId == null) return;
     if (title.text.trim().length < 2 || description.text.trim().length < 3) return;
     try {
@@ -417,6 +552,7 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
             : double.tryParse(price.text.trim().replaceAll(',', '.')),
         'contact_phone': phone.text.trim().isEmpty ? null : phone.text.trim(),
         'is_urgent': isUrgent,
+        'lifetime_days': lifetimeDays,
       };
       final app = context.read<AppState>();
       if (widget.isEdit) {
@@ -469,6 +605,7 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
           : double.tryParse(price.text.trim().replaceAll(',', '.')),
       'contact_phone': phoneRaw.isEmpty ? null : phoneRaw,
       'is_urgent': isUrgent,
+      'lifetime_days': lifetimeDays,
     };
     try {
       final app = context.read<AppState>();
@@ -487,6 +624,7 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
         );
       }
       savedOnExit = true;
+      await ListingLocalDraft.clear(widget.listingId);
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(

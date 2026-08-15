@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
+import '../auth_prompt.dart';
 import '../state/app_state.dart';
 import '../ui_helpers.dart';
 import 'home_shell.dart';
@@ -18,6 +19,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
   List<dynamic> items = [];
   bool loading = true;
   String? error;
+  int? _loadedUserId;
 
   @override
   void initState() {
@@ -26,6 +28,16 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
   }
 
   Future<void> _load() async {
+    final state = context.read<AppState>();
+    if (state.user == null) {
+      setState(() {
+        items = [];
+        loading = false;
+        error = null;
+        _loadedUserId = null;
+      });
+      return;
+    }
     setState(() {
       loading = true;
       error = null;
@@ -36,6 +48,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
         setState(() {
           items = data;
           loading = false;
+          _loadedUserId = context.read<AppState>().user?['id'] as int?;
         });
       }
     } catch (e) {
@@ -53,9 +66,34 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
     final state = context.watch<AppState>();
     final scheme = Theme.of(context).colorScheme;
 
+    final uid = state.user?['id'] as int?;
+    if (uid != null && uid != _loadedUserId && !loading) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _load();
+      });
+    }
+
     return Scaffold(
       appBar: AppBar(title: const Text('Избранное')),
-      body: loading
+      body: state.user == null
+          ? ListView(
+              padding: const EdgeInsets.all(16),
+              children: [
+                const GuestCtaBanner(
+                  title: 'Избранное — после входа',
+                  subtitle:
+                      'Ленту смотреть можно. Чтобы сохранить объявление и вернуться к нему позже — нужен аккаунт.',
+                ),
+                const SizedBox(height: 16),
+                emptyState(
+                  context: context,
+                  title: 'Пока ничего не сохранено',
+                  subtitle: 'Войдите и нажмите ♡ на карточке',
+                  icon: Icons.favorite_border,
+                ),
+              ],
+            )
+          : loading
           ? const Center(child: CircularProgressIndicator())
           : error != null
               ? Center(

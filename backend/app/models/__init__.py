@@ -87,6 +87,7 @@ class User(Base):
     rating_score: Mapped[float | None] = mapped_column(Float, nullable=True)
     token_version: Mapped[int] = mapped_column(Integer, default=0)
     avatar_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    ban_reason: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     settlement: Mapped["Settlement"] = relationship(back_populates="users")
     listings: Mapped[list["Listing"]] = relationship(back_populates="author")
@@ -137,6 +138,8 @@ class Listing(Base):
     previous_snapshot: Mapped[str | None] = mapped_column(Text, nullable=True)
     close_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
     close_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    lifetime_days: Mapped[int] = mapped_column(Integer, default=30)
+    expires_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         UtcDateTime(), server_default=func.now(), onupdate=func.now()
@@ -346,6 +349,27 @@ class ListingReport(Base):
 
     listing: Mapped["Listing"] = relationship()
     reporter: Mapped["User"] = relationship(foreign_keys=[reporter_id], back_populates="reports")
+    reviewed_by: Mapped["User | None"] = relationship(foreign_keys=[reviewed_by_id])
+
+
+class UserReport(Base):
+    __tablename__ = "user_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    target_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    reporter_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    listing_id: Mapped[int | None] = mapped_column(ForeignKey("listings.id"), nullable=True)
+    reason: Mapped[str] = mapped_column(String(40), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="open")
+    moderator_reply: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
+    reviewed_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
+    reviewed_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+
+    target: Mapped["User"] = relationship(foreign_keys=[target_id])
+    reporter: Mapped["User"] = relationship(foreign_keys=[reporter_id])
+    listing: Mapped["Listing | None"] = relationship()
     reviewed_by: Mapped["User | None"] = relationship(foreign_keys=[reviewed_by_id])
 
 

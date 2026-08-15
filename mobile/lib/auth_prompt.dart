@@ -55,3 +55,56 @@ Future<bool> ensureLoggedIn(
   if (!context.mounted) return false;
   return context.read<AppState>().user != null;
 }
+
+class GuestCtaBanner extends StatelessWidget {
+  const GuestCtaBanner({
+    super.key,
+    required this.title,
+    required this.subtitle,
+    this.compact = false,
+  });
+
+  final String title;
+  final String subtitle;
+  final bool compact;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Container(
+      width: double.infinity,
+      padding: EdgeInsets.all(compact ? 14 : 18),
+      decoration: BoxDecoration(
+        color: scheme.primaryContainer.withValues(alpha: 0.55),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: scheme.primary.withValues(alpha: 0.25)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(title, style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16)),
+          const SizedBox(height: 6),
+          Text(subtitle, style: TextStyle(color: scheme.onSurfaceVariant, height: 1.35)),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: FilledButton(
+                  onPressed: () => Navigator.pushNamed(context, '/login'),
+                  child: const Text('Войти'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: OutlinedButton(
+                  onPressed: () => Navigator.pushNamed(context, '/register'),
+                  child: const Text('Создать'),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}

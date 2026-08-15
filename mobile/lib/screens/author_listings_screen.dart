@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
+import '../auth_prompt.dart';
 import '../state/app_state.dart';
 import '../time_format.dart';
+import '../ui_helpers.dart';
 import 'home_shell.dart';
 import 'listing_detail_screen.dart';
 
@@ -63,6 +65,74 @@ class _AuthorListingsScreenState extends State<AuthorListingsScreen> {
 
   String _fmtMemberSince(String? iso) => formatApiMonthYear(iso);
 
+  Future<void> _reportUser() async {
+    final me = context.read<AppState>().user;
+    if (me != null && me['id'] == widget.authorId) {
+      showAppSnack(context, 'Нельзя пожаловаться на себя');
+      return;
+    }
+    final loggedIn = await ensureLoggedIn(context, message: 'Войдите, чтобы пожаловаться');
+    if (!loggedIn || !mounted) return;
+    String reason = 'spam';
+    final note = TextEditingController();
+    const reasons = {
+      'spam': 'Спам',
+      'fraud': 'Мошенничество',
+      'prohibited': 'Запрещённый контент',
+      'abuse': 'Оскорбления / угрозы',
+      'other': 'Другое',
+    };
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setLocal) {
+            return AlertDialog(
+              title: const Text('Жалоба на человека'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButtonFormField<String>(
+                    value: reason,
+                    decoration: const InputDecoration(labelText: 'Причина', border: OutlineInputBorder()),
+                    items: reasons.entries
+                        .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value)))
+                        .toList(),
+                    onChanged: (v) => setLocal(() => reason = v ?? 'spam'),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: note,
+                    decoration: const InputDecoration(
+                      labelText: 'Комментарий (необязательно)',
+                      border: OutlineInputBorder(),
+                    ),
+                    maxLines: 2,
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Отмена')),
+                FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Отправить')),
+              ],
+            );
+          },
+        );
+      },
+    );
+    if (ok != true || !mounted) return;
+    try {
+      await context.read<AppState>().reportUser(
+            widget.authorId,
+            reason: reason,
+            note: note.text.trim().isEmpty ? null : note.text.trim(),
+          );
+      if (mounted) showAppSnack(context, 'Жалоба отправлена');
+    } catch (e) {
+      if (mounted) showAppSnack(context, AppState.userFriendlyError(e), error: true);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final state = context.watch<AppState>();
@@ -74,7 +144,16 @@ class _AuthorListingsScreenState extends State<AuthorListingsScreen> {
     final listingsCount = (p?['listings_count'] as num?)?.toInt() ?? items.length;
 
     return Scaffold(
-      appBar: AppBar(title: Text(widget.authorName)),
+      appBar: AppBar(
+        title: Text(widget.authorName),
+        actions: [
+          IconButton(
+            tooltip: 'Пожаловаться на человека',
+            onPressed: _reportUser,
+            icon: const Icon(Icons.flag_outlined),
+          ),
+        ],
+      ),
       body: loading
           ? const Center(child: CircularProgressIndicator())
           : error != null && items.isEmpty && p == null

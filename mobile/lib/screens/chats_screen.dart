@@ -20,6 +20,7 @@ class _ChatsTabState extends State<ChatsTab> {
   List<dynamic> items = [];
   bool loading = true;
   String? error;
+  int? _loadedUserId;
 
   @override
   void initState() {
@@ -34,6 +35,7 @@ class _ChatsTabState extends State<ChatsTab> {
         items = [];
         loading = false;
         error = null;
+        _loadedUserId = null;
       });
       return;
     }
@@ -47,6 +49,7 @@ class _ChatsTabState extends State<ChatsTab> {
       setState(() {
         items = rows;
         loading = false;
+        _loadedUserId = state.user?['id'] as int?;
       });
     } catch (e) {
       if (!mounted) return;
@@ -63,22 +66,35 @@ class _ChatsTabState extends State<ChatsTab> {
     final scheme = Theme.of(context).colorScheme;
     final pad = context.isLandscape ? 12.0 : 16.0;
 
+    final uid = state.user?['id'] as int?;
+    if (uid != null && uid != _loadedUserId && !loading) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _load();
+      });
+    }
+
     if (state.user == null) {
       return ListView(
         padding: EdgeInsets.all(pad),
         children: [
           adaptiveFillMessage(
             context: context,
-            child: emptyState(
-              context: context,
-              title: 'Чаты',
-              subtitle: 'Войдите, чтобы писать по объявлениям и видеть переписки',
-              icon: Icons.chat_bubble_outline,
-              actionLabel: 'Войти',
-              onAction: () async {
-                final ok = await ensureLoggedIn(context, message: 'Войдите, чтобы открыть чаты');
-                if (ok && mounted) _load();
-              },
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const GuestCtaBanner(
+                  title: 'Чаты после входа',
+                  subtitle:
+                      'Ленту уже смотрите. Аккаунт нужен, чтобы написать автору и не потерять переписку. Без комиссии.',
+                ),
+                const SizedBox(height: 16),
+                emptyState(
+                  context: context,
+                  title: 'Пока гость',
+                  subtitle: 'Создайте аккаунт за минуту — имя, почта и село',
+                  icon: Icons.chat_bubble_outline,
+                ),
+              ],
             ),
           ),
         ],

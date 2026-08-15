@@ -70,6 +70,7 @@ class UserOut(BaseModel):
     settlement: SettlementOut | None = None
     role: UserRole
     is_active: bool
+    ban_reason: str | None = None
     created_at: datetime
     last_ip: str | None = None
     device_brand: str | None = None
@@ -146,6 +147,7 @@ class ListingCreate(BaseModel):
     contact_phone: str | None = Field(default=None, max_length=32)
     is_urgent: bool = False
     as_draft: bool = False
+    lifetime_days: int = Field(default=30, ge=30, le=60)
 
 
 class ListingUpdate(BaseModel):
@@ -157,6 +159,7 @@ class ListingUpdate(BaseModel):
     contact_phone: str | None = None
     is_urgent: bool | None = None
     as_draft: bool | None = None
+    lifetime_days: int | None = Field(default=None, ge=30, le=60)
 
 
 class LegalUpdate(BaseModel):
@@ -173,6 +176,10 @@ class ListingModerationIn(BaseModel):
 class ListingCloseIn(BaseModel):
     reason: str = Field(pattern="^(sold|not_relevant|busy|other)$")
     note: str | None = Field(default=None, max_length=500)
+
+
+class ListingExtendIn(BaseModel):
+    days: int = Field(default=30, ge=30, le=60)
 
 
 class ListingImageOut(BaseModel):
@@ -221,6 +228,8 @@ class ListingOut(BaseModel):
     created_at: datetime
     updated_at: datetime
     distance_km: float | None = None
+    lifetime_days: int = 30
+    expires_at: datetime | None = None
 
     class Config:
         from_attributes = True
@@ -252,6 +261,30 @@ class ListingReportOut(BaseModel):
     listing_title: str | None = None
     reporter_id: int
     reporter_name: str | None = None
+    reason: str
+    note: str | None
+    status: str
+    moderator_reply: str | None = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class UserReportIn(BaseModel):
+    reason: str = Field(pattern="^(spam|fraud|prohibited|abuse|other)$")
+    note: str | None = Field(default=None, max_length=500)
+    listing_id: int | None = None
+
+
+class UserReportOut(BaseModel):
+    id: int
+    target_id: int
+    target_name: str | None = None
+    reporter_id: int
+    reporter_name: str | None = None
+    listing_id: int | None = None
+    listing_title: str | None = None
     reason: str
     note: str | None
     status: str

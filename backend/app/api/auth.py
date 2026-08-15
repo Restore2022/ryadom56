@@ -14,7 +14,7 @@ from app.api.deps import get_current_user, security
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import decode_access_token, hash_password, verify_password
-from app.models import Listing, ListingReport, ListingStatus, PasswordReset, Settlement, User, UserSession
+from app.models import Listing, ListingReport, ListingStatus, PasswordReset, Settlement, User, UserReport, UserSession
 from app.schemas import (
     DeviceInfoIn,
     ForgotPasswordIn,
@@ -28,10 +28,12 @@ from app.schemas import (
     SessionOut,
     TokenOut,
     UserOut,
+    UserReportIn,
 )
 from app.services.mail import MailNotConfigured, MailSendError, mail_configured, send_email
 from app.services.rate_limit import limiter
 from app.services.sessions import bind_device_to_session, issue_user_token, revoke_all_sessions, revoke_session
+from app.services.trust import maybe_autoban_from_user_reports
 
 logger = logging.getLogger(__name__)
 
@@ -326,6 +328,52 @@ def public_profile(user_id: int, db: Session = Depends(get_db)):
         is_active=u.is_active,
         avatar_url=avatar_url_for(u.avatar_path),
     )
+
+
+@router.post("/users/{user_id}/report")
+def report_user(
+    user_id: int,
+    payload: UserReportIn,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    ip = client_ip(request) or "unknown"
+    if not limiter.allow(f"user-report:{user.id}:{ip}", limit=15, window_sec=3600):
+        raise HTTPException(status_code=429, detail="Слишком много жалоб. Попробуйте позже")
+    if user_id == user.id:
+        raise HTTPException(status_code=400, detail="Нельзя пожаловаться на себя")
+    target = db.execute(select(User).where(User.id == user_id)).scalar_one_or_none()
+    if not target:
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
+    listing_id = payload.listing_id
+    if listing_id is not None:
+        listing = db.execute(select(Listing).where(Listing.id == listing_id)).scalar_one_or_none()
+        if not listing or listing.author_id != target.id:
+            raise HTTPException(status_code=400, detail="Объявление не относится к этому человеку")
+    recent = db.execute(
+        select(UserReport).where(
+            UserReport.target_id == user_id,
+            UserReport.reporter_id == user.id,
+            UserReport.status == "open",
+        )
+    ).scalar_one_or_none()
+    if recent:
+        raise HTTPException(status_code=400, detail="Жалоба уже отправлена")
+    db.add(
+        UserReport(
+            target_id=user_id,
+            reporter_id=user.id,
+            listing_id=listing_id,
+            reason=payload.reason,
+            note=(payload.note or "").strip() or None,
+            status="open",
+        )
+    )
+    db.flush()
+    maybe_autoban_from_user_reports(db, target)
+    db.commit()
+    return {"ok": True}
 
 
 @router.patch("/me", response_model=UserOut)
