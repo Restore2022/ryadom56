@@ -983,6 +983,8 @@ def list_chats(
         last = msgs[0]
         flag_reasons: list[str] = []
         for m in msgs:
+            if (m.kind or "text") == "call":
+                continue
             for reason in _chat_flag_reasons(db, m.body):
                 if reason not in flag_reasons:
                     flag_reasons.append(reason)
@@ -1044,7 +1046,7 @@ def get_chat_thread(
             names[u.id] = u.full_name
     result: list[AdminChatMessageOut] = []
     for m in msgs:
-        reasons = _chat_flag_reasons(db, m.body)
+        reasons = [] if (m.kind or "text") == "call" else _chat_flag_reasons(db, m.body)
         result.append(
             AdminChatMessageOut(
                 id=m.id,
@@ -1056,6 +1058,8 @@ def get_chat_thread(
                 created_at=m.created_at,
                 flagged=bool(reasons),
                 flag_reasons=reasons,
+                kind=(m.kind or "text"),
+                is_read=bool(m.is_read),
             )
         )
     return result

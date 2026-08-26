@@ -75,8 +75,11 @@ class _RyadomAppState extends State<RyadomApp> {
     _state.addListener(_syncCalls);
     PushService.instance.onTap = _handlePushTap;
     PushService.instance.onForegroundData = (data) {
-      if (data['type']?.toString() == 'incoming_call') {
+      final type = data['type']?.toString();
+      if (type == 'incoming_call') {
         CallService.instance.handlePush(data);
+      } else if (type == 'listing_message') {
+        _state.refreshUnreadChats();
       }
     };
     CallService.instance.attach(widget.api);

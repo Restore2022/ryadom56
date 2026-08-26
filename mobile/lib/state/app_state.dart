@@ -150,6 +150,7 @@ class AppState extends ChangeNotifier {
       transportFavoriteIds.clear();
       unreadNotifications = 0;
       unreadChats = 0;
+      conversations = [];
       sessionMessage = 'Сессия истекла. Войдите снова';
       notifyListeners();
     } finally {
@@ -257,7 +258,10 @@ class AppState extends ChangeNotifier {
         pinUnlocked = true;
       }
       await Future.wait([loadListings(), loadDirectory()]);
-      if (user != null && pinUnlocked) await refreshUnreadNotifications();
+      if (user != null && pinUnlocked) {
+        await refreshUnreadNotifications();
+        await refreshUnreadChats();
+      }
       if (!listingsOffline && !directoryOffline) error = null;
     } catch (e) {
       error = userFriendlyError(e);
@@ -874,6 +878,7 @@ class AppState extends ChangeNotifier {
   }
 
   int unreadChats = 0;
+  List<dynamic> conversations = [];
 
   Future<List<dynamic>> loadListingMessages(int listingId, {int? peerId}) async {
     final qs = peerId != null ? '?peer_id=$peerId' : '';
@@ -900,6 +905,7 @@ class AppState extends ChangeNotifier {
         unread += row['unread_count'] as int;
       }
     }
+    conversations = rows;
     unreadChats = unread;
     notifyListeners();
     return rows;
@@ -1425,6 +1431,7 @@ class AppState extends ChangeNotifier {
     transportFavoriteIds.clear();
     unreadNotifications = 0;
     unreadChats = 0;
+    conversations = [];
     await loadListings();
     notifyListeners();
   }

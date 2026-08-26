@@ -90,7 +90,12 @@ class PushService {
 
       FirebaseMessaging.onMessage.listen((msg) {
         final data = Map<String, dynamic>.from(msg.data);
-        if (data['type']?.toString() == 'incoming_call') {
+        final type = data['type']?.toString();
+        if (type == 'incoming_call') {
+          onForegroundData?.call(data);
+          return;
+        }
+        if (type == 'listing_message') {
           onForegroundData?.call(data);
           return;
         }

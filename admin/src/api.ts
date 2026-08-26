@@ -287,6 +287,8 @@ export type AdminChatMessage = {
   created_at: string;
   flagged: boolean;
   flag_reasons: string[];
+  kind?: string;
+  is_read?: boolean;
 };
 
 export type DirectoryItem = {

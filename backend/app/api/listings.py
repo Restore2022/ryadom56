@@ -42,7 +42,7 @@ from app.schemas import (
 )
 from app.services.audit import log_action
 from app.services.blacklist import looks_like_chat_spam, match_blacklist
-from app.services.notify import notify_user
+from app.services.notify import notify_user, push_user
 from app.services.rate_limit import limiter
 from app.services.trust import maybe_autoban_from_listing_reports
 
@@ -72,6 +72,28 @@ CLOSE_REASON_LABELS = {
 }
 
 MAX_ACTIVE_LISTINGS = 5
+
+
+def to_listing_message_out(
+    m: ListingMessage,
+    *,
+    user_id: int,
+    sender_name: str | None,
+    peer_id: int | None,
+) -> ListingMessageOut:
+    return ListingMessageOut(
+        id=m.id,
+        listing_id=m.listing_id,
+        sender_id=m.sender_id,
+        sender_name=sender_name,
+        peer_id=peer_id,
+        body=m.body,
+        is_read=bool(m.is_read),
+        created_at=m.created_at,
+        is_mine=m.sender_id == user_id,
+        kind=(m.kind or "text"),
+        call_id=m.call_id,
+    )
 
 
 def image_url(path: str) -> str:
@@ -410,6 +432,7 @@ def list_conversations(
                 last_message_at=last.created_at,
                 unread_count=unread,
                 is_seller=is_seller,
+                last_kind=(last.kind or "text"),
             )
         )
     result.sort(
@@ -892,10 +915,13 @@ def list_messages(
         .where(ListingMessage.listing_id == listing_id, ListingMessage.buyer_id == buyer_id)
         .order_by(ListingMessage.created_at.asc())
     ).scalars().all()
+    marked = False
     for m in msgs:
         if m.sender_id != user.id and not m.is_read:
             m.is_read = True
-    db.commit()
+            marked = True
+    if marked:
+        db.commit()
     names: dict[int, str | None] = {}
     for m in msgs:
         if m.sender_id not in names:
@@ -903,16 +929,11 @@ def list_messages(
             names[m.sender_id] = u.full_name if u else None
     peer_for_client = buyer_id if user.id == item.author_id else item.author_id
     return [
-        ListingMessageOut(
-            id=m.id,
-            listing_id=m.listing_id,
-            sender_id=m.sender_id,
+        to_listing_message_out(
+            m,
+            user_id=user.id,
             sender_name=names.get(m.sender_id),
             peer_id=peer_for_client,
-            body=m.body,
-            is_read=m.is_read,
-            created_at=m.created_at,
-            is_mine=m.sender_id == user.id,
         )
         for m in msgs
     ]
@@ -955,33 +976,33 @@ def post_message(
         sender_id=user.id,
         buyer_id=buyer_id,
         body=body,
+        kind="text",
     )
     db.add(msg)
     db.flush()
     target = item.author_id if user.id == buyer_id else buyer_id
     if target and target != user.id:
-        notify_user(
+        # Пуш на телефон, без записи в колокольчик — непрочитанные идут на вкладку «Чаты».
+        push_user(
             db,
             user_id=target,
-            type="listing_message",
-            title="Новое сообщение по объявлению",
+            title=user.full_name or "Сообщение",
             body=body[:120],
-            listing_id=item.id,
-            extra={"buyer_id": buyer_id},
+            data={
+                "type": "listing_message",
+                "listing_id": str(item.id),
+                "buyer_id": str(buyer_id),
+                "message_id": str(msg.id),
+            },
         )
     db.commit()
     db.refresh(msg)
     peer_for_client = buyer_id if user.id == item.author_id else item.author_id
-    return ListingMessageOut(
-        id=msg.id,
-        listing_id=msg.listing_id,
-        sender_id=msg.sender_id,
+    return to_listing_message_out(
+        msg,
+        user_id=user.id,
         sender_name=user.full_name,
         peer_id=peer_for_client,
-        body=msg.body,
-        is_read=msg.is_read,
-        created_at=msg.created_at,
-        is_mine=True,
     )
 
 

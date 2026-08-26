@@ -704,6 +704,8 @@ class ListingMessageOut(BaseModel):
     is_read: bool
     created_at: datetime
     is_mine: bool = False
+    kind: str = "text"
+    call_id: int | None = None
 
 
 class ConversationOut(BaseModel):
@@ -716,6 +718,7 @@ class ConversationOut(BaseModel):
     last_message_at: datetime | None = None
     unread_count: int = 0
     is_seller: bool = False
+    last_kind: str = "text"
 
 
 class AdminConversationOut(BaseModel):
@@ -743,6 +746,8 @@ class AdminChatMessageOut(BaseModel):
     created_at: datetime
     flagged: bool = False
     flag_reasons: list[str] = []
+    kind: str = "text"
+    is_read: bool = False
 
 
 class AuthorReportOut(BaseModel):

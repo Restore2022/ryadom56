@@ -91,6 +91,8 @@ SETTLEMENT_COLUMNS = {
 
 MESSAGE_COLUMNS = {
     "buyer_id": "INTEGER",
+    "kind": "VARCHAR(20) DEFAULT 'text'",
+    "call_id": "INTEGER",
 }
 
 
@@ -113,6 +115,7 @@ def init_db() -> None:
     _migrate_alert_columns()
     _migrate_message_columns()
     _migrate_settlement_columns()
+    _backfill_call_chat_messages()
 
 
 def _migrate_user_columns() -> None:
@@ -274,6 +277,32 @@ def _migrate_message_columns() -> None:
                 """
             )
         )
+        conn.execute(text("UPDATE listing_messages SET kind = 'text' WHERE kind IS NULL OR kind = ''"))
+
+
+def _backfill_call_chat_messages() -> None:
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    if "app_calls" not in tables or "listing_messages" not in tables:
+        return
+    cols = {col["name"] for col in inspector.get_columns("listing_messages")}
+    if "call_id" not in cols:
+        return
+    from app.core.database import SessionLocal
+    from app.models import AppCall
+    from app.services.chat_calls import TERMINAL_CALL_STATUSES, record_call_in_chat
+
+    db = SessionLocal()
+    try:
+        rows = db.execute(select(AppCall).where(AppCall.status.in_(TERMINAL_CALL_STATUSES))).scalars().all()
+        for call in rows:
+            record_call_in_chat(db, call, mark_read=True)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 def _migrate_settlement_columns() -> None:

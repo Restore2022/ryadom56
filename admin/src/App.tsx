@@ -2422,8 +2422,10 @@ function ChatsModerationPage() {
                 <article key={m.id} className="row-card compact" style={{ opacity: m.flagged ? 1 : 0.95 }}>
                   <div className="row-main">
                     <div className="meta">
-                      <strong>{m.sender_name || `#${m.sender_id}`}</strong>
+                      <strong>{m.kind === 'call' ? 'Звонок' : (m.sender_name || `#${m.sender_id}`)}</strong>
                       <span className="chip neutral">{formatDate(m.created_at)}</span>
+                      {m.kind === 'call' && <span className="chip">звонок</span>}
+                      {m.is_read ? <span className="chip">прочитано</span> : <span className="chip neutral">не прочитано</span>}
                       {m.flagged && <span className="chip danger">Флаг</span>}
                     </div>
                     <p style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap' }}>{m.body}</p>

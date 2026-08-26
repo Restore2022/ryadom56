@@ -318,6 +318,9 @@ class ListingMessage(Base):
     buyer_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
+    # text — обычное сообщение; call — системное событие звонка (пропущен / отменён / …)
+    kind: Mapped[str] = mapped_column(String(20), default="text", server_default="text")
+    call_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
 
 

@@ -11,7 +11,8 @@ from app.core.security import decode_access_token
 from app.models import AppCall, Listing, ListingStatus, User, UserRole
 from app.schemas import CallActionIn, CallCreateIn, CallOut, CallPageOut
 from app.services.call_hub import hub
-from app.services.notify import fcm_tokens_for_user, notify_user, push_user
+from app.services.chat_calls import call_event_body, record_call_in_chat, thread_buyer_id
+from app.services.notify import fcm_tokens_for_user, push_user
 from app.services.rate_limit import limiter
 from app.services.sessions import assert_token_session
 
@@ -41,7 +42,29 @@ def _close(call: AppCall, status: str, *, reason: str | None = None) -> None:
         call.duration_sec = 0
 
 
-def _expire_if_stale(call: AppCall) -> bool:
+def _finalize(db: Session, call: AppCall, status: str, *, reason: str | None = None) -> None:
+    just_closed = call.status in OPEN_STATUSES
+    if just_closed:
+        _close(call, status, reason=reason)
+    record_call_in_chat(db, call)
+    if just_closed and status == "missed":
+        listing = call.listing
+        buyer_id = thread_buyer_id(call, listing)
+        push_user(
+            db,
+            user_id=call.callee_id,
+            title="Пропущенный звонок",
+            body=call_event_body("missed"),
+            data={
+                "type": "listing_message",
+                "listing_id": str(call.listing_id),
+                "buyer_id": str(buyer_id or call.caller_id),
+                "call_id": str(call.id),
+            },
+        )
+
+
+def _expire_if_stale(db: Session, call: AppCall) -> bool:
     if call.status != "ringing":
         return False
     created = call.created_at
@@ -51,7 +74,7 @@ def _expire_if_stale(call: AppCall) -> bool:
         created = created.replace(tzinfo=timezone.utc)
     if _utcnow() - created <= timedelta(seconds=RING_TIMEOUT_SEC):
         return False
-    _close(call, "missed", reason="timeout")
+    _finalize(db, call, "missed", reason="timeout")
     return True
 
 
@@ -162,13 +185,13 @@ def create_call(
 
     mine = _busy(db, user.id)
     if mine:
-        if _expire_if_stale(mine):
+        if _expire_if_stale(db, mine):
             db.commit()
         else:
             raise HTTPException(status_code=409, detail="У вас уже идёт звонок")
     theirs = _busy(db, callee_id)
     if theirs:
-        if _expire_if_stale(theirs):
+        if _expire_if_stale(db, theirs):
             db.commit()
         else:
             raise HTTPException(status_code=409, detail="Абонент занят")
@@ -225,19 +248,9 @@ def pending_calls(db: Session = Depends(get_db), user: User = Depends(get_curren
     out: list[CallOut] = []
     changed = False
     for call in rows:
-        if _expire_if_stale(call):
+        if _expire_if_stale(db, call):
             changed = True
             _emit_both(db, call, "hangup")
-            if call.status == "missed":
-                notify_user(
-                    db,
-                    user_id=call.callee_id,
-                    type="missed_call",
-                    title="Пропущенный звонок",
-                    body=f"{call.caller.full_name if call.caller else 'Пользователь'} звонил по объявлению",
-                    listing_id=call.listing_id,
-                    extra={"call_id": call.id, "caller_id": call.caller_id},
-                )
             continue
         out.append(to_call_out(db, call, user))
     if changed:
@@ -250,7 +263,7 @@ def get_call(call_id: int, db: Session = Depends(get_db), user: User = Depends(g
     call = _load_call(db, call_id)
     if not call or user.id not in (call.caller_id, call.callee_id):
         raise HTTPException(status_code=404, detail="Звонок не найден")
-    if _expire_if_stale(call):
+    if _expire_if_stale(db, call):
         db.commit()
         _emit_both(db, call, "hangup")
     return to_call_out(db, call, user)
@@ -261,7 +274,7 @@ def accept_call(call_id: int, db: Session = Depends(get_db), user: User = Depend
     call = _load_call(db, call_id)
     if not call or user.id != call.callee_id:
         raise HTTPException(status_code=404, detail="Звонок не найден")
-    if _expire_if_stale(call):
+    if _expire_if_stale(db, call):
         db.commit()
         _emit_both(db, call, "hangup")
         raise HTTPException(status_code=410, detail="Звонок уже завершён")
@@ -293,7 +306,7 @@ def decline_call(
     if call.status == "active":
         status = "ended"
         reason = "hangup"
-    _close(call, status, reason=reason)
+    _finalize(db, call, status, reason=reason)
     db.commit()
     call = _load_call(db, call_id)
     assert call is not None
@@ -318,20 +331,11 @@ def hangup_call(
         status = "cancelled" if user.id == call.caller_id else "declined"
         if reason == "timeout":
             status = "missed"
-            notify_user(
-                db,
-                user_id=call.callee_id,
-                type="missed_call",
-                title="Пропущенный звонок",
-                body=f"{call.caller.full_name if call.caller else 'Пользователь'} звонил по объявлению",
-                listing_id=call.listing_id,
-                extra={"call_id": call.id, "caller_id": call.caller_id},
-            )
         elif reason == "failed":
             status = "failed"
     else:
         status = "ended"
-    _close(call, status, reason=reason)
+    _finalize(db, call, status, reason=reason)
     db.commit()
     call = _load_call(db, call_id)
     assert call is not None
@@ -418,7 +422,7 @@ async def calls_ws(websocket: WebSocket, token: str | None = None):
             .all()
         )
         for call in pending:
-            if _expire_if_stale(call):
+            if _expire_if_stale(db, call):
                 db.commit()
                 continue
             await hub.send(user.id, _payload(db, call, user, "incoming"))

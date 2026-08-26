@@ -9,6 +9,9 @@ from app.schemas import NotificationOut
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
+# Сообщения чата и пропущенные звонки живут во вкладке «Чаты», не в колокольчике.
+_CHAT_INBOX_TYPES = ("listing_message", "missed_call")
+
 
 @router.get("", response_model=list[NotificationOut])
 def list_notifications(
@@ -18,7 +21,10 @@ def list_notifications(
 ):
     rows = db.execute(
         select(Notification)
-        .where(Notification.user_id == user.id)
+        .where(
+            Notification.user_id == user.id,
+            Notification.type.notin_(_CHAT_INBOX_TYPES),
+        )
         .order_by(Notification.created_at.desc())
         .limit(min(max(limit, 1), 100))
     ).scalars().all()
@@ -33,7 +39,11 @@ def unread_count(
     count = db.execute(
         select(func.count())
         .select_from(Notification)
-        .where(Notification.user_id == user.id, Notification.is_read.is_(False))
+        .where(
+            Notification.user_id == user.id,
+            Notification.is_read.is_(False),
+            Notification.type.notin_(_CHAT_INBOX_TYPES),
+        )
     ).scalar_one()
     return {"count": int(count)}
 

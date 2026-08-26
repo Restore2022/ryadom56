@@ -17,7 +17,6 @@ class ChatsTab extends StatefulWidget {
 }
 
 class _ChatsTabState extends State<ChatsTab> {
-  List<dynamic> items = [];
   bool loading = true;
   String? error;
   int? _loadedUserId;
@@ -32,7 +31,6 @@ class _ChatsTabState extends State<ChatsTab> {
     final state = context.read<AppState>();
     if (state.user == null) {
       setState(() {
-        items = [];
         loading = false;
         error = null;
         _loadedUserId = null;
@@ -44,12 +42,12 @@ class _ChatsTabState extends State<ChatsTab> {
       error = null;
     });
     try {
-      final rows = await state.loadConversations();
+      await state.loadConversations();
       if (!mounted) return;
       setState(() {
-        items = rows;
         loading = false;
         _loadedUserId = state.user?['id'] as int?;
+        error = null;
       });
     } catch (e) {
       if (!mounted) return;
@@ -101,6 +99,7 @@ class _ChatsTabState extends State<ChatsTab> {
       );
     }
 
+    final items = state.conversations;
     return RefreshIndicator(
       onRefresh: _load,
       child: loading && items.isEmpty
@@ -145,6 +144,7 @@ class _ChatsTabState extends State<ChatsTab> {
                         final peer = item['peer_name']?.toString();
                         final title = item['listing_title']?.toString() ?? 'Объявление';
                         final last = item['last_message']?.toString() ?? '';
+                        final lastKind = item['last_kind']?.toString() ?? 'text';
                         final isSeller = item['is_seller'] == true;
                         final peerId = item['peer_id'] as int?;
                         return Material(
@@ -221,14 +221,30 @@ class _ChatsTabState extends State<ChatsTab> {
                                           overflow: TextOverflow.ellipsis,
                                         ),
                                         const SizedBox(height: 4),
-                                        Text(
-                                          last,
-                                          style: TextStyle(
-                                            color: scheme.onSurfaceVariant,
-                                            fontWeight: unread > 0 ? FontWeight.w700 : FontWeight.w400,
-                                          ),
-                                          maxLines: 2,
-                                          overflow: TextOverflow.ellipsis,
+                                        Row(
+                                          children: [
+                                            if (lastKind == 'call') ...[
+                                              Icon(
+                                                last.contains('Пропущен')
+                                                    ? Icons.phone_missed
+                                                    : Icons.call,
+                                                size: 14,
+                                                color: unread > 0 ? scheme.primary : scheme.onSurfaceVariant,
+                                              ),
+                                              const SizedBox(width: 4),
+                                            ],
+                                            Expanded(
+                                              child: Text(
+                                                last,
+                                                style: TextStyle(
+                                                  color: scheme.onSurfaceVariant,
+                                                  fontWeight: unread > 0 ? FontWeight.w700 : FontWeight.w400,
+                                                ),
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                          ],
                                         ),
                                       ],
                                     ),

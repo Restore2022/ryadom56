@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
@@ -36,6 +38,7 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
   String? error;
   final input = TextEditingController();
   final scroll = ScrollController();
+  Timer? _poll;
 
   @override
   void initState() {
@@ -48,6 +51,7 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
 
   @override
   void dispose() {
+    _poll?.cancel();
     input.dispose();
     scroll.dispose();
     super.dispose();
@@ -74,6 +78,8 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
           loading = false;
         });
         _scrollToBottom();
+        _startPoll();
+        context.read<AppState>().refreshUnreadChats();
       }
     } catch (e) {
       if (mounted) {
@@ -83,6 +89,32 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
         });
       }
     }
+  }
+
+  void _startPoll() {
+    _poll?.cancel();
+    _poll = Timer.periodic(const Duration(seconds: 4), (_) => _refreshSilent());
+  }
+
+  bool _nearBottom() {
+    if (!scroll.hasClients) return true;
+    return scroll.position.maxScrollExtent - scroll.position.pixels < 96;
+  }
+
+  Future<void> _refreshSilent() async {
+    if (!mounted || loading) return;
+    try {
+      final rows = await context.read<AppState>().loadListingMessages(
+            widget.listingId,
+            peerId: widget.peerId,
+          );
+      if (!mounted) return;
+      final grew = rows.length > messages.length;
+      final stick = grew && _nearBottom();
+      setState(() => messages = rows);
+      if (stick) _scrollToBottom();
+      await context.read<AppState>().refreshUnreadChats();
+    } catch (_) {}
   }
 
   void _scrollToBottom() {
@@ -122,6 +154,111 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
 
   String _fmtTime(String? iso) {
     return formatApiDateTime(iso, sep: ' ');
+  }
+
+  IconData _callIcon(String body) {
+    if (body.contains('Пропущен')) return Icons.phone_missed;
+    if (body.contains('отклон')) return Icons.phone_disabled;
+    if (body.contains('отмен')) return Icons.phone_disabled;
+    if (body.contains('не состоял')) return Icons.phone_disabled;
+    return Icons.call;
+  }
+
+  Color _callColor(String body, ColorScheme scheme) {
+    if (body.contains('Пропущен') || body.contains('отклон') || body.contains('не состоял')) {
+      return scheme.error;
+    }
+    if (body.contains('отмен')) return scheme.onSurfaceVariant;
+    return scheme.primary;
+  }
+
+  Widget _callEvent(Map<String, dynamic> msg, ColorScheme scheme) {
+    final body = '${msg['body'] ?? 'Звонок'}';
+    final color = _callColor(body, scheme);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 8),
+      child: Center(
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          decoration: BoxDecoration(
+            color: scheme.surfaceContainerHighest.withValues(alpha: 0.9),
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: scheme.outlineVariant.withValues(alpha: 0.5)),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(_callIcon(body), size: 16, color: color),
+              const SizedBox(width: 8),
+              Text(
+                body,
+                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: color),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                _fmtTime(msg['created_at']?.toString()),
+                style: TextStyle(fontSize: 10, color: scheme.onSurfaceVariant),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _textBubble(Map<String, dynamic> msg, ColorScheme scheme) {
+    final mine = msg['is_mine'] == true;
+    final read = msg['is_read'] == true;
+    return Align(
+      alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: const EdgeInsets.only(bottom: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
+        decoration: BoxDecoration(
+          color: mine ? scheme.primaryContainer : scheme.surfaceContainerHighest,
+          borderRadius: BorderRadius.only(
+            topLeft: const Radius.circular(16),
+            topRight: const Radius.circular(16),
+            bottomLeft: Radius.circular(mine ? 16 : 4),
+            bottomRight: Radius.circular(mine ? 4 : 16),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            if (!mine && msg['sender_name'] != null)
+              Text(
+                '${msg['sender_name']}',
+                style: GoogleFonts.manrope(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w800,
+                  color: scheme.primary,
+                ),
+              ),
+            Text('${msg['body']}', style: const TextStyle(height: 1.35)),
+            const SizedBox(height: 4),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  _fmtTime(msg['created_at']?.toString()),
+                  style: TextStyle(fontSize: 10, color: scheme.onSurfaceVariant),
+                ),
+                if (mine) ...[
+                  const SizedBox(width: 4),
+                  Icon(
+                    read ? Icons.done_all : Icons.done,
+                    size: 14,
+                    color: read ? scheme.primary : scheme.onSurfaceVariant,
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   @override
@@ -180,44 +317,10 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
                             itemCount: messages.length,
                             itemBuilder: (_, i) {
                               final msg = messages[i] as Map<String, dynamic>;
-                              final mine = msg['is_mine'] == true;
-                              return Align(
-                                alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
-                                child: Container(
-                                  margin: const EdgeInsets.only(bottom: 10),
-                                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                                  constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
-                                  decoration: BoxDecoration(
-                                    color: mine ? scheme.primaryContainer : scheme.surfaceContainerHighest,
-                                    borderRadius: BorderRadius.only(
-                                      topLeft: const Radius.circular(16),
-                                      topRight: const Radius.circular(16),
-                                      bottomLeft: Radius.circular(mine ? 16 : 4),
-                                      bottomRight: Radius.circular(mine ? 4 : 16),
-                                    ),
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                    children: [
-                                      if (!mine && msg['sender_name'] != null)
-                                        Text(
-                                          '${msg['sender_name']}',
-                                          style: GoogleFonts.manrope(
-                                            fontSize: 11,
-                                            fontWeight: FontWeight.w800,
-                                            color: scheme.primary,
-                                          ),
-                                        ),
-                                      Text('${msg['body']}', style: const TextStyle(height: 1.35)),
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        _fmtTime(msg['created_at']?.toString()),
-                                        style: TextStyle(fontSize: 10, color: scheme.onSurfaceVariant),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                              );
+                              if ((msg['kind']?.toString() ?? 'text') == 'call') {
+                                return _callEvent(msg, scheme);
+                              }
+                              return _textBubble(msg, scheme);
                             },
                           ),
           ),
