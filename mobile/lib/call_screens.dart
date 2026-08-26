@@ -42,22 +42,44 @@ class _CallOverlayHostState extends State<CallOverlayHost> {
   @override
   Widget build(BuildContext context) {
     final svc = CallService.instance;
-    final show = svc.phase != CallPhase.idle && svc.phase != CallPhase.ended;
+    final show = svc.phase != CallPhase.idle;
     return Stack(
       fit: StackFit.expand,
       children: [
         widget.child,
         if (show)
           const Positioned.fill(
-            child: CallTicker(child: CallSessionScreen()),
+            child: CallSessionScreen(),
           ),
       ],
     );
   }
 }
 
-class CallSessionScreen extends StatelessWidget {
+class CallSessionScreen extends StatefulWidget {
   const CallSessionScreen({super.key});
+
+  @override
+  State<CallSessionScreen> createState() => _CallSessionScreenState();
+}
+
+class _CallSessionScreenState extends State<CallSessionScreen> {
+  Timer? _tick;
+
+  @override
+  void initState() {
+    super.initState();
+    _tick = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (!mounted) return;
+      if (CallService.instance.phase == CallPhase.active) setState(() {});
+    });
+  }
+
+  @override
+  void dispose() {
+    _tick?.cancel();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -67,6 +89,7 @@ class CallSessionScreen extends StatelessWidget {
         final svc = CallService.instance;
         final call = svc.call;
         final incoming = svc.phase == CallPhase.incoming;
+        final ended = svc.phase == CallPhase.ended;
         final name = incoming ? (call?.callerName ?? 'Звонок') : (call?.calleeName ?? 'Звонок');
         final title = call?.listingTitle ?? '';
         return Material(
@@ -79,9 +102,11 @@ class CallSessionScreen extends StatelessWidget {
                   Text(
                     incoming
                         ? 'Входящий звонок'
-                        : svc.phase == CallPhase.active
-                            ? 'Разговор'
-                            : 'Звоним…',
+                        : ended
+                            ? 'Звонок завершён'
+                            : svc.phase == CallPhase.active
+                                ? 'Разговор'
+                                : 'Звоним…',
                     style: GoogleFonts.manrope(color: Colors.white70, fontSize: 14),
                   ),
                   const SizedBox(height: 28),
@@ -110,6 +135,7 @@ class CallSessionScreen extends StatelessWidget {
                   const SizedBox(height: 12),
                   Text(
                     _subtitle(svc),
+                    textAlign: TextAlign.center,
                     style: GoogleFonts.manrope(color: Colors.white54, fontSize: 14),
                   ),
                   if (svc.lastError != null) ...[
@@ -117,7 +143,7 @@ class CallSessionScreen extends StatelessWidget {
                     Text(svc.lastError!, textAlign: TextAlign.center, style: const TextStyle(color: Color(0xFFFFB4A8))),
                   ],
                   const Spacer(),
-                  if (incoming)
+                  if (!ended && incoming)
                     Row(
                       children: [
                         Expanded(
@@ -139,7 +165,7 @@ class CallSessionScreen extends StatelessWidget {
                         ),
                       ],
                     )
-                  else ...[
+                  else if (!ended) ...[
                     Row(
                       mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                       children: [
@@ -184,11 +210,13 @@ class CallSessionScreen extends StatelessWidget {
         return 'Соединяем…';
       case CallPhase.active:
         final start = svc.connectedAt ?? DateTime.now();
-        final sec = DateTime.now().difference(start).inSeconds;
+        final sec = DateTime.now().difference(start).inSeconds.clamp(0, 24 * 3600);
         final m = (sec ~/ 60).toString().padLeft(2, '0');
         final s = (sec % 60).toString().padLeft(2, '0');
         return '$m:$s';
-      default:
+      case CallPhase.ended:
+        return svc.endedBanner ?? 'Звонок завершён';
+      case CallPhase.idle:
         return '';
     }
   }
@@ -271,32 +299,4 @@ Future<void> maybeGsmFallback(BuildContext context, {String? phone, bool force =
     final cleaned = number.replaceAll(RegExp(r'[\s\-()]'), '');
     await launchUrl(Uri(scheme: 'tel', path: cleaned));
   }
-}
-
-/// Тикает длительность на экране разговора.
-class CallTicker extends StatefulWidget {
-  const CallTicker({super.key, required this.child});
-  final Widget child;
-  @override
-  State<CallTicker> createState() => _CallTickerState();
-}
-
-class _CallTickerState extends State<CallTicker> {
-  Timer? _t;
-  @override
-  void initState() {
-    super.initState();
-    _t = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (CallService.instance.phase == CallPhase.active && mounted) setState(() {});
-    });
-  }
-
-  @override
-  void dispose() {
-    _t?.cancel();
-    super.dispose();
-  }
-
-  @override
-  Widget build(BuildContext context) => widget.child;
 }

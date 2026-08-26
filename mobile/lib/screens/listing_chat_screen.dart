@@ -6,6 +6,7 @@ import 'package:provider/provider.dart';
 
 import '../auth_prompt.dart';
 import '../call_screens.dart';
+import '../call_service.dart';
 import '../state/app_state.dart';
 import '../time_format.dart';
 import '../ui_helpers.dart';
@@ -39,10 +40,12 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
   final input = TextEditingController();
   final scroll = ScrollController();
   Timer? _poll;
+  int _seenInbox = 0;
 
   @override
   void initState() {
     super.initState();
+    CallService.instance.addListener(_onLive);
     if (widget.initialMessage != null && widget.initialMessage!.isNotEmpty) {
       input.text = widget.initialMessage!;
     }
@@ -51,6 +54,7 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
 
   @override
   void dispose() {
+    CallService.instance.removeListener(_onLive);
     _poll?.cancel();
     input.dispose();
     scroll.dispose();
@@ -93,7 +97,59 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
 
   void _startPoll() {
     _poll?.cancel();
-    _poll = Timer.periodic(const Duration(seconds: 4), (_) => _refreshSilent());
+    _poll = Timer.periodic(const Duration(seconds: 2), (_) => _refreshSilent());
+  }
+
+  int? _asInt(dynamic v) {
+    if (v is int) return v;
+    if (v is num) return v.toInt();
+    return int.tryParse('$v');
+  }
+
+  bool _sameThread(Map<String, dynamic> ev) {
+    final lid = _asInt(ev['listing_id']);
+    if (lid != widget.listingId) return false;
+    final buyerId = _asInt(ev['buyer_id']);
+    final myId = CallService.instance.myUserId;
+    if (widget.peerId != null && buyerId != null) {
+      return buyerId == widget.peerId || buyerId == myId;
+    }
+    return true;
+  }
+
+  void _onLive() {
+    final svc = CallService.instance;
+    if (svc.inboxSeq <= _seenInbox) return;
+    _seenInbox = svc.inboxSeq;
+    final ev = svc.inboxEvent;
+    if (ev == null || !mounted || !_sameThread(ev)) return;
+    final type = ev['type']?.toString();
+    if (type == 'chat') {
+      final raw = ev['message'];
+      if (raw is Map) _upsert(Map<String, dynamic>.from(raw));
+    } else if (type == 'chat_read') {
+      setState(() {
+        messages = [
+          for (final m in messages)
+            if (m is Map && m['is_mine'] == true) {...Map<String, dynamic>.from(m), 'is_read': true} else m,
+        ];
+      });
+    }
+  }
+
+  void _upsert(Map<String, dynamic> msg) {
+    final id = _asInt(msg['id']);
+    final next = List<dynamic>.from(messages);
+    final idx = next.indexWhere((m) => m is Map && _asInt(m['id']) == id);
+    if (idx >= 0) {
+      next[idx] = msg;
+    } else {
+      next.add(msg);
+    }
+    final stick = _nearBottom();
+    setState(() => messages = next);
+    if (stick || idx < 0) _scrollToBottom();
+    context.read<AppState>().refreshUnreadChats();
   }
 
   bool _nearBottom() {
@@ -139,11 +195,8 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
             peerId: widget.peerId,
           );
       if (mounted) {
-        setState(() {
-          messages = [...messages, msg];
-          input.clear();
-        });
-        _scrollToBottom();
+        _upsert(Map<String, dynamic>.from(msg));
+        input.clear();
       }
     } catch (e) {
       if (mounted) showAppSnack(context, AppState.userFriendlyError(e), error: true);
@@ -161,6 +214,7 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
     if (body.contains('отклон')) return Icons.phone_disabled;
     if (body.contains('отмен')) return Icons.phone_disabled;
     if (body.contains('не состоял')) return Icons.phone_disabled;
+    if (body.contains('завершил')) return Icons.call_end;
     return Icons.call;
   }
 

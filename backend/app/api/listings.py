@@ -42,6 +42,7 @@ from app.schemas import (
 )
 from app.services.audit import log_action
 from app.services.blacklist import looks_like_chat_spam, match_blacklist
+from app.services.call_hub import hub
 from app.services.notify import notify_user, push_user
 from app.services.rate_limit import limiter
 from app.services.trust import maybe_autoban_from_listing_reports
@@ -93,6 +94,46 @@ def to_listing_message_out(
         is_mine=m.sender_id == user_id,
         kind=(m.kind or "text"),
         call_id=m.call_id,
+    )
+
+
+def emit_listing_chat(db: Session, msg: ListingMessage, user_ids: tuple[int, ...] | list[int]) -> None:
+    """Живое сообщение в тот же сокет, что и звонок."""
+    sender = db.get(User, msg.sender_id)
+    listing = db.get(Listing, msg.listing_id)
+    name = sender.full_name if sender else None
+    seen: set[int] = set()
+    for uid in user_ids:
+        if not uid or uid in seen:
+            continue
+        seen.add(uid)
+        peer = None
+        if listing is not None:
+            peer = msg.buyer_id if uid == listing.author_id else listing.author_id
+        hub.emit(
+            uid,
+            {
+                "type": "chat",
+                "listing_id": msg.listing_id,
+                "buyer_id": msg.buyer_id,
+                "message": to_listing_message_out(
+                    msg, user_id=uid, sender_name=name, peer_id=peer
+                ).model_dump(mode="json"),
+            },
+        )
+
+
+def emit_chat_read(listing_id: int, buyer_id: int, reader_id: int, other_id: int | None) -> None:
+    if not other_id or other_id == reader_id:
+        return
+    hub.emit(
+        other_id,
+        {
+            "type": "chat_read",
+            "listing_id": listing_id,
+            "buyer_id": buyer_id,
+            "reader_id": reader_id,
+        },
     )
 
 
@@ -922,6 +963,8 @@ def list_messages(
             marked = True
     if marked:
         db.commit()
+        other_id = item.author_id if user.id == buyer_id else buyer_id
+        emit_chat_read(listing_id, buyer_id, user.id, other_id)
     names: dict[int, str | None] = {}
     for m in msgs:
         if m.sender_id not in names:
@@ -997,6 +1040,7 @@ def post_message(
         )
     db.commit()
     db.refresh(msg)
+    emit_listing_chat(db, msg, (user.id, target) if target else (user.id,))
     peer_for_client = buyer_id if user.id == item.author_id else item.author_id
     return to_listing_message_out(
         msg,

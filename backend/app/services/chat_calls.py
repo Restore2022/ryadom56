@@ -19,20 +19,35 @@ def format_call_duration(sec: int | None) -> str:
     return f"{minutes}:{seconds:02d}"
 
 
-def call_event_body(status: str, duration_sec: int | None = 0) -> str:
+def ended_by_name(call: AppCall) -> str | None:
+    eid = getattr(call, "ended_by_id", None)
+    if not eid:
+        return None
+    if call.caller is not None and call.caller_id == eid:
+        return call.caller.full_name
+    if call.callee is not None and call.callee_id == eid:
+        return call.callee.full_name
+    return None
+
+
+def call_event_body(status: str, duration_sec: int | None = 0, *, ended_by: str | None = None) -> str:
     st = (status or "").strip()
+    name = (ended_by or "").strip()
     if st == "missed":
         return "Пропущенный звонок"
     if st == "declined":
-        return "Звонок отклонён"
+        return f"{name} отклонил звонок" if name else "Звонок отклонён"
     if st == "cancelled":
-        return "Звонок отменён"
+        return f"{name} отменил звонок" if name else "Звонок отменён"
     if st == "failed":
         return "Звонок не состоялся"
     if st == "busy":
         return "Абонент занят"
     if st == "ended":
-        return f"Звонок · {format_call_duration(duration_sec)}"
+        dur = format_call_duration(duration_sec)
+        if name:
+            return f"{name} завершил звонок · {dur}"
+        return f"Звонок · {dur}"
     return "Звонок"
 
 
@@ -56,8 +71,9 @@ def record_call_in_chat(
     existing = db.execute(
         select(ListingMessage).where(ListingMessage.call_id == call.id)
     ).scalar_one_or_none()
+    who = ended_by_name(call)
     if existing:
-        existing.body = call_event_body(call.status, call.duration_sec)
+        existing.body = call_event_body(call.status, call.duration_sec, ended_by=who)
         existing.kind = "call"
         if mark_read is True:
             existing.is_read = True
@@ -76,7 +92,7 @@ def record_call_in_chat(
         listing_id=call.listing_id,
         sender_id=sender_id,
         buyer_id=buyer_id,
-        body=call_event_body(call.status, call.duration_sec),
+        body=call_event_body(call.status, call.duration_sec, ended_by=who),
         kind="call",
         call_id=call.id,
         is_read=read,

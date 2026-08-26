@@ -875,6 +875,8 @@ class CallOut(BaseModel):
     ended_at: datetime | None = None
     duration_sec: int = 0
     end_reason: str | None = None
+    ended_by_id: int | None = None
+    ended_by_name: str | None = None
     callee_online: bool = False
     callee_has_push: bool = False
     gsm_fallback: bool = False

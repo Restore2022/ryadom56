@@ -114,6 +114,7 @@ def init_db() -> None:
     _migrate_news_columns()
     _migrate_alert_columns()
     _migrate_message_columns()
+    _migrate_call_columns()
     _migrate_settlement_columns()
     _backfill_call_chat_messages()
 
@@ -278,6 +279,16 @@ def _migrate_message_columns() -> None:
             )
         )
         conn.execute(text("UPDATE listing_messages SET kind = 'text' WHERE kind IS NULL OR kind = ''"))
+
+
+def _migrate_call_columns() -> None:
+    inspector = inspect(engine)
+    if "app_calls" not in inspector.get_table_names():
+        return
+    existing = {col["name"] for col in inspector.get_columns("app_calls")}
+    with engine.begin() as conn:
+        if "ended_by_id" not in existing:
+            conn.execute(text("ALTER TABLE app_calls ADD COLUMN ended_by_id INTEGER"))
 
 
 def _backfill_call_chat_messages() -> None:

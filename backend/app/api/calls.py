@@ -5,13 +5,13 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_current_user, require_roles
-from app.api.listings import author_replied_to_buyer
+from app.api.listings import author_replied_to_buyer, emit_listing_chat
 from app.core.database import SessionLocal, get_db
 from app.core.security import decode_access_token
 from app.models import AppCall, Listing, ListingStatus, User, UserRole
 from app.schemas import CallActionIn, CallCreateIn, CallOut, CallPageOut
 from app.services.call_hub import hub
-from app.services.chat_calls import call_event_body, record_call_in_chat, thread_buyer_id
+from app.services.chat_calls import call_event_body, ended_by_name, record_call_in_chat, thread_buyer_id
 from app.services.notify import fcm_tokens_for_user, push_user
 from app.services.rate_limit import limiter
 from app.services.sessions import assert_token_session
@@ -27,13 +27,21 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _close(call: AppCall, status: str, *, reason: str | None = None) -> None:
+def _close(
+    call: AppCall,
+    status: str,
+    *,
+    reason: str | None = None,
+    ended_by_id: int | None = None,
+) -> None:
     if call.status not in OPEN_STATUSES:
         return
     now = _utcnow()
     call.status = status
     call.ended_at = now
     call.end_reason = reason
+    if ended_by_id is not None:
+        call.ended_by_id = ended_by_id
     if call.answered_at:
         start = call.answered_at
         if start.tzinfo is None:
@@ -43,11 +51,20 @@ def _close(call: AppCall, status: str, *, reason: str | None = None) -> None:
         call.duration_sec = 0
 
 
-def _finalize(db: Session, call: AppCall, status: str, *, reason: str | None = None) -> None:
+def _finalize(
+    db: Session,
+    call: AppCall,
+    status: str,
+    *,
+    reason: str | None = None,
+    ended_by_id: int | None = None,
+) -> None:
     just_closed = call.status in OPEN_STATUSES
     if just_closed:
-        _close(call, status, reason=reason)
-    record_call_in_chat(db, call)
+        _close(call, status, reason=reason, ended_by_id=ended_by_id)
+    msg = record_call_in_chat(db, call)
+    if msg is not None:
+        emit_listing_chat(db, msg, (call.caller_id, call.callee_id))
     if just_closed and status == "missed":
         listing = call.listing
         buyer_id = thread_buyer_id(call, listing)
@@ -115,6 +132,8 @@ def to_call_out(db: Session, call: AppCall, viewer: User | None = None) -> CallO
         ended_at=call.ended_at,
         duration_sec=int(call.duration_sec or 0),
         end_reason=call.end_reason,
+        ended_by_id=call.ended_by_id,
+        ended_by_name=ended_by_name(call),
         callee_online=hub.is_online(call.callee_id),
         callee_has_push=bool(fcm_tokens_for_user(db, call.callee_id)),
         gsm_fallback=gsm_ok,
@@ -313,7 +332,7 @@ def decline_call(
     if call.status == "active":
         status = "ended"
         reason = "hangup"
-    _finalize(db, call, status, reason=reason)
+    _finalize(db, call, status, reason=reason, ended_by_id=user.id)
     db.commit()
     call = _load_call(db, call_id)
     assert call is not None
@@ -334,15 +353,20 @@ def hangup_call(
     if call.status not in OPEN_STATUSES:
         return to_call_out(db, call, user)
     reason = (payload.reason if payload else None) or "hangup"
+    ended_by: int | None = user.id
     if call.status == "ringing":
         status = "cancelled" if user.id == call.caller_id else "declined"
         if reason == "timeout":
             status = "missed"
+            ended_by = None
         elif reason == "failed":
             status = "failed"
+            ended_by = None
     else:
         status = "ended"
-    _finalize(db, call, status, reason=reason)
+        if reason in ("timeout", "failed"):
+            ended_by = None
+    _finalize(db, call, status, reason=reason, ended_by_id=ended_by)
     db.commit()
     call = _load_call(db, call_id)
     assert call is not None

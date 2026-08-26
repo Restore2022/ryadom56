@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../auth_prompt.dart';
+import '../call_service.dart';
 import '../responsive.dart';
 import '../state/app_state.dart';
 import '../time_format.dart';
@@ -20,16 +23,49 @@ class _ChatsTabState extends State<ChatsTab> {
   bool loading = true;
   String? error;
   int? _loadedUserId;
+  Timer? _poll;
+  int _seenInbox = 0;
 
   @override
   void initState() {
     super.initState();
+    CallService.instance.addListener(_onLive);
     WidgetsBinding.instance.addPostFrameCallback((_) => _load());
+  }
+
+  @override
+  void dispose() {
+    CallService.instance.removeListener(_onLive);
+    _poll?.cancel();
+    super.dispose();
+  }
+
+  void _startPoll() {
+    _poll?.cancel();
+    _poll = Timer.periodic(const Duration(seconds: 5), (_) async {
+      if (!mounted || loading) return;
+      final state = context.read<AppState>();
+      if (state.user == null) return;
+      try {
+        await state.loadConversations();
+      } catch (_) {}
+    });
+  }
+
+  void _onLive() {
+    final svc = CallService.instance;
+    if (svc.inboxSeq <= _seenInbox) return;
+    _seenInbox = svc.inboxSeq;
+    if (!mounted) return;
+    final state = context.read<AppState>();
+    if (state.user == null) return;
+    state.loadConversations();
   }
 
   Future<void> _load() async {
     final state = context.read<AppState>();
     if (state.user == null) {
+      _poll?.cancel();
       setState(() {
         loading = false;
         error = null;
@@ -49,6 +85,7 @@ class _ChatsTabState extends State<ChatsTab> {
         _loadedUserId = state.user?['id'] as int?;
         error = null;
       });
+      _startPoll();
     } catch (e) {
       if (!mounted) return;
       setState(() {

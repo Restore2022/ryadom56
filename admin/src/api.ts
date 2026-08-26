@@ -454,6 +454,8 @@ export type AppCall = {
   ended_at?: string | null;
   duration_sec: number;
   end_reason?: string | null;
+  ended_by_id?: number | null;
+  ended_by_name?: string | null;
 };
 
 export type AppUpdateInfo = {

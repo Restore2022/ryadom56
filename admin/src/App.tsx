@@ -1924,6 +1924,7 @@ function CallsPage() {
                 <span className="chip neutral">{formatDate(row.created_at)}</span>
               </div>
               {row.end_reason && <p className="muted">Причина: {row.end_reason}</p>}
+              {row.ended_by_name && <p className="muted">Завершил: {row.ended_by_name}</p>}
             </div>
           </article>
         ))}

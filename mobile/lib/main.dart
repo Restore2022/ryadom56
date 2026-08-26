@@ -93,6 +93,8 @@ class _RyadomAppState extends State<RyadomApp> {
 
   void _syncCalls() {
     final on = _state.user != null && _state.pinUnlocked;
+    final uid = _state.user?['id'] as int?;
+    if (uid != null) CallService.instance.myUserId = uid;
     if (on && !_callsOn) {
       _callsOn = true;
       CallService.instance.attach(widget.api);

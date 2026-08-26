@@ -498,6 +498,7 @@ class AppCall(Base):
     ended_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
     duration_sec: Mapped[int] = mapped_column(Integer, default=0)
     end_reason: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    ended_by_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
 
     listing: Mapped["Listing"] = relationship()
     caller: Mapped["User"] = relationship(foreign_keys=[caller_id])

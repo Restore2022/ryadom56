@@ -32,6 +32,12 @@ class AppCall {
   }
 
   int get ringTimeoutSec => (raw['ring_timeout_sec'] as num?)?.toInt() ?? 40;
+  int? get endedById => (raw['ended_by_id'] as num?)?.toInt();
+  String? get endedByName {
+    final v = raw['ended_by_name']?.toString();
+    if (v == null || v.isEmpty) return null;
+    return v;
+  }
 }
 
 enum CallPhase { idle, outgoing, incoming, connecting, active, ended }
@@ -41,6 +47,7 @@ class CallService extends ChangeNotifier {
   static final CallService instance = CallService._();
 
   ApiClient? _api;
+  int? myUserId;
   WebSocketChannel? _ws;
   StreamSubscription? _wsSub;
   Timer? _reconnect;
@@ -60,13 +67,18 @@ class CallService extends ChangeNotifier {
   bool muted = false;
   bool speaker = true;
   String? lastError;
+  String? endedBanner;
   bool offerGsm = false;
   DateTime? connectedAt;
+  int inboxSeq = 0;
+  Map<String, dynamic>? inboxEvent;
+  bool _closing = false;
 
-  bool get inCall => phase != CallPhase.idle && phase != CallPhase.ended;
+  bool get inCall => phase != CallPhase.idle;
 
-  Future<void> attach(ApiClient api) async {
+  Future<void> attach(ApiClient api, {int? userId}) async {
     _api = api;
+    if (userId != null) myUserId = userId;
     if (!_rendererReady) {
       await remoteRenderer.initialize();
       _rendererReady = true;
@@ -212,9 +224,11 @@ class CallService extends ChangeNotifier {
   }
 
   Future<void> hangup({String reason = 'hangup'}) async {
+    if (_closing) return;
     final id = call?.id;
     final gsm = call?.gsmFallback == true && (reason == 'timeout' || reason == 'failed');
-    await _hangupLocal(notifyServer: false);
+    final banner = (phase == CallPhase.active || phase == CallPhase.connecting) ? 'Вы завершили звонок' : null;
+    await _closeCall(banner: banner, notifyServer: false);
     if (id != null) {
       try {
         await _api?.request(
@@ -246,40 +260,71 @@ class CallService extends ChangeNotifier {
     notifyListeners();
   }
 
-  Future<void> _hangupLocal({required bool notifyServer}) async {
-    _ringTimer?.cancel();
-    _resendOffer?.cancel();
-    final id = call?.id;
-    final wasOpen = phase == CallPhase.outgoing || phase == CallPhase.incoming || phase == CallPhase.active || phase == CallPhase.connecting;
+  Future<void> _closeCall({String? banner, required bool notifyServer}) async {
+    if (_closing) return;
+    _closing = true;
     try {
-      await _pc?.close();
-    } catch (_) {}
-    _pc = null;
-    try {
-      await localStream?.dispose();
-    } catch (_) {}
-    localStream = null;
-    remoteStream = null;
-    _pendingOffer = null;
-    _pendingIce.clear();
-    _hasRemote = false;
-    if (notifyServer && wasOpen && id != null) {
+      _ringTimer?.cancel();
+      _resendOffer?.cancel();
+      final id = call?.id;
+      final wasOpen = phase == CallPhase.outgoing ||
+          phase == CallPhase.incoming ||
+          phase == CallPhase.active ||
+          phase == CallPhase.connecting;
       try {
-        await _api?.request('/calls/$id/hangup', method: 'POST', auth: true, body: {'reason': 'hangup'});
+        await _pc?.close();
       } catch (_) {}
-    }
-    if (phase != CallPhase.idle) {
-      phase = CallPhase.ended;
-    }
-    notifyListeners();
-    Future<void>.delayed(const Duration(milliseconds: 400), () {
-      if (phase == CallPhase.ended) {
-        phase = CallPhase.idle;
-        call = null;
-        connectedAt = null;
-        notifyListeners();
+      _pc = null;
+      try {
+        await localStream?.dispose();
+      } catch (_) {}
+      localStream = null;
+      remoteStream = null;
+      _pendingOffer = null;
+      _pendingIce.clear();
+      _hasRemote = false;
+      if (notifyServer && wasOpen && id != null) {
+        try {
+          await _api?.request('/calls/$id/hangup', method: 'POST', auth: true, body: {'reason': 'hangup'});
+        } catch (_) {}
       }
-    });
+      if (banner != null && banner.isNotEmpty) {
+        endedBanner = banner;
+        phase = CallPhase.ended;
+        notifyListeners();
+        await Future<void>.delayed(const Duration(milliseconds: 1400));
+      } else if (phase != CallPhase.idle) {
+        phase = CallPhase.ended;
+        notifyListeners();
+        await Future<void>.delayed(const Duration(milliseconds: 280));
+      }
+      phase = CallPhase.idle;
+      call = null;
+      connectedAt = null;
+      endedBanner = null;
+      notifyListeners();
+    } finally {
+      _closing = false;
+    }
+  }
+
+  Future<void> _hangupLocal({required bool notifyServer}) async {
+    await _closeCall(banner: null, notifyServer: notifyServer);
+  }
+
+  void _markActive() {
+    if (phase == CallPhase.idle || phase == CallPhase.ended) return;
+    final became = phase != CallPhase.active;
+    phase = CallPhase.active;
+    connectedAt ??= DateTime.now();
+    _ringTimer?.cancel();
+    if (became) notifyListeners();
+  }
+
+  void _dispatchInbox(Map<String, dynamic> msg) {
+    inboxEvent = msg;
+    inboxSeq++;
+    notifyListeners();
   }
 
   void _startResendOffer() {
@@ -370,14 +415,17 @@ class CallService extends ChangeNotifier {
     };
     _pc!.onConnectionState = (s) {
       if (s == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
-        phase = CallPhase.active;
-        connectedAt = DateTime.now();
-        _ringTimer?.cancel();
-        notifyListeners();
+        _markActive();
       } else if (s == RTCPeerConnectionState.RTCPeerConnectionStateFailed) {
         hangup(reason: 'failed');
       } else if (s == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected) {
         // короткие обрывы LTE — не рвём сразу
+      }
+    };
+    _pc!.onIceConnectionState = (s) {
+      if (s == RTCIceConnectionState.RTCIceConnectionStateConnected ||
+          s == RTCIceConnectionState.RTCIceConnectionStateCompleted) {
+        _markActive();
       }
     };
     _pc!.onTrack = (ev) {
@@ -402,6 +450,10 @@ class CallService extends ChangeNotifier {
 
   Future<void> _onSignal(Map<String, dynamic> msg) async {
     final type = msg['type']?.toString();
+    if (type == 'chat' || type == 'chat_read') {
+      _dispatchInbox(msg);
+      return;
+    }
     if (type == 'incoming') {
       final raw = Map<String, dynamic>.from(msg['call'] as Map);
       if (inCall && call?.id != (raw['id'] as num).toInt()) return;
@@ -421,9 +473,16 @@ class CallService extends ChangeNotifier {
       return;
     }
     if (type == 'hangup') {
+      if (_closing) return;
       final raw = msg['call'];
       if (raw is Map) call = AppCall(Map<String, dynamic>.from(raw));
-      await _hangupLocal(notifyServer: false);
+      final endedBy = call?.endedById;
+      final self = endedBy != null && endedBy == myUserId;
+      String? banner;
+      if (phase == CallPhase.active || phase == CallPhase.connecting) {
+        banner = self ? 'Вы завершили звонок' : '${call?.endedByName ?? 'Собеседник'} завершил звонок';
+      }
+      await _closeCall(banner: banner, notifyServer: false);
       return;
     }
     if (type == 'offer') {
