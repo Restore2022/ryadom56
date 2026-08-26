@@ -387,6 +387,16 @@ def _list_calls(db: Session, user: User, limit: int, offset: int) -> CallPageOut
     )
 
 
+def _ws_token(websocket: WebSocket, token: str | None) -> str | None:
+    raw = (token or "").strip()
+    if raw:
+        return raw
+    auth = websocket.headers.get("authorization") or websocket.headers.get("Authorization") or ""
+    if auth.lower().startswith("bearer "):
+        return auth.split(" ", 1)[1].strip() or None
+    return None
+
+
 def _ws_user(token: str | None, db: Session) -> User | None:
     if not token:
         return None
@@ -408,7 +418,7 @@ async def calls_ws(websocket: WebSocket, token: str | None = None):
     db = SessionLocal()
     user: User | None = None
     try:
-        user = _ws_user(token, db)
+        user = _ws_user(_ws_token(websocket, token), db)
         await websocket.accept()
         if not user:
             await websocket.close(code=4401)

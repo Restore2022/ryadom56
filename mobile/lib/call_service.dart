@@ -479,32 +479,39 @@ class CallService extends ChangeNotifier {
     } catch (_) {}
   }
 
-  Uri? _wsUri() {
+  Uri? _wsUri(String token) {
     final api = _api;
     if (api == null) return null;
     final http = Uri.parse(api.baseUrl);
+    if (http.host.isEmpty) return null;
     final scheme = http.scheme == 'https' ? 'wss' : 'ws';
-    final path = '${http.path.endsWith('/') ? http.path.substring(0, http.path.length - 1) : http.path}/calls/ws';
-    return Uri(
-      scheme: scheme,
-      host: http.host,
-      port: http.hasPort ? http.port : null,
-      path: path,
-    );
+    var path = http.path;
+    if (path.endsWith('/')) path = path.substring(0, path.length - 1);
+    path = '$path/calls/ws';
+    final defaultPort = scheme == 'wss' ? 443 : 80;
+    final explicit = http.hasPort && http.port != 0 && http.port != defaultPort;
+    final origin = explicit ? '$scheme://${http.host}:${http.port}' : '$scheme://${http.host}';
+    return Uri.parse('$origin$path').replace(queryParameters: {'token': token});
   }
 
   Future<void> _openWs() async {
     if (_connectingWs || !_wantWs) return;
     final api = _api;
-    final uri = _wsUri();
-    if (api == null || uri == null) return;
+    if (api == null) return;
     final token = await api.token;
     if (token == null || token.isEmpty) return;
+    final uri = _wsUri(token);
+    if (uri == null) return;
     _connectingWs = true;
     try {
       await _closeWs();
-      final full = uri.replace(queryParameters: {'token': token});
-      _ws = IOWebSocketChannel.connect(full, pingInterval: const Duration(seconds: 20));
+      _ws = IOWebSocketChannel.connect(
+        uri,
+        headers: {'Authorization': 'Bearer $token'},
+        pingInterval: const Duration(seconds: 20),
+        connectTimeout: const Duration(seconds: 12),
+      );
+      await _ws!.ready;
       _wsSub = _ws!.stream.listen(
         (event) {
           try {
@@ -518,6 +525,10 @@ class CallService extends ChangeNotifier {
         onError: (_) => _scheduleReconnect(),
       );
     } catch (_) {
+      if (phase == CallPhase.outgoing || phase == CallPhase.incoming || phase == CallPhase.connecting) {
+        lastError = 'Нет связи для звонка. Проверьте интернет';
+        notifyListeners();
+      }
       _scheduleReconnect();
     } finally {
       _connectingWs = false;

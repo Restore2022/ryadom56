@@ -1,7 +1,10 @@
-"""Cloudflare Realtime TURN: короткоживущие ICE-серверы для звонков."""
+"""ICE-серверы для звонков: Cloudflare TURN или свой coturn, иначе только STUN."""
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import logging
 import time
@@ -14,10 +17,10 @@ logger = logging.getLogger(__name__)
 
 _CF_URL = "https://rtc.live.cloudflare.com/v1/turn/keys/{key}/credentials/generate-ice-servers"
 _TTL_SEC = 6 * 60 * 60
-_CACHE_SEC = 20 * 60
+_CACHE_SEC = 10 * 60
 
 STUN_FALLBACK: list[dict] = [
-    {"urls": ["stun:stun.cloudflare.com:3478", "stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]},
+    {"urls": ["stun:stun.l.google.com:19302", "stun:stun1.l.google.com:19302"]},
 ]
 
 _cache: list[dict] | None = None
@@ -25,26 +28,52 @@ _cache_until: float = 0.0
 _cache_turn: bool = False
 
 
-def turn_configured() -> bool:
+def _cf_ok() -> bool:
     return bool((settings.cloudflare_turn_key_id or "").strip() and (settings.cloudflare_turn_api_token or "").strip())
 
 
+def _self_ok() -> bool:
+    return bool((settings.turn_auth_secret or "").strip())
+
+
+def turn_configured() -> bool:
+    return _cf_ok() or _self_ok()
+
+
 def get_ice_servers() -> tuple[list[dict], bool]:
-    """Список iceServers для RTCPeerConnection и флаг, что TURN реально включён."""
     global _cache, _cache_until, _cache_turn
     now = time.time()
     if _cache and now < _cache_until:
         return _cache, _cache_turn
-    if not turn_configured():
-        _cache, _cache_turn, _cache_until = STUN_FALLBACK, False, now + 60
-        return _cache, False
-    fetched = _fetch_cloudflare()
-    if fetched:
-        _cache, _cache_turn, _cache_until = fetched, True, now + _CACHE_SEC
+    if _cf_ok():
+        fetched = _fetch_cloudflare()
+        if fetched:
+            _cache, _cache_turn, _cache_until = fetched, True, now + _CACHE_SEC
+            return _cache, True
+        logger.warning("Cloudflare TURN unavailable — trying local coturn/STUN")
+    if _self_ok():
+        servers = [*STUN_FALLBACK, _self_turn_server()]
+        _cache, _cache_turn, _cache_until = servers, True, now + _CACHE_SEC
         return _cache, True
-    logger.warning("Cloudflare TURN unavailable — STUN only")
-    _cache, _cache_turn, _cache_until = STUN_FALLBACK, False, now + 30
+    _cache, _cache_turn, _cache_until = STUN_FALLBACK, False, now + 60
     return _cache, False
+
+
+def _self_turn_server() -> dict:
+    secret = settings.turn_auth_secret.strip()
+    host = (settings.turn_host or "legac.ru").strip()
+    expiry = int(time.time()) + _TTL_SEC
+    username = f"{expiry}:ryadom"
+    digest = hmac.new(secret.encode("utf-8"), username.encode("utf-8"), hashlib.sha1).digest()
+    credential = base64.b64encode(digest).decode("ascii")
+    return {
+        "urls": [
+            f"turn:{host}:3478?transport=udp",
+            f"turn:{host}:3478?transport=tcp",
+        ],
+        "username": username,
+        "credential": credential,
+    }
 
 
 def _fetch_cloudflare() -> list[dict] | None:

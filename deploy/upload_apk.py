@@ -15,9 +15,9 @@ if not PASS:
 REMOTE = "/opt/ryadom56"
 REMOTE_APK = f"{REMOTE}/backend/data/releases/ryadom56-latest.apk"
 LOCAL_APK = Path(__file__).resolve().parents[1] / "mobile" / "apk" / "app-release.apk"
-VERSION_NAME = "0.28.0"
-VERSION_CODE = 42
-APK_FILENAME = "ryadom56-0.28.0.apk"
+VERSION_NAME = "0.29.0"
+VERSION_CODE = 43
+APK_FILENAME = "ryadom56-0.29.0.apk"
 
 
 def run(c: paramiko.SSHClient, cmd: str, timeout: int = 120) -> str:
@@ -58,8 +58,8 @@ def main() -> None:
     run(c, f"mv -f {tmp} {REMOTE_APK} && ls -la {REMOTE_APK} && chmod 644 {REMOTE_APK}")
 
     notes = (
-        "Звонки через Cloudflare TURN, если прямой интернет не соединяет. "
-        "В чате — пропущенные/отменённые и галочки прочтения."
+        "Исправлена связь звонка (сокет без порта :0). "
+        "Если прямой интернет не соединяет — свой TURN на сервере."
     )
     py = f"""# coding: utf-8
 from sqlalchemy import select

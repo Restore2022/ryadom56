@@ -36,6 +36,9 @@ class Settings(BaseSettings):
     # Cloudflare Realtime TURN (короткие учётки; ключ только на сервере)
     cloudflare_turn_key_id: str = ""
     cloudflare_turn_api_token: str = ""
+    # Свой coturn на VPS (без Cloudflare). Секрет не в git.
+    turn_host: str = "legac.ru"
+    turn_auth_secret: str = ""
 
     class Config:
         env_file = ".env"
