@@ -19,16 +19,9 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 subprojects {
-    afterEvaluate {
-        if (name == "app") return@afterEvaluate
-        val ext = extensions.findByName("android") ?: return@afterEvaluate
-        try {
-            ext.javaClass.getMethod("setCompileSdkVersion", Int::class.javaPrimitiveType).invoke(ext, 35)
-        } catch (_: NoSuchMethodException) {
-            try {
-                ext.javaClass.getMethod("setCompileSdk", Int::class.javaPrimitiveType).invoke(ext, 35)
-            } catch (_: Exception) {
-            }
+    pluginManager.withPlugin("com.android.library") {
+        extensions.configure<com.android.build.gradle.LibraryExtension>("android") {
+            compileSdk = 35
         }
     }
 }
