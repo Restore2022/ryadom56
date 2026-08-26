@@ -17,7 +17,7 @@ if (keystorePropertiesFile.exists()) {
 
 android {
     namespace = "ru.ryadom56.ryadom56"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 35
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
