@@ -438,6 +438,22 @@ export type LegalDocument = {
   updated_at: string;
 };
 
+export type AppCall = {
+  id: number;
+  listing_id: number;
+  listing_title?: string | null;
+  caller_id: number;
+  caller_name?: string | null;
+  callee_id: number;
+  callee_name?: string | null;
+  status: string;
+  created_at: string;
+  answered_at?: string | null;
+  ended_at?: string | null;
+  duration_sec: number;
+  end_reason?: string | null;
+};
+
 export type AppUpdateInfo = {
   version: string;
   build: number;

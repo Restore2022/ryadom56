@@ -847,6 +847,43 @@ class AppUpdatePatch(BaseModel):
     notes: str | None = Field(default=None, max_length=4000)
 
 
+class CallCreateIn(BaseModel):
+    listing_id: int
+    callee_id: int | None = None
+
+
+class CallActionIn(BaseModel):
+    reason: str | None = Field(default=None, max_length=80)
+
+
+class CallOut(BaseModel):
+    id: int
+    listing_id: int
+    listing_title: str | None = None
+    caller_id: int
+    caller_name: str | None = None
+    callee_id: int
+    callee_name: str | None = None
+    status: str
+    created_at: datetime
+    answered_at: datetime | None = None
+    ended_at: datetime | None = None
+    duration_sec: int = 0
+    end_reason: str | None = None
+    callee_online: bool = False
+    callee_has_push: bool = False
+    gsm_fallback: bool = False
+    gsm_phone: str | None = None
+    ring_timeout_sec: int = 40
+
+
+class CallPageOut(BaseModel):
+    items: list[CallOut]
+    total: int
+    limit: int
+    offset: int
+
+
 class ClientErrorIn(BaseModel):
     message: str = Field(min_length=1, max_length=500)
     stack: str | None = Field(default=None, max_length=8000)

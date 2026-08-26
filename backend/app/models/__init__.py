@@ -479,6 +479,28 @@ class AppUpdate(Base):
     )
 
 
+class AppCall(Base):
+    """Интернет-звонок 1-на-1 по объявлению. Медиа P2P, на сервере только журнал и сигнал."""
+
+    __tablename__ = "app_calls"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    listing_id: Mapped[int] = mapped_column(ForeignKey("listings.id"), index=True, nullable=False)
+    caller_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    callee_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True, nullable=False)
+    # ringing / active / ended / missed / declined / cancelled / failed / busy
+    status: Mapped[str] = mapped_column(String(20), default="ringing", index=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now(), index=True)
+    answered_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
+    ended_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
+    duration_sec: Mapped[int] = mapped_column(Integer, default=0)
+    end_reason: Mapped[str | None] = mapped_column(String(80), nullable=True)
+
+    listing: Mapped["Listing"] = relationship()
+    caller: Mapped["User"] = relationship(foreign_keys=[caller_id])
+    callee: Mapped["User"] = relationship(foreign_keys=[callee_id])
+
+
 class ClientErrorLog(Base):
     __tablename__ = "client_error_logs"
 

@@ -3,6 +3,8 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'call_screens.dart';
+import 'call_service.dart';
 import 'api.dart';
 import 'error_reporter.dart';
 import 'push_service.dart';
@@ -64,18 +66,48 @@ class RyadomApp extends StatefulWidget {
 
 class _RyadomAppState extends State<RyadomApp> {
   late final AppState _state;
+  bool _callsOn = false;
 
   @override
   void initState() {
     super.initState();
     _state = AppState(widget.api)..bootstrap();
+    _state.addListener(_syncCalls);
     PushService.instance.onTap = _handlePushTap;
+    PushService.instance.onForegroundData = (data) {
+      if (data['type']?.toString() == 'incoming_call') {
+        CallService.instance.handlePush(data);
+      }
+    };
+    CallService.instance.attach(widget.api);
+  }
+
+  @override
+  void dispose() {
+    _state.removeListener(_syncCalls);
+    super.dispose();
+  }
+
+  void _syncCalls() {
+    final on = _state.user != null && _state.pinUnlocked;
+    if (on && !_callsOn) {
+      _callsOn = true;
+      CallService.instance.attach(widget.api);
+      CallService.instance.connect();
+    } else if (!on && _callsOn) {
+      _callsOn = false;
+      CallService.instance.disconnect();
+    }
   }
 
   Future<void> _handlePushTap(Map<String, dynamic> data) async {
+    final type = data['type']?.toString();
+    if (type == 'incoming_call' || type == 'missed_call') {
+      await CallService.instance.handlePush(data);
+      if (type == 'incoming_call') return;
+    }
     final nav = appNavigatorKey.currentState;
     if (nav == null) return;
-    final type = data['type']?.toString();
     final listingId = int.tryParse('${data['listing_id'] ?? ''}');
     final buyerId = int.tryParse('${data['buyer_id'] ?? ''}');
 
@@ -122,7 +154,7 @@ class _RyadomAppState extends State<RyadomApp> {
               final scale = mq.textScaler.scale(1).clamp(0.9, 1.25);
               return MediaQuery(
                 data: mq.copyWith(textScaler: TextScaler.linear(scale)),
-                child: child ?? const SizedBox.shrink(),
+                child: CallOverlayHost(child: child ?? const SizedBox.shrink()),
               );
             },
             routes: {

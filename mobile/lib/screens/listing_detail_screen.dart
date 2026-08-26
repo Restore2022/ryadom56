@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../auth_prompt.dart';
+import '../call_screens.dart';
 import '../state/app_state.dart';
 import '../time_format.dart';
 import '../ui_helpers.dart';
@@ -577,6 +578,22 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                         icon: const Icon(Icons.chat_bubble_outline),
                         label: const Text('Написать в приложении'),
                       ),
+                      if (!isGuest) ...[
+                        const SizedBox(height: 8),
+                        FilledButton.tonalIcon(
+                          onPressed: () async {
+                            final loggedIn = await ensureLoggedIn(context, message: 'Войдите, чтобы позвонить');
+                            if (!loggedIn || !mounted) return;
+                            await startAppCall(
+                              context,
+                              listingId: widget.listingId,
+                              gsmPhone: (!phoneHidden && hasPhone) ? contactPhone : null,
+                            );
+                          },
+                          icon: const Icon(Icons.phone_in_talk_outlined),
+                          label: const Text('Звонок в приложении'),
+                        ),
+                      ],
                     ],
                     if (phoneHidden && !isOwner && !isStaff && !isGuest) ...[
                       const SizedBox(height: 8),

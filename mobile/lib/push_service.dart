@@ -25,11 +25,14 @@ class PushService {
   bool localReady = false;
   String? token;
   PushTapHandler? onTap;
+  PushTapHandler? onForegroundData;
   int _localId = 1000;
 
   static const _channelId = 'ryadom56_alerts';
   static const _channelName = 'Рядом56';
   static const _channelDesc = 'Сообщения, объявления и срочные оповещения района';
+  static const _callChannelId = 'ryadom56_calls';
+  static const _callChannelName = 'Звонки Рядом56';
 
   Future<void> init() async {
     await _initLocal();
@@ -61,6 +64,16 @@ class PushService {
           importance: Importance.high,
         ),
       );
+      await androidPlugin?.createNotificationChannel(
+        const AndroidNotificationChannel(
+          _callChannelId,
+          _callChannelName,
+          description: 'Входящие звонки в приложении',
+          importance: Importance.max,
+          playSound: true,
+          enableVibration: true,
+        ),
+      );
       await androidPlugin?.requestNotificationsPermission();
     }
     localReady = true;
@@ -76,10 +89,15 @@ class PushService {
       await messaging.setForegroundNotificationPresentationOptions(alert: true, badge: true, sound: true);
 
       FirebaseMessaging.onMessage.listen((msg) {
+        final data = Map<String, dynamic>.from(msg.data);
+        if (data['type']?.toString() == 'incoming_call') {
+          onForegroundData?.call(data);
+          return;
+        }
         final n = msg.notification;
         final title = n?.title ?? msg.data['title']?.toString() ?? 'Рядом56';
         final body = n?.body ?? msg.data['body']?.toString() ?? '';
-        showLocal(title: title, body: body, data: Map<String, dynamic>.from(msg.data));
+        showLocal(title: title, body: body, data: data);
       });
 
       FirebaseMessaging.onMessageOpenedApp.listen((msg) {

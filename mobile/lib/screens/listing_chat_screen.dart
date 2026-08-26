@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../auth_prompt.dart';
+import '../call_screens.dart';
 import '../state/app_state.dart';
 import '../time_format.dart';
 import '../ui_helpers.dart';
@@ -143,6 +144,17 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
             ),
           ],
         ),
+        actions: [
+          IconButton(
+            tooltip: 'Звонок в приложении',
+            onPressed: () => startAppCall(
+              context,
+              listingId: widget.listingId,
+              calleeId: widget.peerId,
+            ),
+            icon: const Icon(Icons.phone_in_talk_outlined),
+          ),
+        ],
       ),
       body: Column(
         children: [

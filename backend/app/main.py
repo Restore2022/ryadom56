@@ -13,6 +13,7 @@ from app.api import (
     alerts,
     app_update,
     auth,
+    calls,
     client_errors,
     directory,
     events,
@@ -25,6 +26,7 @@ from app.api import (
 )
 from app.core.config import settings
 from app.core.database import SessionLocal
+from app.services.call_hub import hub
 from app.services.seed import init_db, seed_db
 
 
@@ -45,6 +47,9 @@ async def lifespan(_: FastAPI):
     init_db()
     with SessionLocal() as session:
         seed_db(session)
+    import asyncio
+
+    hub.bind_loop(asyncio.get_running_loop())
     yield
 
 
@@ -70,6 +75,8 @@ app.include_router(legal.router, prefix="/api")
 app.include_router(legal.public_router)
 app.include_router(notifications.router, prefix="/api")
 app.include_router(app_update.router, prefix="/api")
+app.include_router(calls.router, prefix="/api")
+app.include_router(calls.admin_calls_router, prefix="/api")
 app.include_router(admin_panel.router, prefix="/api")
 app.include_router(client_errors.router, prefix="/api")
 app.mount("/uploads", StaticFiles(directory="data/uploads"), name="uploads")

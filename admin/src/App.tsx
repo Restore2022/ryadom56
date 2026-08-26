@@ -21,6 +21,7 @@ import type {
   TransportRoute,
   User,
   UserReport,
+  AppCall,
 } from './api';
 import './App.css';
 
@@ -624,6 +625,11 @@ function Shell({
           {mod && (
             <NavLink to="/chats">
               <span className="nav-ico">⇄</span> Чаты
+            </NavLink>
+          )}
+          {mod && (
+            <NavLink to="/calls">
+              <span className="nav-ico">☎</span> Звонки
             </NavLink>
           )}
           {mod && (
@@ -1820,6 +1826,108 @@ function ErrorsPage() {
           </article>
         ))}
         {!items.length && <div className="empty">Сбоев пока нет</div>}
+      </div>
+    </div>
+  );
+}
+
+const CALL_STATUS_LABEL: Record<string, string> = {
+  ringing: 'гудки',
+  active: 'идёт',
+  ended: 'завершён',
+  missed: 'пропущен',
+  declined: 'сброшен',
+  cancelled: 'отменён',
+  failed: 'сбой',
+  busy: 'занято',
+};
+
+function formatDuration(sec: number) {
+  const n = Math.max(0, Math.floor(sec || 0));
+  const m = Math.floor(n / 60);
+  const s = n % 60;
+  return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function CallsPage() {
+  const [items, setItems] = useState<AppCall[]>([]);
+  const [total, setTotal] = useState(0);
+  const [query, setQuery] = useState('');
+  const [status, setStatus] = useState('');
+  const [error, setError] = useState('');
+
+  async function load() {
+    try {
+      const params = new URLSearchParams();
+      if (query.trim()) params.set('q', query.trim());
+      if (status) params.set('status', status);
+      params.set('limit', '80');
+      const qs = params.toString();
+      const data = await api<{ items: AppCall[]; total: number }>(`/admin/calls?${qs}`);
+      setItems(data.items || []);
+      setTotal(data.total || 0);
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    }
+  }
+
+  useEffect(() => {
+    load().catch(console.error);
+    const id = window.setInterval(() => {
+      load().catch(() => undefined);
+    }, 15000);
+    return () => window.clearInterval(id);
+  }, []);
+
+  return (
+    <div>
+      <div className="page-head">
+        <div>
+          <h1>Звонки</h1>
+          <p>Журнал интернет-звонков в приложении. Без записи разговора.</p>
+        </div>
+      </div>
+      <div className="toolbar">
+        <input
+          placeholder="Имя, объявление, номер звонка…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <select value={status} onChange={(e) => setStatus(e.target.value)}>
+          <option value="">Все статусы</option>
+          {Object.entries(CALL_STATUS_LABEL).map(([k, v]) => (
+            <option key={k} value={k}>
+              {v}
+            </option>
+          ))}
+        </select>
+        <button className="btn" type="button" onClick={() => load()}>
+          Обновить
+        </button>
+      </div>
+      {error && <p className="error">{error}</p>}
+      <p className="muted">Всего: {total}</p>
+      <div className="list">
+        {items.map((row) => (
+          <article key={row.id} className="row-card">
+            <div className="row-main">
+              <h3 className="row-title">
+                {row.caller_name || `#${row.caller_id}`} → {row.callee_name || `#${row.callee_id}`}
+              </h3>
+              <div className="meta">
+                <span className="chip">{CALL_STATUS_LABEL[row.status] || row.status}</span>
+                {row.listing_title && <span className="chip neutral">{row.listing_title}</span>}
+                {row.status === 'ended' || row.duration_sec ? (
+                  <span className="chip neutral">{formatDuration(row.duration_sec)}</span>
+                ) : null}
+                <span className="chip neutral">{formatDate(row.created_at)}</span>
+              </div>
+              {row.end_reason && <p className="muted">Причина: {row.end_reason}</p>}
+            </div>
+          </article>
+        ))}
+        {!items.length && <div className="empty">Звонков пока нет</div>}
       </div>
     </div>
   );
@@ -4607,6 +4715,7 @@ export default function App() {
         {canEditDirectory(user!.role) && <Route path="/news" element={<NewsPage />} />}
         {canEditDirectory(user!.role) && <Route path="/alerts" element={<AlertsPage />} />}
         {canModerate(user!.role) && <Route path="/chats" element={<ChatsModerationPage />} />}
+        {canModerate(user!.role) && <Route path="/calls" element={<CallsPage />} />}
         {canModerate(user!.role) && <Route path="/blacklist" element={<BlacklistPage />} />}
         {user!.role === 'admin' && <Route path="/users" element={<UsersPage />} />}
         {user!.role === 'admin' && <Route path="/legal" element={<LegalPage />} />}

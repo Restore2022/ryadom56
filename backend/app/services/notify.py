@@ -145,11 +145,27 @@ def _try_push(
     title: str,
     body: str,
     data: dict | None = None,
+    channel_id: str | None = None,
 ) -> int:
     tokens = fcm_tokens_for_user(db, user_id)
     if not tokens:
         return 0
-    return _fcm_send_many(tokens, title=title, body=body, data=data or {})
+    return _fcm_send_many(
+        tokens, title=title, body=body, data=data or {}, channel_id=channel_id or "ryadom56_alerts"
+    )
+
+
+def push_user(
+    db: Session,
+    *,
+    user_id: int,
+    title: str,
+    body: str,
+    data: dict | None = None,
+    channel_id: str | None = None,
+) -> int:
+    """FCM без записи в колокольчик — для входящего звонка."""
+    return _try_push(db, user_id=user_id, title=title, body=body, data=data, channel_id=channel_id)
 
 
 def _service_account_path() -> Path | None:
@@ -208,7 +224,9 @@ def _fcm_project_id() -> str:
     return "ryadom56"
 
 
-def _fcm_send_many(tokens: list[str], *, title: str, body: str, data: dict) -> int:
+def _fcm_send_many(
+    tokens: list[str], *, title: str, body: str, data: dict, channel_id: str = "ryadom56_alerts"
+) -> int:
     if not tokens:
         return 0
     access = _fcm_access_token()
@@ -227,7 +245,7 @@ def _fcm_send_many(tokens: list[str], *, title: str, body: str, data: dict) -> i
                 "android": {
                     "priority": "HIGH",
                     "notification": {
-                        "channel_id": "ryadom56_alerts",
+                        "channel_id": channel_id or "ryadom56_alerts",
                         "sound": "default",
                         "click_action": "FLUTTER_NOTIFICATION_CLICK",
                     },
