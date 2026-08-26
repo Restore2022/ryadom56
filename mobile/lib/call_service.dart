@@ -186,9 +186,11 @@ class CallService extends ChangeNotifier {
       await _ensurePeer(offer: false);
       if (_pendingOffer != null) {
         await _pc!.setRemoteDescription(RTCSessionDescription(_pendingOffer!['sdp'], _pendingOffer!['type']));
+        _hasRemote = true;
         final answer = await _pc!.createAnswer();
         await _pc!.setLocalDescription(answer);
         _send({'type': 'answer', 'call_id': call!.id, 'sdp': answer.sdp, 'sdp_type': answer.type});
+        await _drainIce();
         _pendingOffer = null;
       }
     } on ApiException catch (e) {
@@ -260,6 +262,7 @@ class CallService extends ChangeNotifier {
     remoteStream = null;
     _pendingOffer = null;
     _pendingIce.clear();
+    _hasRemote = false;
     if (notifyServer && wasOpen && id != null) {
       try {
         await _api?.request('/calls/$id/hangup', method: 'POST', auth: true, body: {'reason': 'hangup'});
@@ -312,6 +315,7 @@ class CallService extends ChangeNotifier {
 
   Map<String, dynamic>? _pendingOffer;
   final List<Map<String, dynamic>> _pendingIce = [];
+  bool _hasRemote = false;
 
   Future<void> _ensurePeer({required bool offer}) async {
     if (_pc != null) return;
@@ -395,6 +399,7 @@ class CallService extends ChangeNotifier {
       _pendingOffer = {'sdp': msg['sdp'], 'type': msg['sdp_type'] ?? 'offer'};
       if (_pc != null && (phase == CallPhase.connecting || phase == CallPhase.active)) {
         await _pc!.setRemoteDescription(RTCSessionDescription(_pendingOffer!['sdp'], _pendingOffer!['type']));
+        _hasRemote = true;
         final answer = await _pc!.createAnswer();
         await _pc!.setLocalDescription(answer);
         _send({'type': 'answer', 'call_id': call!.id, 'sdp': answer.sdp, 'sdp_type': answer.type});
@@ -406,6 +411,7 @@ class CallService extends ChangeNotifier {
     if (type == 'answer') {
       if (_pc == null) return;
       await _pc!.setRemoteDescription(RTCSessionDescription(msg['sdp']?.toString(), msg['sdp_type']?.toString() ?? 'answer'));
+      _hasRemote = true;
       await _drainIce();
       return;
     }
@@ -415,7 +421,7 @@ class CallService extends ChangeNotifier {
         'sdpMid': msg['sdpMid'],
         'sdpMLineIndex': msg['sdpMLineIndex'],
       };
-      if (_pc?.remoteDescription == null) {
+      if (!_hasRemote) {
         _pendingIce.add(cand);
         return;
       }
