@@ -28,6 +28,7 @@ from app.core.config import settings
 from app.core.database import SessionLocal
 from app.services.call_hub import hub
 from app.services.seed import init_db, seed_db
+from app.services.turn import turn_configured
 
 
 def _json_utc(value: datetime) -> str:
@@ -84,4 +85,4 @@ app.mount("/uploads", StaticFiles(directory="data/uploads"), name="uploads")
 
 @app.get("/api/health")
 async def health():
-    return {"status": "ok", "app": settings.app_name}
+    return {"status": "ok", "app": settings.app_name, "turn": turn_configured()}

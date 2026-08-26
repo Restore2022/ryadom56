@@ -317,13 +317,44 @@ class CallService extends ChangeNotifier {
   final List<Map<String, dynamic>> _pendingIce = [];
   bool _hasRemote = false;
 
+  List<Map<String, dynamic>> _iceServersCached = [
+    {
+      'urls': [
+        'stun:stun.cloudflare.com:3478',
+        'stun:stun.l.google.com:19302',
+        'stun:stun1.l.google.com:19302',
+      ],
+    },
+  ];
+  DateTime? _iceServersAt;
+
+  Future<List<Map<String, dynamic>>> _loadIceServers() async {
+    final api = _api;
+    final stale = _iceServersAt == null || DateTime.now().difference(_iceServersAt!) > const Duration(minutes: 8);
+    if (api != null && stale) {
+      try {
+        final data = await api.request('/calls/ice-servers', auth: true);
+        if (data is Map && data['ice_servers'] is List) {
+          final rows = <Map<String, dynamic>>[];
+          for (final row in data['ice_servers'] as List) {
+            if (row is! Map) continue;
+            rows.add(Map<String, dynamic>.from(row));
+          }
+          if (rows.isNotEmpty) {
+            _iceServersCached = rows;
+            _iceServersAt = DateTime.now();
+          }
+        }
+      } catch (_) {}
+    }
+    return _iceServersCached;
+  }
+
   Future<void> _ensurePeer({required bool offer}) async {
     if (_pc != null) return;
+    final ice = await _loadIceServers();
     final config = {
-      'iceServers': [
-        {'urls': 'stun:stun.l.google.com:19302'},
-        {'urls': 'stun:stun1.l.google.com:19302'},
-      ],
+      'iceServers': ice,
       'sdpSemantics': 'unified-plan',
     };
     _pc = await createPeerConnection(config);

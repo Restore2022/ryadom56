@@ -15,6 +15,7 @@ from app.services.chat_calls import call_event_body, record_call_in_chat, thread
 from app.services.notify import fcm_tokens_for_user, push_user
 from app.services.rate_limit import limiter
 from app.services.sessions import assert_token_session
+from app.services.turn import get_ice_servers
 
 router = APIRouter(prefix="/calls", tags=["calls"])
 
@@ -256,6 +257,12 @@ def pending_calls(db: Session = Depends(get_db), user: User = Depends(get_curren
     if changed:
         db.commit()
     return out
+
+
+@router.get("/ice-servers")
+def ice_servers(user: User = Depends(get_current_user)):
+    servers, turn = get_ice_servers()
+    return {"ice_servers": servers, "turn": turn}
 
 
 @router.get("/{call_id}", response_model=CallOut)

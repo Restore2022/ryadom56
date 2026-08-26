@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     smtp_use_ssl: bool = True
     smtp_use_tls: bool = False
     password_reset_ttl_minutes: int = 20
+    # Cloudflare Realtime TURN (короткие учётки; ключ только на сервере)
+    cloudflare_turn_key_id: str = ""
+    cloudflare_turn_api_token: str = ""
 
     class Config:
         env_file = ".env"

@@ -1,7 +1,7 @@
 name: ryadom56
 description: Ryadom56 — Sakmarsky district app
 publish_to: "none"
-version: 0.27.0+41
+version: 0.28.0+42
 
 environment:
   sdk: ">=3.8.0 <4.0.0"
