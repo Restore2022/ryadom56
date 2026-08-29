@@ -15,11 +15,14 @@ from app.api import (
     auth,
     calls,
     client_errors,
+    contact,
     directory,
+    presence,
     events,
     legal,
     listings,
     news,
+    share,
     notifications,
     settlements,
     transport,
@@ -74,12 +77,15 @@ app.include_router(news.router, prefix="/api")
 app.include_router(alerts.router, prefix="/api")
 app.include_router(legal.router, prefix="/api")
 app.include_router(legal.public_router)
+app.include_router(share.router)
 app.include_router(notifications.router, prefix="/api")
 app.include_router(app_update.router, prefix="/api")
 app.include_router(calls.router, prefix="/api")
 app.include_router(calls.admin_calls_router, prefix="/api")
 app.include_router(admin_panel.router, prefix="/api")
 app.include_router(client_errors.router, prefix="/api")
+app.include_router(contact.router, prefix="/api")
+app.include_router(presence.router, prefix="/api")
 app.mount("/uploads", StaticFiles(directory="data/uploads"), name="uploads")
 
 

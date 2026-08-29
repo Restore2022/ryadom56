@@ -25,6 +25,7 @@ from app.models import (
 from app.schemas import (
     AuthorReportOut,
     ConversationOut,
+    ListingAdminStatusIn,
     ListingCloseIn,
     ListingCreate,
     ListingExtendIn,
@@ -315,7 +316,7 @@ def author_replied_to_buyer(db: Session, listing: Listing, viewer: User | None) 
     return found is not None
 
 
-@router.get("/admin/all", response_model=list[ListingOut])
+@router.get("/admin/all", response_model=ListingPageOut)
 def admin_list_listings(
     status_filter: ListingStatus | None = Query(default=None, alias="status"),
     q: str | None = None,
@@ -323,7 +324,11 @@ def admin_list_listings(
     auto_flagged: bool | None = None,
     settlement_id: int | None = None,
     author_id: int | None = None,
+    category: ListingCategory | None = None,
     sort: str = Query(default="newest", pattern="^(newest|sla)$"),
+    over24: bool = False,
+    limit: int = Query(default=400, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(UserRole.moderator, UserRole.admin)),
 ):
@@ -342,6 +347,8 @@ def admin_list_listings(
         stmt = stmt.where(Listing.settlement_id == settlement_id)
     if author_id is not None:
         stmt = stmt.where(Listing.author_id == author_id)
+    if category is not None:
+        stmt = stmt.where(Listing.category == category)
     if q and q.strip():
         like = f"%{q.strip()}%"
         stmt = stmt.join(Listing.author).where(
@@ -354,11 +361,22 @@ def admin_list_listings(
                 Listing.contact_phone.ilike(like),
             )
         )
+    if over24:
+        stmt = stmt.where(Listing.created_at < datetime.now(timezone.utc) - timedelta(hours=24))
     if sort == "sla" or status_filter == ListingStatus.pending:
         stmt = stmt.order_by(Listing.auto_flagged.desc(), Listing.created_at.asc())
     else:
         stmt = stmt.order_by(Listing.created_at.desc())
-    return [to_out(r, viewer=user) for r in db.execute(stmt).scalars().unique().all()]
+    total = int(
+        db.execute(select(func.count()).select_from(stmt.with_only_columns(Listing.id).order_by(None).subquery())).scalar_one()
+    )
+    rows = db.execute(stmt.offset(offset).limit(limit)).scalars().unique().all()
+    return ListingPageOut(
+        items=[to_out(r, viewer=user) for r in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/mine/stats")
@@ -683,18 +701,39 @@ def update_listing(
     item = load_listing(db, listing_id)
     if not item:
         raise HTTPException(status_code=404, detail="Объявление не найдено")
-    if item.author_id != user.id and user.role not in (UserRole.admin, UserRole.moderator):
+    is_staff = user.role in (UserRole.admin, UserRole.moderator)
+    if item.author_id != user.id and not is_staff:
         raise HTTPException(status_code=403, detail="Нет доступа")
     data = payload.model_dump(exclude_unset=True)
     as_draft = data.pop("as_draft", None)
     if "lifetime_days" in data:
         data["lifetime_days"] = normalize_lifetime(data.get("lifetime_days"))
+    if "title" in data and isinstance(data["title"], str):
+        data["title"] = data["title"].strip()
+    if "description" in data and isinstance(data["description"], str):
+        data["description"] = data["description"].strip()
+    if "contact_phone" in data:
+        data["contact_phone"] = (data["contact_phone"] or "").strip() or None
+    if "settlement_id" in data and data["settlement_id"] is not None:
+        settlement = db.execute(select(Settlement.id).where(Settlement.id == data["settlement_id"])).scalar_one_or_none()
+        if settlement is None:
+            raise HTTPException(status_code=400, detail="Населённый пункт не найден")
     was_approved = item.status == ListingStatus.approved
-    if was_approved and item.author_id == user.id and as_draft is not True:
+    if was_approved and item.author_id == user.id and not is_staff and as_draft is not True:
         item.previous_snapshot = snapshot_listing(item)
+    changed = sorted(data.keys())
     for key, value in data.items():
         setattr(item, key, value)
-    if item.author_id == user.id:
+    if is_staff:
+        log_action(
+            db,
+            actor=user,
+            action="listing.update",
+            entity_type="listing",
+            entity_id=item.id,
+            details=f"{item.title}; fields={','.join(changed) or '—'}",
+        )
+    elif item.author_id == user.id:
         if as_draft is True:
             item.status = ListingStatus.draft
         else:
@@ -708,7 +747,7 @@ def update_listing(
             apply_blacklist_flag(db, item)
     db.commit()
     item = load_listing(db, listing_id)
-    return to_out(item, favorite_ids_for(db, user))
+    return to_out(item, favorite_ids_for(db, user), viewer=user)
 
 
 @router.post("/{listing_id}/close", response_model=ListingOut)
@@ -1099,12 +1138,12 @@ async def upload_listing_images(
         next_order += 1
         current += 1
 
-    if item.author_id == user.id and item.status == ListingStatus.approved:
+    if item.author_id == user.id and user.role not in (UserRole.admin, UserRole.moderator) and item.status == ListingStatus.approved:
         item.status = ListingStatus.pending
 
     db.commit()
     item = load_listing(db, listing_id)
-    return to_out(item, favorite_ids_for(db, user))
+    return to_out(item, favorite_ids_for(db, user), viewer=user)
 
 
 @router.delete("/{listing_id}/images/{image_id}", response_model=ListingOut)
@@ -1126,11 +1165,11 @@ def delete_listing_image(
     if file_path.exists():
         file_path.unlink()
     db.delete(image)
-    if item.author_id == user.id and item.status == ListingStatus.approved:
+    if item.author_id == user.id and user.role not in (UserRole.admin, UserRole.moderator) and item.status == ListingStatus.approved:
         item.status = ListingStatus.pending
     db.commit()
     item = load_listing(db, listing_id)
-    return to_out(item, favorite_ids_for(db, user))
+    return to_out(item, favorite_ids_for(db, user), viewer=user)
 
 
 @router.patch("/{listing_id}/images/reorder", response_model=ListingOut)
@@ -1150,11 +1189,11 @@ def reorder_listing_images(
         raise HTTPException(status_code=400, detail="Список фото не совпадает с объявлением")
     for order, image_id in enumerate(payload.image_ids):
         by_id[image_id].sort_order = order
-    if item.author_id == user.id and item.status == ListingStatus.approved:
+    if item.author_id == user.id and user.role not in (UserRole.admin, UserRole.moderator) and item.status == ListingStatus.approved:
         item.status = ListingStatus.pending
     db.commit()
     item = load_listing(db, listing_id)
-    return to_out(item, favorite_ids_for(db, user))
+    return to_out(item, favorite_ids_for(db, user), viewer=user)
 
 
 @router.post("/{listing_id}/pin", response_model=ListingOut)
@@ -1257,3 +1296,90 @@ def moderate_listing(
     db.commit()
     item = load_listing(db, listing_id)
     return to_out(item)
+
+
+@router.post("/{listing_id}/admin-status", response_model=ListingOut)
+def admin_set_listing_status(
+    listing_id: int,
+    payload: ListingAdminStatusIn,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(UserRole.moderator, UserRole.admin)),
+):
+    if payload.status not in (
+        ListingStatus.draft,
+        ListingStatus.pending,
+        ListingStatus.approved,
+        ListingStatus.rejected,
+        ListingStatus.archived,
+    ):
+        raise HTTPException(status_code=400, detail="Недопустимый статус")
+    if payload.status == ListingStatus.rejected and not (payload.moderation_note or "").strip():
+        raise HTTPException(status_code=400, detail="Укажите причину отклонения")
+    item = load_listing(db, listing_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Объявление не найдено")
+    old = item.status
+    if payload.status in (ListingStatus.approved, ListingStatus.pending) and old not in (
+        ListingStatus.approved,
+        ListingStatus.pending,
+    ):
+        ensure_active_slot(db, item.author_id, exclude_id=item.id)
+    item.status = payload.status
+    if payload.moderation_note is not None:
+        item.moderation_note = payload.moderation_note.strip() or None
+    if payload.status == ListingStatus.approved:
+        item.auto_flagged = False
+        item.previous_snapshot = None
+        item.close_reason = None
+        item.close_note = None
+        set_expiry_from(item, utcnow(), getattr(item, "lifetime_days", 30))
+    elif payload.status == ListingStatus.archived:
+        item.is_pinned = False
+        item.close_reason = (payload.close_reason or "").strip() or "other"
+        item.close_note = (payload.close_note or "").strip() or "Снято модератором"
+    else:
+        item.is_pinned = False
+        item.close_reason = None
+        item.close_note = None
+    log_action(
+        db,
+        actor=user,
+        action=f"listing.status:{payload.status.value}",
+        entity_type="listing",
+        entity_id=item.id,
+        details=f"{old.value} → {payload.status.value}; note={payload.moderation_note or ''}",
+    )
+    if payload.status == ListingStatus.approved and old != ListingStatus.approved:
+        notify_user(
+            db,
+            user_id=item.author_id,
+            type="listing_approved",
+            title="Объявление одобрено",
+            body=f"«{item.title}» опубликовано и видно в ленте.",
+            listing_id=item.id,
+        )
+    elif payload.status == ListingStatus.rejected and old != ListingStatus.rejected:
+        note = (payload.moderation_note or "").strip()
+        body = f"«{item.title}» отклонено."
+        if note:
+            body = f"{body} Причина: {note}"
+        notify_user(
+            db,
+            user_id=item.author_id,
+            type="listing_rejected",
+            title="Объявление отклонено",
+            body=body,
+            listing_id=item.id,
+        )
+    elif payload.status == ListingStatus.archived and old != ListingStatus.archived:
+        notify_user(
+            db,
+            user_id=item.author_id,
+            type="listing_archived",
+            title="Объявление снято",
+            body=f"«{item.title}» снято модератором.",
+            listing_id=item.id,
+        )
+    db.commit()
+    item = load_listing(db, listing_id)
+    return to_out(item, viewer=user)

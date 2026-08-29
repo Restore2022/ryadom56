@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -59,6 +60,7 @@ class AppState extends ChangeNotifier {
   bool lastTransportFromCache = false;
   String? sessionMessage;
   bool _clearingSession = false;
+  Timer? _presenceTimer;
 
   String? filterCategory;
   int? filterSettlementId;
@@ -194,10 +196,11 @@ class AppState extends ChangeNotifier {
   }
 
   static const _filtersKey = 'listing_filters';
-  static const _onboardingKey = 'onboarding_done';
+  static const _onboardingKey = 'onboarding_v2';
   static const _settlementPrefKey = 'preferred_settlement_id';
   static const _newsCachePrefix = 'cache_news_json';
   static const _transportCachePrefix = 'cache_transport_';
+  static const _presenceClientKey = 'presence_client_id';
 
   /// Вошедший пользователь обязан задать PIN (защита от посторонних на телефоне).
   bool get needsPinSetup => user != null && !hasPin;
@@ -268,7 +271,37 @@ class AppState extends ChangeNotifier {
     } finally {
       booting = false;
       notifyListeners();
+      _startPresence();
     }
+  }
+
+  Future<void> pingPresence() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      var id = prefs.getString(_presenceClientKey) ?? '';
+      if (id.length < 8) {
+        id = '${DateTime.now().microsecondsSinceEpoch}-${Random().nextInt(1 << 32).toRadixString(16)}';
+        await prefs.setString(_presenceClientKey, id);
+      }
+      await api.request(
+        '/presence/ping',
+        method: 'POST',
+        auth: user != null,
+        body: {'source': 'app', 'client_id': id},
+      );
+    } catch (_) {}
+  }
+
+  void _startPresence() {
+    _presenceTimer?.cancel();
+    pingPresence();
+    _presenceTimer = Timer.periodic(const Duration(seconds: 90), (_) => pingPresence());
+  }
+
+  @override
+  void dispose() {
+    _presenceTimer?.cancel();
+    super.dispose();
   }
 
   Future<void> refreshBiometricsState() async {
@@ -1392,6 +1425,7 @@ class AppState extends ChangeNotifier {
     await refreshPublic();
     await refreshUnreadNotifications();
     await refreshUnreadChats();
+    pingPresence();
     notifyListeners();
   }
 
@@ -1408,6 +1442,7 @@ class AppState extends ChangeNotifier {
     await refreshPublic();
     await refreshUnreadNotifications();
     await refreshUnreadChats();
+    pingPresence();
     notifyListeners();
   }
 
@@ -1433,6 +1468,7 @@ class AppState extends ChangeNotifier {
     unreadChats = 0;
     conversations = [];
     await loadListings();
+    pingPresence();
     notifyListeners();
   }
 }

@@ -1,7 +1,9 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import json
+import re
 
-from sqlalchemy import inspect, select, text
+from sqlalchemy import func, inspect, select, text
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -15,10 +17,15 @@ from app.models import (
     Event,
     LegalDocument,
     Settlement,
+    SiteContact,
     TransportRoute,
+    TransportRouteStop,
+    TransportStop,
     User,
     UserRole,
 )
+
+_TRANSPORT_TIME_RE = re.compile(r"\b([01]?\d|2[0-3])[:.]([0-5]\d)\b")
 
 USER_COLUMNS = {
     "last_ip": "VARCHAR(64)",
@@ -73,6 +80,7 @@ TRANSPORT_COLUMNS = {
     "phone": "VARCHAR(32)",
     "favorite_count": "INTEGER DEFAULT 0",
     "outdated_reports": "INTEGER DEFAULT 0",
+    "times_json": "TEXT",
 }
 
 NEWS_COLUMNS = {
@@ -111,6 +119,7 @@ def init_db() -> None:
     _migrate_report_columns()
     _migrate_event_columns()
     _migrate_transport_columns()
+    _backfill_transport_catalog()
     _migrate_news_columns()
     _migrate_alert_columns()
     _migrate_message_columns()
@@ -211,6 +220,94 @@ def _migrate_transport_columns() -> None:
         for name, sql_type in TRANSPORT_COLUMNS.items():
             if name not in existing:
                 conn.execute(text(f"ALTER TABLE transport_routes ADD COLUMN {name} {sql_type}"))
+
+
+def _parse_stop_names(route: TransportRoute) -> list[str]:
+    raw = route.stops_text or ""
+    names = [line.strip() for line in raw.replace(";", "\n").splitlines() if line.strip()]
+    if names:
+        return names
+    title = (route.title or "").strip()
+    for sep in (" → ", " — ", " - ", "–"):
+        if sep in title:
+            parts = [p.strip() for p in title.split(sep) if p.strip()]
+            if len(parts) >= 2:
+                return [parts[0], parts[-1]]
+    return []
+
+
+def _parse_route_times(route: TransportRoute) -> list[str]:
+    if route.times_json:
+        try:
+            data = json.loads(route.times_json)
+            if isinstance(data, list) and data:
+                if isinstance(data[0], dict):
+                    return [str(row.get("depart")) for row in data if row.get("depart")]
+                return [str(x) for x in data]
+        except json.JSONDecodeError:
+            pass
+    blob = "\n".join(
+        part
+        for part in (route.schedule_text, route.schedule_weekdays, route.schedule_weekends)
+        if part
+    )
+    found: list[str] = []
+    seen: set[str] = set()
+    for match in _TRANSPORT_TIME_RE.finditer(blob):
+        stamp = f"{int(match.group(1)):02d}:{match.group(2)}"
+        if stamp in seen:
+            continue
+        seen.add(stamp)
+        found.append(stamp)
+    found.sort()
+    return found
+
+
+def _get_or_create_stop(session: Session, name: str, settlement_id: int | None) -> TransportStop:
+    key = name.strip()
+    row = session.execute(select(TransportStop).where(func.lower(TransportStop.name) == key.lower())).scalar_one_or_none()
+    if row:
+        return row
+    row = TransportStop(name=key, settlement_id=settlement_id)
+    session.add(row)
+    session.flush()
+    return row
+
+
+def _backfill_transport_catalog() -> None:
+    inspector = inspect(engine)
+    tables = set(inspector.get_table_names())
+    if "transport_routes" not in tables or "transport_stops" not in tables:
+        return
+    with Session(engine) as session:
+        routes = session.execute(select(TransportRoute)).scalars().all()
+        for route in routes:
+            names = _parse_stop_names(route)
+            has_links = session.execute(
+                select(TransportRouteStop.id).where(TransportRouteStop.route_id == route.id).limit(1)
+            ).first()
+            if names and not has_links:
+                for index, name in enumerate(names):
+                    stop = _get_or_create_stop(session, name, route.settlement_id)
+                    session.add(TransportRouteStop(route_id=route.id, stop_id=stop.id, sort_order=index))
+                route.stops_text = "\n".join(names)
+                if len(names) >= 2:
+                    route.title = f"{names[0]} → {names[-1]}"
+            times = _parse_route_times(route)
+            already_trips = False
+            if route.times_json:
+                try:
+                    packed = json.loads(route.times_json)
+                    already_trips = bool(
+                        isinstance(packed, list) and packed and isinstance(packed[0], dict) and packed[0].get("depart")
+                    )
+                except json.JSONDecodeError:
+                    already_trips = False
+            if times and not already_trips:
+                trips = [{"depart": stamp, "arrive": None, "days": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]} for stamp in times]
+                route.times_json = json.dumps(trips, ensure_ascii=False)
+                route.schedule_text = "\n".join(f"все дни {stamp}" for stamp in times)
+        session.commit()
 
 
 def _migrate_news_columns() -> None:
@@ -394,6 +491,7 @@ def seed_db(session: Session) -> None:
         _enrich_transport(session)
 
     session.commit()
+    _backfill_transport_catalog()
 
 
 def _settlement_id(session: Session, display_name: str) -> int | None:

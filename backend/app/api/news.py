@@ -3,7 +3,7 @@ from pathlib import Path
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_optional_user, require_roles
@@ -11,6 +11,7 @@ from app.core.database import get_db
 from app.models import DistrictNews, User, UserRole
 from app.schemas import NewsCreate, NewsOut, NewsPageOut, NewsUpdate
 from app.services.audit import log_action
+from app.services.textsearch import contains_query
 
 router = APIRouter(prefix="/news", tags=["news"])
 
@@ -48,6 +49,8 @@ def _staff(user: User | None) -> bool:
 @router.get("", response_model=NewsPageOut)
 def list_news(
     settlement_id: int | None = None,
+    q: str | None = None,
+    published: bool | None = Query(default=None),
     limit: int = Query(default=20, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -56,10 +59,18 @@ def list_news(
     stmt = select(DistrictNews).options(selectinload(DistrictNews.settlement))
     if not _staff(user):
         stmt = stmt.where(DistrictNews.is_published.is_(True))
+    elif published is True:
+        stmt = stmt.where(DistrictNews.is_published.is_(True))
+    elif published is False:
+        stmt = stmt.where(DistrictNews.is_published.is_(False))
     if settlement_id is not None:
         stmt = stmt.where(
             (DistrictNews.settlement_id == settlement_id) | (DistrictNews.settlement_id.is_(None))
         )
+    if q and q.strip():
+        cond = contains_query([DistrictNews.title, DistrictNews.body], q)
+        if cond is not None:
+            stmt = stmt.where(cond)
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = int(db.execute(count_stmt).scalar_one())
     stmt = stmt.order_by(DistrictNews.is_pinned.desc(), DistrictNews.published_at.desc(), DistrictNews.created_at.desc())

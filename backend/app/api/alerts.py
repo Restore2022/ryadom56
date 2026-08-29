@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, not_, or_, select
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_optional_user, require_roles
@@ -48,12 +48,16 @@ def _push_alert(db, item: DistrictAlert) -> None:
     )
 
 
-def _active_stmt(now: datetime):
-    return select(DistrictAlert).where(
+def _live_cond(now: datetime):
+    return and_(
         DistrictAlert.is_active.is_(True),
         or_(DistrictAlert.starts_at.is_(None), DistrictAlert.starts_at <= now),
         or_(DistrictAlert.ends_at.is_(None), DistrictAlert.ends_at >= now),
     )
+
+
+def _active_stmt(now: datetime):
+    return select(DistrictAlert).where(_live_cond(now))
 
 
 @router.get("/active", response_model=AlertOut | None)
@@ -86,16 +90,21 @@ def list_alerts(
     _: User = Depends(require_roles(UserRole.editor, UserRole.admin)),
 ):
     now = datetime.now(timezone.utc)
-    stmt = select(DistrictAlert)
-    if history:
-        stmt = stmt.where(
-            or_(
-                DistrictAlert.is_active.is_(False),
-                and_(DistrictAlert.ends_at.is_not(None), DistrictAlert.ends_at < now),
-            )
-        )
+    stmt = select(DistrictAlert).where(not_(_live_cond(now)) if history else _live_cond(now))
     stmt = stmt.order_by(DistrictAlert.priority.desc(), DistrictAlert.updated_at.desc())
     return [to_out(r) for r in db.execute(stmt).scalars().all()]
+
+
+@router.get("/{alert_id}", response_model=AlertOut)
+def get_alert(
+    alert_id: int,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.editor, UserRole.admin)),
+):
+    item = db.execute(select(DistrictAlert).where(DistrictAlert.id == alert_id)).scalar_one_or_none()
+    if not item:
+        raise HTTPException(status_code=404, detail="Объявление не найдено")
+    return to_out(item)
 
 
 @router.post("", response_model=AlertOut)

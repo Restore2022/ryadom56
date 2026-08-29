@@ -65,3 +65,32 @@ String formatApiMonthYear(String? iso, {String empty = ''}) {
   if (dt == null) return empty;
   return 'с ${_two(dt.month)}.${dt.year}';
 }
+
+const _monthsGen = [
+  'января',
+  'февраля',
+  'марта',
+  'апреля',
+  'мая',
+  'июня',
+  'июля',
+  'августа',
+  'сентября',
+  'октября',
+  'ноября',
+  'декабря',
+];
+
+/// «15 сентября, 17:00–18:00» — когда будет и с какого часа до какого.
+String formatEventWhen(String? startIso, String? endIso) {
+  final start = parseApiTime(startIso);
+  if (start == null) return '';
+  final date = '${start.day} ${_monthsGen[start.month - 1]}';
+  final t1 = '${_two(start.hour)}:${_two(start.minute)}';
+  final end = parseApiTime(endIso);
+  if (end == null) return '$date, $t1';
+  final t2 = '${_two(end.hour)}:${_two(end.minute)}';
+  final sameDay = start.year == end.year && start.month == end.month && start.day == end.day;
+  if (sameDay) return '$date, $t1–$t2';
+  return '$date, $t1 — ${end.day} ${_monthsGen[end.month - 1]}, $t2';
+}

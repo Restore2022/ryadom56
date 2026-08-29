@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Navigate, NavLink, Route, Routes, useNavigate, useSearchParams } from 'react-router-dom';
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
+import { Navigate, NavLink, Route, Routes, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { api, apiDownload, apiText, mediaUrl, setToken } from './api';
 import type {
   AdminChatMessage,
   AdminConversation,
   AuditLog,
+  BackupList,
   ClientErrorLog,
   BlacklistEntry,
   DirectoryItem,
@@ -17,8 +18,10 @@ import type {
   ListingReport,
   NewsItem,
   Settlement,
+  SiteContact,
   Stats,
   TransportRoute,
+  TransportStop,
   User,
   UserReport,
   AppCall,
@@ -35,6 +38,16 @@ const REJECTION_TEMPLATES = [
 
 function needsModeration(item: Listing) {
   return item.status === 'pending';
+}
+
+function safeHttpUrl(value?: string | null) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^(javascript|data|vbscript):/i.test(raw)) return '';
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (raw.startsWith('//')) return `https:${raw}`;
+  if (raw.includes('.') && !/\s/.test(raw)) return `https://${raw.replace(/^\/+/, '')}`;
+  return '';
 }
 
 function hoursWaiting(iso: string) {
@@ -55,6 +68,10 @@ function canModerate(role: User['role']) {
 
 function canEditDirectory(role: User['role']) {
   return role === 'admin' || role === 'editor';
+}
+
+function canSeeInbox(role: User['role']) {
+  return canModerate(role) || canEditDirectory(role);
 }
 
 function isValidEmail(value: string) {
@@ -172,6 +189,9 @@ const CATEGORY_LABELS: Record<string, string> = {
   other: 'Другое',
 };
 
+const LISTING_CATEGORIES = ['goods', 'services', 'jobs', 'rent', 'free', 'lost_found'];
+const LISTING_PAGE_SIZE = 25;
+
 const ROLE_LABELS: Record<User['role'], string> = {
   user: 'Пользователь',
   moderator: 'Модератор',
@@ -192,6 +212,7 @@ const STATUS_CHIP: Record<string, string> = {
   approved: 'chip ok',
   rejected: 'chip danger',
   archived: 'chip neutral',
+  draft: 'chip',
 };
 
 const STATUS_LABEL: Record<string, string> = {
@@ -261,6 +282,125 @@ function formatDate(value?: string | null) {
   return d.toLocaleString('ru-RU');
 }
 
+const MONTHS_GEN = [
+  'января',
+  'февраля',
+  'марта',
+  'апреля',
+  'мая',
+  'июня',
+  'июля',
+  'августа',
+  'сентября',
+  'октября',
+  'ноября',
+  'декабря',
+];
+
+function pad2(n: number) {
+  return String(n).padStart(2, '0');
+}
+
+function formatEventWhen(startIso?: string | null, endIso?: string | null) {
+  const start = parseApiDate(startIso ?? null);
+  if (!start) return '—';
+  const date = `${start.getDate()} ${MONTHS_GEN[start.getMonth()]}`;
+  const t1 = `${pad2(start.getHours())}:${pad2(start.getMinutes())}`;
+  const end = parseApiDate(endIso ?? null);
+  if (!end) return `${date}, ${t1}`;
+  const t2 = `${pad2(end.getHours())}:${pad2(end.getMinutes())}`;
+  const same =
+    start.getFullYear() === end.getFullYear() &&
+    start.getMonth() === end.getMonth() &&
+    start.getDate() === end.getDate();
+  if (same) return `${date}, ${t1}–${t2}`;
+  return `${date}, ${t1} — ${end.getDate()} ${MONTHS_GEN[end.getMonth()]}, ${t2}`;
+}
+
+function eventPreview(description: string) {
+  let t = description.replace(/\r\n/g, '\n').trim();
+  t = t.replace(/^Когда:\s*/i, '').trimStart();
+  t = t.replace(/^(?:\d{1,2} [а-яё]+, \d{2}:\d{2}[^\n]*(?:\n|$))+/, '');
+  t = t.replace(/^…[^\n]*\n?/, '');
+  t = t.replace(/\n?Источник:[\s\S]*$/i, '');
+  t = t.replace(/\s+/g, ' ').trim();
+  if (!t) return '';
+  return t.length > 140 ? `${t.slice(0, 140)}…` : t;
+}
+
+function extraSeanceCount(description: string) {
+  const matches = description.match(/^\d{1,2} [а-яё]+, \d{2}:\d{2}/gim);
+  return matches ? Math.max(0, matches.length - 1) : 0;
+}
+
+function Pager({
+  page,
+  pageCount,
+  total,
+  onPage,
+}: {
+  page: number;
+  pageCount: number;
+  total: number;
+  onPage: (p: number) => void;
+}) {
+  if (total === 0) return null;
+  if (pageCount <= 1) {
+    return (
+      <div className="pager">
+        {total} {total === 1 ? 'запись' : total < 5 ? 'записи' : 'записей'}
+      </div>
+    );
+  }
+  const windowSize = 7;
+  let from = Math.max(1, page - 3);
+  let to = Math.min(pageCount, from + windowSize - 1);
+  from = Math.max(1, to - windowSize + 1);
+  const pages: number[] = [];
+  for (let p = from; p <= to; p += 1) pages.push(p);
+  return (
+    <div className="pager">
+      <button type="button" className="btn ghost" disabled={page <= 1} onClick={() => onPage(page - 1)}>
+        Назад
+      </button>
+      <div className="pager-pages">
+        {from > 1 && (
+          <>
+            <button type="button" className="pager-num" onClick={() => onPage(1)}>
+              1
+            </button>
+            {from > 2 && <span className="pager-gap">…</span>}
+          </>
+        )}
+        {pages.map((p) => (
+          <button
+            key={p}
+            type="button"
+            className={`pager-num${p === page ? ' is-on' : ''}`}
+            onClick={() => onPage(p)}
+          >
+            {p}
+          </button>
+        ))}
+        {to < pageCount && (
+          <>
+            {to < pageCount - 1 && <span className="pager-gap">…</span>}
+            <button type="button" className="pager-num" onClick={() => onPage(pageCount)}>
+              {pageCount}
+            </button>
+          </>
+        )}
+      </div>
+      <span className="pager-total">
+        {page} / {pageCount} · {total}
+      </span>
+      <button type="button" className="btn ghost" disabled={page >= pageCount} onClick={() => onPage(page + 1)}>
+        Вперёд
+      </button>
+    </div>
+  );
+}
+
 function useTheme() {
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const saved = localStorage.getItem('ryadom56_admin_theme');
@@ -302,6 +442,18 @@ function LoginPage({ onLogin }: { onLogin: (u: User) => void }) {
   const [error, setError] = useState('');
   const [info, setInfo] = useState('');
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    try {
+      const msg = sessionStorage.getItem('ryadom56.loginMsg');
+      if (msg) {
+        sessionStorage.removeItem('ryadom56.loginMsg');
+        setError(msg);
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
 
   async function submitLogin(e: React.FormEvent) {
     e.preventDefault();
@@ -511,11 +663,17 @@ function Shell({
 }) {
   const mod = canModerate(user.role);
   const directory = canEditDirectory(user.role);
+  const inbox = canSeeInbox(user.role);
   const [toast, setToast] = useState('');
+  const [inboxNew, setInboxNew] = useState(0);
 
   useEffect(() => {
     function onUnauthorized() {
-      setToast('Сессия истекла. Войдите снова');
+      try {
+        sessionStorage.setItem('ryadom56.loginMsg', 'Сессия истекла. Войдите снова');
+      } catch {
+        /* ignore */
+      }
       onLogout();
     }
     function onToast(e: Event) {
@@ -531,14 +689,20 @@ function Shell({
   }, [onLogout]);
 
   useEffect(() => {
-    if (!mod) return;
+    if (!inbox) return;
     let lastPending = -1;
     let stopped = false;
 
     async function tick() {
       try {
-        const alerts = await api<{ pending: number; pending_over_24h: number; open_reports: number }>('/admin/alerts');
+        const alerts = await api<{
+          pending: number;
+          pending_over_24h: number;
+          open_reports: number;
+          open_contacts?: number;
+        }>('/admin/alerts');
         if (stopped) return;
+        setInboxNew(alerts.open_contacts || 0);
         if (lastPending >= 0 && alerts.pending > lastPending && 'Notification' in window) {
           if (Notification.permission === 'granted') {
             new Notification('Рядом56: новые объявления', {
@@ -561,7 +725,7 @@ function Shell({
       stopped = true;
       window.clearInterval(id);
     };
-  }, [mod]);
+  }, [inbox]);
 
   return (
     <div className="layout">
@@ -579,9 +743,19 @@ function Shell({
               <span className="nav-ico">☰</span> Модерация
             </NavLink>
           )}
+          {mod && (
+            <NavLink to="/listings">
+              <span className="nav-ico">▣</span> Объявления
+            </NavLink>
+          )}
           {(mod || directory) && (
             <NavLink to="/reports">
               <span className="nav-ico">!</span> Жалобы
+            </NavLink>
+          )}
+          {inbox && (
+            <NavLink to="/inbox">
+              <span className="nav-ico">✉</span> С сайта{inboxNew > 0 ? ` (${inboxNew})` : ''}
             </NavLink>
           )}
           <NavLink to="/audit">
@@ -674,24 +848,97 @@ function pushToast(message: string) {
   window.dispatchEvent(new CustomEvent('ryadom56:toast', { detail: message }));
 }
 
-function Dashboard({ isAdmin }: { isAdmin?: boolean }) {
+function formatBytes(n?: number | null) {
+  if (n == null || n <= 0) return '—';
+  if (n < 1024) return `${n} Б`;
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} КБ`;
+  return `${(n / (1024 * 1024)).toFixed(1)} МБ`;
+}
+
+function StatCard({
+  to,
+  tone,
+  label,
+  value,
+}: {
+  to?: string;
+  tone?: string;
+  label: string;
+  value: React.ReactNode;
+}) {
+  const cls = `stat${tone ? ` ${tone}` : ''}`;
+  const inner = (
+    <>
+      <div className="label">{label}</div>
+      <div className="value">{value}</div>
+    </>
+  );
+  if (to) return <Link className={cls} to={to}>{inner}</Link>;
+  return <div className={cls}>{inner}</div>;
+}
+
+function Dashboard({ role }: { role: User['role'] }) {
+  const isAdmin = role === 'admin';
+  const mod = canModerate(role);
+  const directory = canEditDirectory(role);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [statsError, setStatsError] = useState('');
+  const [backups, setBackups] = useState<BackupList | null>(null);
   const [backupBusy, setBackupBusy] = useState(false);
+  const [snapshotBusy, setSnapshotBusy] = useState(false);
+
+  function loadStats() {
+    setStatsError('');
+    api<Stats>('/admin/stats')
+      .then(setStats)
+      .catch((err) => setStatsError(err instanceof Error ? err.message : 'Не удалось загрузить сводку'));
+    if (isAdmin) {
+      api<BackupList>('/admin/backups').then(setBackups).catch(console.error);
+    }
+  }
 
   useEffect(() => {
-    api<Stats>('/admin/stats').then(setStats).catch(console.error);
-  }, []);
+    loadStats();
+    const tick = window.setInterval(() => {
+      api<Stats>('/admin/stats')
+        .then(setStats)
+        .catch(() => {});
+    }, 30000);
+    return () => window.clearInterval(tick);
+  }, [isAdmin]);
 
-  async function downloadBackup() {
+  async function downloadLive() {
     if (backupBusy) return;
     setBackupBusy(true);
     try {
       await apiDownload('/admin/backup', 'ryadom56-backup.db');
-      pushToast('Бэкап скачан');
+      pushToast('Живая база скачана');
     } catch (err) {
       pushToast(err instanceof Error ? err.message : 'Ошибка скачивания');
     } finally {
       setBackupBusy(false);
+    }
+  }
+
+  async function makeSnapshot() {
+    if (snapshotBusy) return;
+    setSnapshotBusy(true);
+    try {
+      setBackups(await api<BackupList>('/admin/backups', { method: 'POST' }));
+      pushToast('Копия создана');
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : 'Ошибка копии');
+    } finally {
+      setSnapshotBusy(false);
+    }
+  }
+
+  async function downloadSnapshot(name: string) {
+    try {
+      await apiDownload(`/admin/backups/${encodeURIComponent(name)}`, name);
+      pushToast('Копия скачана');
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : 'Ошибка скачивания');
     }
   }
 
@@ -700,7 +947,12 @@ function Dashboard({ isAdmin }: { isAdmin?: boolean }) {
       <div className="page-head">
         <div>
           <h1>Сводка</h1>
-          <p>Загрузка данных…</p>
+          <p>{statsError || 'Загрузка данных…'}</p>
+          {statsError ? (
+            <button className="btn" type="button" onClick={() => loadStats()}>
+              Повторить
+            </button>
+          ) : null}
         </div>
       </div>
     );
@@ -714,71 +966,81 @@ function Dashboard({ isAdmin }: { isAdmin?: boolean }) {
       <div className="page-head compact">
         <div>
           <h1>Сводка</h1>
-          <p>Состояние сервиса Рядом56 прямо сейчас</p>
+          <p>Состояние сервиса Рядом56 прямо сейчас. Карточка открывает раздел. Онлайн обновляется каждые 30 секунд.</p>
         </div>
-        {isAdmin && (
-          <button className="btn secondary" type="button" disabled={backupBusy} onClick={() => downloadBackup()}>
-            {backupBusy ? 'Скачивание…' : 'Скачать бэкап БД'}
-          </button>
-        )}
       </div>
+      <h2 className="dash-kicker">Сейчас онлайн</h2>
       <div className="cards">
-        <div className="stat warn">
-          <div className="label">На модерации</div>
-          <div className="value">{stats.listings_pending}</div>
-        </div>
-        <div className="stat warn">
-          <div className="label">Старше 24 ч</div>
-          <div className="value">{stats.pending_over_24h ?? 0}</div>
-        </div>
-        <div className="stat">
-          <div className="label">Открытые жалобы</div>
-          <div className="value">{stats.open_reports ?? 0}</div>
-        </div>
-        <div className="stat ok">
-          <div className="label">Опубликовано</div>
-          <div className="value">{stats.listings_approved}</div>
-        </div>
-        <div className="stat brand">
-          <div className="label">В справочнике</div>
-          <div className="value">{stats.directory_items}</div>
-        </div>
-        <div className="stat">
-          <div className="label">Пользователей</div>
-          <div className="value">{stats.users}</div>
-        </div>
-        <div className="stat brand">
-          <div className="label">События (всего)</div>
-          <div className="value">{stats.events_total ?? 0}</div>
-        </div>
-        <div className="stat ok">
-          <div className="label">Скоро в афише</div>
-          <div className="value">{stats.events_upcoming ?? 0}</div>
-        </div>
-        <div className="stat">
-          <div className="label">Маршруты</div>
-          <div className="value">{stats.transport_routes ?? 0}</div>
-        </div>
-        <div className="stat brand">
-          <div className="label">Новости</div>
-          <div className="value">{stats.news_total ?? 0}</div>
-        </div>
-        <div className="stat warn">
-          <div className="label">Активные срочные</div>
-          <div className="value">{stats.active_alerts ?? 0}</div>
-        </div>
-        <div className="stat">
-          <div className="label">Одобр. / откл. (30 дн.)</div>
-          <div className="value" style={{ fontSize: 22 }}>
-            {stats.moderated_approved_30d ?? 0} / {stats.moderated_rejected_30d ?? 0}
-          </div>
-        </div>
-        <div className="stat ok">
-          <div className="label">Конверсия модерации</div>
-          <div className="value" style={{ fontSize: 26 }}>
-            {conv}
-          </div>
-        </div>
+        <StatCard tone="brand" label="На сайте" value={stats.online_site ?? 0} />
+        <StatCard tone="ok" label="В приложении" value={stats.online_app ?? 0} />
+        <StatCard label="Приложение, без входа" value={stats.online_app_guests ?? 0} />
+        <StatCard to="/users" label="Приложение, вошли" value={stats.online_app_users ?? 0} />
+        <StatCard label="На звонке" value={stats.online_calls ?? 0} />
+      </div>
+      <h2 className="dash-kicker">Люди</h2>
+      <div className="cards">
+        {isAdmin && <StatCard to="/users" label="Всего аккаунтов" value={stats.users} />}
+        {isAdmin && <StatCard tone="ok" label="Новые сегодня" value={stats.users_new_today ?? 0} />}
+        {isAdmin && <StatCard tone="ok" label="Новые за 7 дней" value={stats.users_new_7d ?? 0} />}
+        {isAdmin && <StatCard label="Раньше 7 дней" value={stats.users_older ?? 0} />}
+        {isAdmin && <StatCard label="Заходили за 30 дней" value={stats.users_active_30d ?? 0} />}
+        <StatCard tone="brand" label="Сайт сегодня" value={stats.site_today ?? 0} />
+        <StatCard label="Гости приложения сегодня" value={stats.app_guests_today ?? 0} />
+      </div>
+      <h2 className="dash-kicker">Сервис</h2>
+      <div className="cards">
+        <StatCard
+          to="/inbox"
+          tone={(stats.open_contacts || 0) > 0 ? 'warn' : ''}
+          label="С сайта, новые"
+          value={stats.open_contacts ?? 0}
+        />
+        {mod && (
+          <StatCard to="/moderation" tone="warn" label="На модерации" value={stats.listings_pending} />
+        )}
+        {mod && (
+          <StatCard
+            to="/moderation?over24=1"
+            tone="warn"
+            label="Старше 24 ч"
+            value={stats.pending_over_24h ?? 0}
+          />
+        )}
+        <StatCard to="/reports" tone="warn" label="Открытые жалобы" value={stats.open_reports ?? 0} />
+        {mod && (
+          <StatCard to="/listings?status=approved" tone="ok" label="Опубликовано" value={stats.listings_approved} />
+        )}
+        {directory && (
+          <StatCard to="/directory" tone="brand" label="В справочнике" value={stats.directory_items} />
+        )}
+        {directory && (
+          <StatCard to="/events" tone="brand" label="События (всего)" value={stats.events_total ?? 0} />
+        )}
+        {directory && (
+          <StatCard to="/events?upcoming=1" tone="ok" label="Скоро в афише" value={stats.events_upcoming ?? 0} />
+        )}
+        {directory && <StatCard to="/transport" label="Маршруты" value={stats.transport_routes ?? 0} />}
+        {directory && (
+          <StatCard to="/news" tone="brand" label="Новости" value={stats.news_total ?? 0} />
+        )}
+        {directory && (
+          <StatCard to="/alerts" tone="warn" label="Активные срочные" value={stats.active_alerts ?? 0} />
+        )}
+        <StatCard
+          to="/audit"
+          label="Одобр. / откл. (30 дн.)"
+          value={
+            <span style={{ fontSize: 22 }}>
+              {stats.moderated_approved_30d ?? 0} / {stats.moderated_rejected_30d ?? 0}
+            </span>
+          }
+        />
+        <StatCard
+          to="/audit"
+          tone="ok"
+          label="Конверсия модерации"
+          value={<span style={{ fontSize: 26 }}>{conv}</span>}
+        />
       </div>
 
       <div className="analytics-grid">
@@ -841,7 +1103,7 @@ function Dashboard({ isAdmin }: { isAdmin?: boolean }) {
         <div className="panel" style={{ gridColumn: '1 / -1' }}>
           <h2>По сёлам: объявления / открытия справочника</h2>
           <p className="muted" style={{ marginTop: 0 }}>
-            Жалобы на контакты справочника (открытые): {stats.open_directory_reports ?? 0}
+            <Link to="/reports?tab=directory">Жалобы на контакты справочника (открытые): {stats.open_directory_reports ?? 0}</Link>
           </p>
           <ul className="cat-list">
             {(stats.by_settlement || []).slice(0, 40).map((s) => (
@@ -855,20 +1117,82 @@ function Dashboard({ isAdmin }: { isAdmin?: boolean }) {
             {!stats.by_settlement?.length && <li className="muted">Пока нет данных по сёлам</li>}
           </ul>
         </div>
+        {isAdmin && (
+          <div className="panel" style={{ gridColumn: '1 / -1' }}>
+            <h2>Копии базы</h2>
+            <p className="muted" style={{ marginTop: 0 }}>
+              Раз в сутки ночью, последние 7 файлов.
+              {backups
+                ? ` Диск свободно ${backups.disk_free_mb ?? '—'} из ${backups.disk_total_mb ?? '—'} МБ · данные ${backups.data_dir_mb ?? '—'} МБ.`
+                : ''}
+            </p>
+            <div className="toolbar compact">
+              <button className="btn" type="button" disabled={snapshotBusy} onClick={() => makeSnapshot()}>
+                {snapshotBusy ? 'Копирование…' : 'Сделать копию сейчас'}
+              </button>
+              <button className="btn secondary" type="button" disabled={backupBusy} onClick={() => downloadLive()}>
+                {backupBusy ? 'Скачивание…' : 'Скачать живую базу'}
+              </button>
+            </div>
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Файл</th>
+                    <th>Когда</th>
+                    <th>Размер</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(backups?.items || []).map((row) => (
+                    <tr key={row.name}>
+                      <td className="audit-who">{row.name}</td>
+                      <td className="audit-when">{formatAuditWhen(row.created_at)}</td>
+                      <td className="audit-obj">{formatBytes(row.size)}</td>
+                      <td>
+                        <div className="actions inline">
+                          <button className="btn" type="button" onClick={() => downloadSnapshot(row.name)}>
+                            Скачать
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {!backups?.items?.length && (
+                    <tr>
+                      <td colSpan={4} className="empty">
+                        Копий пока нет — нажмите «Сделать копию сейчас»
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 function ModerationPage() {
-  const [searchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const listingIdParam = searchParams.get('listingId');
   const authorIdParam = searchParams.get('authorId');
   const qParam = searchParams.get('q');
+  const statusParam = searchParams.get('status');
+  const over24Param = searchParams.get('over24') === '1';
   const [items, setItems] = useState<Listing[]>([]);
   const [settlements, setSettlements] = useState<Settlement[]>([]);
-  const [filter, setFilter] = useState(() => (listingIdParam || authorIdParam ? '' : 'pending'));
-  const [closedOnly, setClosedOnly] = useState(false);
+  const [filter, setFilter] = useState(() => {
+    if (listingIdParam || authorIdParam) return '';
+    if (statusParam === 'closed') return 'archived';
+    if (statusParam != null && statusParam !== '') return statusParam;
+    return 'pending';
+  });
+  const [closedOnly, setClosedOnly] = useState(() => statusParam === 'closed');
+  const [over24Only, setOver24Only] = useState(over24Param);
   const [category, setCategory] = useState('');
   const [query, setQuery] = useState('');
   const [serverQuery, setServerQuery] = useState(() => qParam || '');
@@ -878,9 +1202,28 @@ function ModerationPage() {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [selected, setSelected] = useState<Listing | null>(null);
   const [checked, setChecked] = useState<number[]>([]);
+  const [page, setPage] = useState(1);
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkRejectNote, setBulkRejectNote] = useState('');
   const [moderationNote, setModerationNote] = useState('');
+  const [listTotal, setListTotal] = useState(0);
+
+  function patchModerationUrl(next: { status?: string | null; over24?: boolean; authorId?: string | null }) {
+    const p = new URLSearchParams(searchParams);
+    if (next.status !== undefined) {
+      if (next.status) p.set('status', next.status);
+      else p.delete('status');
+    }
+    if (next.over24 !== undefined) {
+      if (next.over24) p.set('over24', '1');
+      else p.delete('over24');
+    }
+    if (next.authorId !== undefined) {
+      if (next.authorId) p.set('authorId', next.authorId);
+      else p.delete('authorId');
+    }
+    setSearchParams(p, { replace: true });
+  }
 
   function closeModal() {
     if (busyId != null) return;
@@ -900,9 +1243,13 @@ function ModerationPage() {
       if (autoFlaggedOnly) params.set('auto_flagged', '1');
       if (settlementId !== '') params.set('settlement_id', String(settlementId));
       if (authorIdParam) params.set('author_id', authorIdParam);
+      if (over24Only) params.set('over24', '1');
       if (filter === 'pending' || !filter) params.set('sort', 'sla');
       const qs = params.toString();
-      setItems(await api<Listing[]>(`/listings/admin/all${qs ? `?${qs}` : ''}`));
+      const data = await api<Listing[] | { items: Listing[]; total?: number }>(`/listings/admin/all${qs ? `?${qs}` : ''}`);
+      const rows = asItems(data);
+      setItems(rows);
+      setListTotal(!Array.isArray(data) && data?.total != null ? data.total : rows.length);
       setChecked([]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка');
@@ -918,14 +1265,29 @@ function ModerationPage() {
   }, [qParam]);
 
   useEffect(() => {
-    if (!authorIdParam) return;
-    setFilter('');
-    setClosedOnly(false);
-  }, [authorIdParam]);
+    if (listingIdParam || authorIdParam) {
+      setFilter('');
+      setClosedOnly(false);
+      return;
+    }
+    if (statusParam === 'closed') {
+      setClosedOnly(true);
+      setFilter('archived');
+      return;
+    }
+    if (statusParam != null && statusParam !== '') {
+      setClosedOnly(false);
+      setFilter(statusParam);
+    }
+  }, [statusParam, listingIdParam, authorIdParam]);
+
+  useEffect(() => {
+    setOver24Only(over24Param);
+  }, [over24Param]);
 
   useEffect(() => {
     load();
-  }, [filter, closedOnly, serverQuery, autoFlaggedOnly, settlementId, authorIdParam]);
+  }, [filter, closedOnly, serverQuery, autoFlaggedOnly, settlementId, authorIdParam, over24Only]);
 
   async function togglePin(item: Listing) {
     setBusyId(item.id);
@@ -936,8 +1298,8 @@ function ModerationPage() {
       });
       await load();
       if (selected?.id === item.id) {
-        const next = await api<Listing[]>(`/listings/admin/all?status=approved`);
-        const found = next.find((x) => x.id === item.id);
+        const next = await api<Listing[] | { items: Listing[] }>(`/listings/admin/all?status=approved`);
+        const found = asItems(next).find((x) => x.id === item.id);
         if (found) setSelected(found);
       }
     } catch (err) {
@@ -957,13 +1319,6 @@ function ModerationPage() {
 
     async function openFromParam() {
       try {
-        const list = await api<Listing[]>('/listings/admin/all');
-        setItems(list);
-        const found = list.find((item) => item.id === id);
-        if (found) {
-          setSelected(found);
-          return;
-        }
         const item = await api<Listing>(`/listings/${id}`);
         setSelected(item);
       } catch (err) {
@@ -990,6 +1345,19 @@ function ModerationPage() {
       return true;
     });
   }, [items, category, query]);
+
+  const MOD_PAGE = 25;
+  const pageCount = Math.max(1, Math.ceil(visible.length / MOD_PAGE));
+  const safePage = Math.min(page, pageCount);
+  const pageItems = visible.slice((safePage - 1) * MOD_PAGE, safePage * MOD_PAGE);
+
+  useEffect(() => {
+    setPage(1);
+  }, [filter, closedOnly, serverQuery, autoFlaggedOnly, settlementId, category, query, authorIdParam, over24Only]);
+
+  useEffect(() => {
+    if (page !== safePage) setPage(safePage);
+  }, [page, safePage]);
 
   async function moderate(id: number, status: 'approved' | 'rejected', noteOverride?: string | null) {
     if (busyId != null) return;
@@ -1082,6 +1450,11 @@ function ModerationPage() {
       }
       if (e.key === 'r' || e.key === 'R' || e.key === 'к' || e.key === 'К') {
         e.preventDefault();
+        if (!moderationNote.trim()) {
+          setError('Укажите причину отклонения');
+          pushToast('Укажите причину отклонения');
+          return;
+        }
         void moderate(selected.id, 'rejected');
       }
     }
@@ -1097,22 +1470,34 @@ function ModerationPage() {
           <p>
             Очередь по SLA (дольше ждут сверху)
             {over24 > 0 ? ` · старше 24 ч: ${over24}` : ''}
+            {listTotal > items.length ? ` · показаны ${items.length} из ${listTotal}` : ''}
+            {' · '}
+            <Link to="/listings">все объявления</Link>
             {' · '}
             <span className="muted">клавиши: A — одобрить, R — отклонить</span>
           </p>
         </div>
       </div>
 
-      <div className="toolbar compact">
+      <form
+        className="toolbar compact"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setServerQuery(query);
+        }}
+      >
         <select
           value={closedOnly ? 'closed' : filter}
           onChange={(e) => {
-            if (e.target.value === 'closed') {
+            const value = e.target.value;
+            if (value === 'closed') {
               setClosedOnly(true);
               setFilter('archived');
+              patchModerationUrl({ status: 'closed' });
             } else {
               setClosedOnly(false);
-              setFilter(e.target.value);
+              setFilter(value);
+              patchModerationUrl({ status: value || null });
             }
           }}
         >
@@ -1133,16 +1518,9 @@ function ModerationPage() {
           ))}
         </select>
         <input
-          placeholder="Серверный поиск: автор, телефон, email…"
-          value={serverQuery}
-          onChange={(e) => setServerQuery(e.target.value)}
-          style={{ maxWidth: 280 }}
-        />
-        <input
-          placeholder="Локальный фильтр…"
+          placeholder="Название, автор, телефон…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          style={{ maxWidth: 200 }}
         />
         <select
           value={settlementId === '' ? '' : String(settlementId)}
@@ -1161,10 +1539,32 @@ function ModerationPage() {
             checked={autoFlaggedOnly}
             onChange={(e) => setAutoFlaggedOnly(e.target.checked)}
           />
-          Только автофлаг
+          Автофлаг
         </label>
-        {authorIdParam && <span className="chip warn">Автор #{authorIdParam}</span>}
-      </div>
+        <label className="check-inline">
+          <input
+            type="checkbox"
+            checked={over24Only}
+            onChange={(e) => {
+              setOver24Only(e.target.checked);
+              patchModerationUrl({ over24: e.target.checked });
+            }}
+          />
+          Старше 24 ч
+        </label>
+        {authorIdParam ? (
+          <button
+            type="button"
+            className="chip warn"
+            onClick={() => patchModerationUrl({ authorId: null })}
+          >
+            Автор #{authorIdParam} ×
+          </button>
+        ) : null}
+        <button className="btn" type="submit">
+          Найти
+        </button>
+      </form>
 
       {pendingChecked.length > 0 && (
         <div className="toolbar compact">
@@ -1186,73 +1586,106 @@ function ModerationPage() {
 
       {error && <p className="error">{error}</p>}
 
-      <div className="list compact">
-        {visible.map((item) => {
-          const pending = needsModeration(item);
-          const waitH = hoursWaiting(item.created_at);
-          return (
-            <article
-              key={item.id}
-              className={`row-card compact${checked.includes(item.id) ? ' is-checked' : ''}`}
-              onClick={() => openListing(item)}
-            >
-              {pending && (
-                <input
-                  className="row-check"
-                  type="checkbox"
-                  checked={checked.includes(item.id)}
-                  onClick={(e) => e.stopPropagation()}
-                  onChange={() => toggleCheck(item.id)}
-                  aria-label={`Выбрать ${item.title}`}
-                />
-              )}
-              <div className="row-main">
-                <h3 className="row-title">{item.title}</h3>
-                <div className="meta">
-                  <span className={STATUS_CHIP[item.status] || 'chip'}>{STATUS_LABEL[item.status] || item.status}</span>
-                  <span className="chip">{CATEGORY_LABELS[item.category] || item.category}</span>
-                  <span className="chip neutral">{item.settlement_name}</span>
-                  <span className="chip neutral">{item.author_name}</span>
-                  {item.contact_phone && <span className="chip neutral">{item.contact_phone}</span>}
-                  {item.auto_flagged && <span className="chip danger">Автофлаг</span>}
-                  {item.is_pinned && <span className="chip warn">Закреплено</span>}
-                  {item.previous_snapshot && <span className="chip neutral">Правка</span>}
-                  {pending && waitH >= 24 && <span className="chip danger">{waitH} ч</span>}
-                  {pending && waitH < 24 && waitH > 0 && <span className="chip neutral">{waitH} ч</span>}
-                  {item.close_reason && (
-                    <span className="chip warn">{CLOSE_REASON_LABEL[item.close_reason] || item.close_reason}</span>
-                  )}
-                </div>
-                <p className="row-body">
-                  {item.description.length > 110 ? `${item.description.slice(0, 110)}…` : item.description}
-                </p>
-                {item.price != null && <div className="price">{item.price.toLocaleString('ru-RU')} ₽</div>}
-              </div>
-              <div className="actions inline" onClick={(e) => e.stopPropagation()}>
-                {pending && (
-                  <>
-                    <button className="btn" disabled={busyId === item.id} onClick={() => moderate(item.id, 'approved')}>
-                      Одобрить
-                    </button>
-                    <button className="btn danger" disabled={busyId === item.id} onClick={() => openListing(item)}>
-                      Отклонить
-                    </button>
-                  </>
-                )}
-                {item.status === 'approved' && (
-                  <button className="btn secondary" disabled={busyId === item.id} onClick={() => togglePin(item)}>
-                    {item.is_pinned ? 'Открепить' : 'Закрепить'}
-                  </button>
-                )}
-                <button className="btn ghost" onClick={() => openListing(item)}>
-                  Открыть
-                </button>
-              </div>
-            </article>
-          );
-        })}
-        {!visible.length && <div className="empty">Пока нет объявлений в этом фильтре</div>}
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th className="check"></th>
+              <th>Объявление</th>
+              <th>Категория</th>
+              <th>Автор / село</th>
+              <th>Ожидание</th>
+              <th>Статус</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {pageItems.map((item) => {
+              const pending = needsModeration(item);
+              const waitH = hoursWaiting(item.created_at);
+              return (
+                <tr
+                  key={item.id}
+                  className={`dir-row${checked.includes(item.id) ? ' is-checked' : ''}`}
+                  onClick={() => openListing(item)}
+                >
+                  <td className="check" onClick={(e) => e.stopPropagation()}>
+                    {pending ? (
+                      <input
+                        type="checkbox"
+                        checked={checked.includes(item.id)}
+                        onChange={() => toggleCheck(item.id)}
+                        aria-label={`Выбрать ${item.title}`}
+                      />
+                    ) : null}
+                  </td>
+                  <td>
+                    <div className="audit-who">{item.title}</div>
+                    <div className="audit-sub">
+                      {item.price != null ? `${item.price.toLocaleString('ru-RU')} ₽` : 'без цены'}
+                      {item.is_urgent ? ' · срочно' : ''}
+                      {item.auto_flagged ? ' · автофлаг' : ''}
+                      {item.is_pinned ? ' · закреплено' : ''}
+                      {item.previous_snapshot ? ' · правка' : ''}
+                    </div>
+                  </td>
+                  <td>
+                    <span className="chip">{CATEGORY_LABELS[item.category] || item.category}</span>
+                  </td>
+                  <td className="audit-obj">
+                    {item.author_name || '—'}
+                    <div className="audit-sub">{item.settlement_name || 'без села'}</div>
+                    {item.contact_phone ? <div className="audit-sub">{item.contact_phone}</div> : null}
+                  </td>
+                  <td className="audit-when">
+                    {pending ? (
+                      <span className={waitH >= 24 ? 'chip danger' : 'chip neutral'}>{waitH} ч</span>
+                    ) : (
+                      <span className="audit-sub">{formatAuditWhen(item.created_at)}</span>
+                    )}
+                  </td>
+                  <td>
+                    <span className={STATUS_CHIP[item.status] || 'chip'}>{STATUS_LABEL[item.status] || item.status}</span>
+                    {item.close_reason ? (
+                      <div className="audit-sub">{CLOSE_REASON_LABEL[item.close_reason] || item.close_reason}</div>
+                    ) : null}
+                  </td>
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <div className="actions inline">
+                      {pending && (
+                        <>
+                          <button className="btn" type="button" disabled={busyId === item.id} onClick={() => moderate(item.id, 'approved')}>
+                            Одобрить
+                          </button>
+                          <button className="btn danger" type="button" disabled={busyId === item.id} onClick={() => openListing(item)}>
+                            Отклонить
+                          </button>
+                        </>
+                      )}
+                      {item.status === 'approved' && (
+                        <button className="btn secondary" type="button" disabled={busyId === item.id} onClick={() => togglePin(item)}>
+                          {item.is_pinned ? 'Открепить' : 'Закрепить'}
+                        </button>
+                      )}
+                      <button className="btn ghost" type="button" onClick={() => openListing(item)}>
+                        Открыть
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+            {!visible.length && (
+              <tr>
+                <td colSpan={7} className="empty">
+                  Пока нет объявлений в этом фильтре
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
+      <Pager page={safePage} pageCount={pageCount} total={visible.length} onPage={setPage} />
 
       {selected && (
         <div
@@ -1395,9 +1828,674 @@ function ModerationPage() {
   );
 }
 
+function ListingsPage() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const idParam = searchParams.get('id');
+  const authorIdParam = searchParams.get('authorId');
+  const statusParam = searchParams.get('status');
+  const qParam = searchParams.get('q');
+  const openedFromUrl = useRef<string | null>(null);
+
+  const [items, setItems] = useState<Listing[]>([]);
+  const [total, setTotal] = useState(0);
+  const [settlements, setSettlements] = useState<Settlement[]>([]);
+  const [filter, setFilter] = useState(() => {
+    if (statusParam && statusParam !== 'all') return statusParam;
+    return '';
+  });
+  const [category, setCategory] = useState('');
+  const [settlementId, setSettlementId] = useState<number | ''>('');
+  const [query, setQuery] = useState(qParam || '');
+  const [appliedQ, setAppliedQ] = useState(qParam || '');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [page, setPage] = useState(1);
+  const [selected, setSelected] = useState<Listing | null>(null);
+  const [form, setForm] = useState({
+    title: '',
+    description: '',
+    category: 'goods',
+    settlement_id: '' as number | '',
+    price: '',
+    contact_phone: '',
+    is_urgent: false,
+    lifetime_days: 30,
+  });
+  const [statusNote, setStatusNote] = useState('');
+
+  const pageCount = Math.max(1, Math.ceil(total / LISTING_PAGE_SIZE));
+  const safePage = Math.min(page, pageCount);
+
+  function patchUrl(next: { status?: string | null; authorId?: string | null; id?: string | null }) {
+    const p = new URLSearchParams(searchParams);
+    if (next.status !== undefined) {
+      if (next.status) p.set('status', next.status);
+      else p.delete('status');
+    }
+    if (next.authorId !== undefined) {
+      if (next.authorId) p.set('authorId', next.authorId);
+      else p.delete('authorId');
+    }
+    if (next.id !== undefined) {
+      if (next.id) p.set('id', next.id);
+      else p.delete('id');
+    }
+    setSearchParams(p, { replace: true });
+  }
+
+  async function load(nextPage = safePage) {
+    const params = new URLSearchParams();
+    params.set('limit', String(LISTING_PAGE_SIZE));
+    params.set('offset', String((nextPage - 1) * LISTING_PAGE_SIZE));
+    if (filter) params.set('status', filter);
+    if (appliedQ.trim()) params.set('q', appliedQ.trim());
+    if (category) params.set('category', category);
+    if (settlementId !== '') params.set('settlement_id', String(settlementId));
+    if (authorIdParam) params.set('author_id', authorIdParam);
+    const data = await api<{ items: Listing[]; total?: number } | Listing[]>(`/listings/admin/all?${params}`);
+    const rows = asItems(data);
+    setItems(rows);
+    setTotal(!Array.isArray(data) && data?.total != null ? data.total : rows.length);
+  }
+
+  useEffect(() => {
+    api<Settlement[]>('/settlements').then(setSettlements).catch(console.error);
+  }, []);
+
+  useEffect(() => {
+    if (statusParam && statusParam !== 'all') setFilter(statusParam);
+    else if (statusParam === 'all' || statusParam === '') setFilter('');
+  }, [statusParam]);
+
+  useEffect(() => {
+    load(safePage).catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+  }, [safePage, filter, appliedQ, category, settlementId, authorIdParam]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [filter, appliedQ, category, settlementId, authorIdParam]);
+
+  useEffect(() => {
+    if (page !== safePage) setPage(safePage);
+  }, [page, safePage]);
+
+  function fillForm(item: Listing) {
+    setForm({
+      title: item.title,
+      description: item.description,
+      category: item.category || 'goods',
+      settlement_id: item.settlement_id ?? '',
+      price: item.price != null ? String(item.price) : '',
+      contact_phone: item.contact_phone || '',
+      is_urgent: Boolean(item.is_urgent),
+      lifetime_days: item.lifetime_days === 60 ? 60 : 30,
+    });
+    setStatusNote(item.moderation_note || '');
+  }
+
+  function openItem(item: Listing) {
+    setSelected(item);
+    fillForm(item);
+    setError('');
+    patchUrl({ id: String(item.id) });
+  }
+
+  function closeModal() {
+    if (busy) return;
+    setSelected(null);
+    setError('');
+    openedFromUrl.current = null;
+    patchUrl({ id: null });
+  }
+
+  useEffect(() => {
+    if (!idParam) return;
+    if (openedFromUrl.current === idParam) return;
+    const id = Number(idParam);
+    if (!Number.isFinite(id)) return;
+    const local = items.find((x) => x.id === id);
+    if (local) {
+      openedFromUrl.current = idParam;
+      openItem(local);
+      return;
+    }
+    api<Listing>(`/listings/${id}`)
+      .then((item) => {
+        openedFromUrl.current = idParam;
+        openItem(item);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+  }, [idParam, items]);
+
+  async function refreshSelected(id: number) {
+    const item = await api<Listing>(`/listings/${id}`);
+    setSelected(item);
+    fillForm(item);
+    await load();
+    return item;
+  }
+
+  async function saveItem(e: React.FormEvent) {
+    e.preventDefault();
+    if (!selected || busy) return;
+    const title = form.title.trim();
+    const description = form.description.trim();
+    if (title.length < 2 || description.length < 3) {
+      setError('Заполните заголовок и описание');
+      return;
+    }
+    if (form.settlement_id === '') {
+      setError('Укажите населённый пункт');
+      return;
+    }
+    const priceRaw = form.price.trim().replace(',', '.');
+    const price = priceRaw === '' ? null : Number(priceRaw);
+    if (price != null && (!Number.isFinite(price) || price < 0)) {
+      setError('Цена должна быть числом');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      await api(`/listings/${selected.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          title,
+          description,
+          category: form.category,
+          settlement_id: Number(form.settlement_id),
+          price,
+          contact_phone: form.contact_phone.trim() || null,
+          is_urgent: form.is_urgent,
+          lifetime_days: form.lifetime_days === 60 ? 60 : 30,
+        }),
+      });
+      await refreshSelected(selected.id);
+      pushToast('Объявление сохранено');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function setStatus(status: string) {
+    if (!selected || busy) return;
+    if (status === 'rejected' && !statusNote.trim()) {
+      setError('Укажите причину отклонения');
+      return;
+    }
+    const labels: Record<string, string> = {
+      approved: 'опубликовать',
+      rejected: 'отклонить',
+      archived: 'снять',
+      pending: 'вернуть на проверку',
+      draft: 'сделать черновиком',
+    };
+    if (!(await confirmAction(`Точно ${labels[status] || 'изменить'} это объявление?`))) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api(`/listings/${selected.id}/admin-status`, {
+        method: 'POST',
+        body: JSON.stringify({
+          status,
+          moderation_note: statusNote.trim() || null,
+          close_reason: status === 'archived' ? 'other' : null,
+          close_note: status === 'archived' ? 'Снято модератором' : null,
+        }),
+      });
+      await refreshSelected(selected.id);
+      pushToast('Статус обновлён');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function togglePin(item: Listing) {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api(`/listings/${item.id}/pin`, {
+        method: 'POST',
+        body: JSON.stringify({ pinned: !item.is_pinned }),
+      });
+      const next = await refreshSelected(item.id);
+      pushToast(next.is_pinned ? 'Закреплено в ленте' : 'Снято с закрепления');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function extendListing(item: Listing) {
+    if (busy) return;
+    if (!(await confirmAction('Продлить объявление на 30 дней?'))) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api(`/listings/${item.id}/extend`, {
+        method: 'POST',
+        body: JSON.stringify({ days: 30 }),
+      });
+      await refreshSelected(item.id);
+      pushToast('Срок продлён');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeListing(id: number) {
+    if (busy) return;
+    if (!(await confirmAction('Удалить объявление навсегда? Это нельзя отменить.'))) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api(`/listings/${id}`, { method: 'DELETE' });
+      if (selected?.id === id) {
+        setSelected(null);
+        openedFromUrl.current = null;
+        patchUrl({ id: null });
+      }
+      await load();
+      pushToast('Объявление удалено');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deletePhoto(imageId: number) {
+    if (!selected || busy) return;
+    if (!(await confirmAction('Удалить это фото?'))) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api(`/listings/${selected.id}/images/${imageId}`, { method: 'DELETE' });
+      await refreshSelected(selected.id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function uploadPhotos(files: FileList | null) {
+    if (!selected || !files?.length || busy) return;
+    const fd = new FormData();
+    Array.from(files).forEach((f) => fd.append('files', f));
+    setBusy(true);
+    setError('');
+    try {
+      await api(`/listings/${selected.id}/images`, { method: 'POST', body: fd });
+      await refreshSelected(selected.id);
+      pushToast('Фото добавлено');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const canExtend =
+    selected &&
+    (selected.status === 'approved' || (selected.status === 'archived' && selected.close_reason === 'expired'));
+
+  return (
+    <div>
+      <div className="page-head compact">
+        <div>
+          <h1>Объявления</h1>
+          <p>
+            Все объявления: править, снять, удалить, сменить статус
+            {authorIdParam ? ` · автор #${authorIdParam}` : ''}
+            {' · '}
+            <Link to="/moderation">очередь модерации</Link>
+          </p>
+        </div>
+      </div>
+
+      <form
+        className="toolbar compact"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setPage(1);
+          setAppliedQ(query);
+        }}
+      >
+        <select
+          value={filter}
+          onChange={(e) => {
+            const value = e.target.value;
+            setFilter(value);
+            patchUrl({ status: value || null });
+          }}
+        >
+          <option value="">Все статусы</option>
+          <option value="pending">На проверке</option>
+          <option value="approved">Опубликованные</option>
+          <option value="rejected">Отклонённые</option>
+          <option value="archived">Снятые</option>
+          <option value="draft">Черновики</option>
+        </select>
+        <select value={category} onChange={(e) => setCategory(e.target.value)}>
+          <option value="">Все категории</option>
+          {LISTING_CATEGORIES.map((c) => (
+            <option key={c} value={c}>
+              {CATEGORY_LABELS[c]}
+            </option>
+          ))}
+        </select>
+        <input
+          placeholder="Название, автор, телефон…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <select
+          value={settlementId === '' ? '' : String(settlementId)}
+          onChange={(e) => setSettlementId(e.target.value ? Number(e.target.value) : '')}
+        >
+          <option value="">Все населённые пункты</option>
+          {settlements.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.display_name}
+            </option>
+          ))}
+        </select>
+        {authorIdParam ? (
+          <button type="button" className="chip warn" onClick={() => patchUrl({ authorId: null })}>
+            Автор #{authorIdParam} ×
+          </button>
+        ) : null}
+        <button className="btn" type="submit">
+          Найти
+        </button>
+      </form>
+
+      {error && !selected && <p className="error">{error}</p>}
+
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Объявление</th>
+              <th>Категория</th>
+              <th>Автор / село</th>
+              <th>Статус</th>
+              <th>Обновлено</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.id} className="dir-row" onClick={() => openItem(item)}>
+                <td>
+                  <div className="audit-who">{item.title}</div>
+                  <div className="audit-sub">
+                    {item.price != null ? `${item.price.toLocaleString('ru-RU')} ₽` : 'без цены'}
+                    {item.is_urgent ? ' · срочно' : ''}
+                    {item.is_pinned ? ' · закреплено' : ''}
+                    {item.auto_flagged ? ' · автофлаг' : ''}
+                  </div>
+                </td>
+                <td>
+                  <span className="chip">{CATEGORY_LABELS[item.category] || item.category}</span>
+                </td>
+                <td className="audit-obj">
+                  {item.author_name || '—'}
+                  <div className="audit-sub">{item.settlement_name || 'без села'}</div>
+                  {item.contact_phone ? <div className="audit-sub">{item.contact_phone}</div> : null}
+                </td>
+                <td>
+                  <span className={STATUS_CHIP[item.status] || 'chip'}>{STATUS_LABEL[item.status] || item.status}</span>
+                  {item.close_reason ? (
+                    <div className="audit-sub">{CLOSE_REASON_LABEL[item.close_reason] || item.close_reason}</div>
+                  ) : null}
+                </td>
+                <td className="audit-when">{formatAuditWhen(item.updated_at || item.created_at)}</td>
+                <td onClick={(e) => e.stopPropagation()}>
+                  <div className="actions inline">
+                    <button className="btn" type="button" onClick={() => openItem(item)}>
+                      Изменить
+                    </button>
+                    <button className="btn danger" type="button" onClick={() => removeListing(item.id)}>
+                      Удалить
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {!items.length && (
+              <tr>
+                <td colSpan={6} className="empty">
+                  {appliedQ || filter || category || settlementId !== '' || authorIdParam
+                    ? 'Ничего не найдено'
+                    : 'Объявлений пока нет'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <Pager page={safePage} pageCount={pageCount} total={total} onPage={setPage} />
+
+      {selected && (
+        <div className="modal-backdrop" onClick={closeModal}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 'min(760px, 100%)' }}>
+            <div className="meta">
+              <span className={STATUS_CHIP[selected.status] || 'chip'}>{STATUS_LABEL[selected.status]}</span>
+              {selected.is_pinned && <span className="chip warn">Закреплено</span>}
+              {selected.auto_flagged && <span className="chip danger">Автофлаг</span>}
+              {selected.expires_at && selected.status === 'approved' ? (
+                <span className="chip neutral">до {formatDate(selected.expires_at)}</span>
+              ) : null}
+            </div>
+            <h2>Объявление #{selected.id}</h2>
+            <p className="muted">
+              Автор: {selected.author_name || '—'}
+              {selected.author_id ? (
+                <>
+                  {' · '}
+                  <Link to={`/listings?authorId=${selected.author_id}`} onClick={closeModal}>
+                    все от автора
+                  </Link>
+                </>
+              ) : null}
+              {selected.status === 'pending' ? (
+                <>
+                  {' · '}
+                  <Link to={`/moderation?listingId=${selected.id}`}>в модерацию</Link>
+                </>
+              ) : null}
+            </p>
+            {error && <p className="error">{error}</p>}
+            <form onSubmit={saveItem}>
+              <div className="grid2">
+                <label className="field">
+                  Заголовок
+                  <input required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
+                </label>
+                <label className="field">
+                  Категория
+                  <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+                    {LISTING_CATEGORIES.map((c) => (
+                      <option key={c} value={c}>
+                        {CATEGORY_LABELS[c]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  Населённый пункт
+                  <select
+                    required
+                    value={form.settlement_id}
+                    onChange={(e) => setForm({ ...form, settlement_id: e.target.value ? Number(e.target.value) : '' })}
+                  >
+                    <option value="">— выберите —</option>
+                    {settlements.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.display_name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  Цена, ₽
+                  <input
+                    value={form.price}
+                    onChange={(e) => setForm({ ...form, price: e.target.value })}
+                    placeholder="пусто — без цены"
+                  />
+                </label>
+                <label className="field">
+                  Телефон
+                  <input
+                    value={form.contact_phone}
+                    onChange={(e) => setForm({ ...form, contact_phone: e.target.value })}
+                  />
+                </label>
+                <label className="field">
+                  Срок
+                  <select
+                    value={form.lifetime_days}
+                    onChange={(e) => setForm({ ...form, lifetime_days: Number(e.target.value) })}
+                  >
+                    <option value={30}>30 дней</option>
+                    <option value={60}>60 дней</option>
+                  </select>
+                </label>
+                <label className="field full">
+                  Описание
+                  <textarea
+                    required
+                    rows={5}
+                    value={form.description}
+                    onChange={(e) => setForm({ ...form, description: e.target.value })}
+                  />
+                </label>
+                <label className="check-inline">
+                  <input
+                    type="checkbox"
+                    checked={form.is_urgent}
+                    onChange={(e) => setForm({ ...form, is_urgent: e.target.checked })}
+                  />
+                  Срочно
+                </label>
+              </div>
+
+              <div style={{ marginTop: 12 }}>
+                <div className="muted" style={{ marginBottom: 6 }}>
+                  Фото {selected.images?.length || 0}/5
+                </div>
+                {!!selected.images?.length && <PhotoGallery images={selected.images} />}
+                {!!selected.images?.length && (
+                  <div className="actions inline" style={{ marginTop: 8 }}>
+                    {selected.images.map((img, i) => (
+                      <button key={img.id} type="button" className="btn ghost" onClick={() => deletePhoto(img.id)}>
+                        Удалить фото {i + 1}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {(selected.images?.length || 0) < 5 && (
+                  <label className="field" style={{ marginTop: 8 }}>
+                    Добавить фото
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      multiple
+                      onChange={(e) => {
+                        void uploadPhotos(e.target.files);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
+
+              <label className="field" style={{ display: 'block', marginTop: 12 }}>
+                Причина отклонения / заметка
+                <div className="template-row">
+                  {REJECTION_TEMPLATES.map((t) => (
+                    <button key={t} type="button" className="btn ghost" onClick={() => setStatusNote(t)}>
+                      {t}
+                    </button>
+                  ))}
+                </div>
+                <textarea
+                  rows={2}
+                  value={statusNote}
+                  onChange={(e) => setStatusNote(e.target.value)}
+                  placeholder="Нужна, если отклоняете"
+                />
+              </label>
+
+              <div className="modal-actions">
+                <button className="btn" type="submit" disabled={busy}>
+                  Сохранить
+                </button>
+                {selected.status !== 'approved' && (
+                  <button className="btn" type="button" disabled={busy} onClick={() => setStatus('approved')}>
+                    Опубликовать
+                  </button>
+                )}
+                {selected.status !== 'pending' && (
+                  <button className="btn secondary" type="button" disabled={busy} onClick={() => setStatus('pending')}>
+                    На проверку
+                  </button>
+                )}
+                {selected.status !== 'rejected' && (
+                  <button className="btn danger" type="button" disabled={busy} onClick={() => setStatus('rejected')}>
+                    Отклонить
+                  </button>
+                )}
+                {selected.status !== 'archived' && (
+                  <button className="btn secondary" type="button" disabled={busy} onClick={() => setStatus('archived')}>
+                    Снять
+                  </button>
+                )}
+                {selected.status === 'approved' && (
+                  <button className="btn secondary" type="button" disabled={busy} onClick={() => togglePin(selected)}>
+                    {selected.is_pinned ? 'Открепить' : 'Закрепить'}
+                  </button>
+                )}
+                {canExtend && (
+                  <button className="btn secondary" type="button" disabled={busy} onClick={() => extendListing(selected)}>
+                    +30 дней
+                  </button>
+                )}
+                <button className="btn danger" type="button" disabled={busy} onClick={() => removeListing(selected.id)}>
+                  Удалить
+                </button>
+                <button className="btn secondary" type="button" disabled={busy} onClick={closeModal}>
+                  Закрыть
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ReportsPage({ canListings }: { canListings: boolean }) {
   const navigate = useNavigate();
-  const [tab, setTab] = useState<'listings' | 'directory' | 'users'>(canListings ? 'listings' : 'directory');
+  const [searchParams, setSearchParams] = useSearchParams();
+  const tabParam = searchParams.get('tab');
+  const [tab, setTab] = useState<'listings' | 'directory' | 'users'>(() => {
+    if (tabParam === 'directory') return 'directory';
+    if (tabParam === 'users' && canListings) return 'users';
+    return canListings ? 'listings' : 'directory';
+  });
   const [items, setItems] = useState<ListingReport[]>([]);
   const [dirItems, setDirItems] = useState<DirectoryReport[]>([]);
   const [userItems, setUserItems] = useState<UserReport[]>([]);
@@ -1411,10 +2509,17 @@ function ReportsPage({ canListings }: { canListings: boolean }) {
   const [moderatorReply, setModeratorReply] = useState('');
   const [openListingAfter, setOpenListingAfter] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [page, setPage] = useState(1);
+
+  useEffect(() => {
+    if (tabParam === 'directory') setTab('directory');
+    else if (tabParam === 'users' && canListings) setTab('users');
+    else if (tabParam === 'listings' && canListings) setTab('listings');
+  }, [tabParam, canListings]);
 
   async function load() {
     try {
-      const qs = status ? `?status=${status}` : '';
+      const qs = `?status=${encodeURIComponent(status || 'all')}`;
       if (tab === 'listings') {
         if (!canListings) return;
         setItems(await api<ListingReport[]>(`/admin/reports${qs}`));
@@ -1485,7 +2590,7 @@ function ReportsPage({ canListings }: { canListings: boolean }) {
       setOpenListingAfter(false);
       await load();
       pushToast(next === 'reviewed' ? 'Жалоба просмотрена' : 'Жалоба отклонена');
-      if (shouldOpen && listingId != null) navigate(`/moderation?listingId=${listingId}`);
+      if (shouldOpen && listingId != null) navigate(`/listings?id=${listingId}`);
     } catch (err) {
       const msg = err instanceof Error ? err.message : 'Ошибка';
       setError(msg);
@@ -1496,7 +2601,7 @@ function ReportsPage({ canListings }: { canListings: boolean }) {
   }
 
   function goToListing(listingId: number) {
-    navigate(`/moderation?listingId=${listingId}`);
+    navigate(`/listings?id=${listingId}`);
   }
 
   const titleOf = (r: ListingReport | DirectoryReport | UserReport) => {
@@ -1505,20 +2610,48 @@ function ReportsPage({ canListings }: { canListings: boolean }) {
     return r.directory_title || `Контакт #${r.directory_id}`;
   };
 
+  const current =
+    tab === 'listings' ? items : tab === 'directory' ? dirItems : userItems;
+  const REPORT_PAGE = 25;
+  const reportPageCount = Math.max(1, Math.ceil(current.length / REPORT_PAGE));
+  const reportSafePage = Math.min(page, reportPageCount);
+  const reportPageItems = current.slice((reportSafePage - 1) * REPORT_PAGE, reportSafePage * REPORT_PAGE);
+
+  useEffect(() => {
+    setPage(1);
+  }, [tab, status]);
+
+  function reportKind(r: ListingReport | DirectoryReport | UserReport): 'listing' | 'directory' | 'user' {
+    if ('target_id' in r) return 'user';
+    if ('listing_id' in r && !('directory_id' in r)) return 'listing';
+    return 'directory';
+  }
+
+  function reportStatusChip(s: string) {
+    if (s === 'open') return 'chip warn';
+    if (s === 'reviewed') return 'chip ok';
+    return 'chip neutral';
+  }
+
   return (
     <div>
-      <div className="page-head">
+      <div className="page-head compact">
         <div>
           <h1>Жалобы</h1>
           <p>Объявления, люди и неверные контакты справочника</p>
         </div>
       </div>
-      <div className="toolbar">
+      <div className="toolbar compact">
         {canListings && (
           <button
             className={tab === 'listings' ? 'btn' : 'btn ghost'}
             type="button"
-            onClick={() => setTab('listings')}
+            onClick={() => {
+              setTab('listings');
+              const p = new URLSearchParams(searchParams);
+              p.set('tab', 'listings');
+              setSearchParams(p, { replace: true });
+            }}
           >
             Объявления
           </button>
@@ -1526,7 +2659,12 @@ function ReportsPage({ canListings }: { canListings: boolean }) {
         <button
           className={tab === 'directory' ? 'btn' : 'btn ghost'}
           type="button"
-          onClick={() => setTab('directory')}
+            onClick={() => {
+              setTab('directory');
+              const p = new URLSearchParams(searchParams);
+              p.set('tab', 'directory');
+              setSearchParams(p, { replace: true });
+            }}
         >
           Справочник
         </button>
@@ -1534,7 +2672,12 @@ function ReportsPage({ canListings }: { canListings: boolean }) {
           <button
             className={tab === 'users' ? 'btn' : 'btn ghost'}
             type="button"
-            onClick={() => setTab('users')}
+            onClick={() => {
+              setTab('users');
+              const p = new URLSearchParams(searchParams);
+              p.set('tab', 'users');
+              setSearchParams(p, { replace: true });
+            }}
           >
             Люди
           </button>
@@ -1547,120 +2690,102 @@ function ReportsPage({ canListings }: { canListings: boolean }) {
         </select>
       </div>
       {error && !replyModal && <p className="error">{error}</p>}
-      <div className="list">
-        {tab === 'listings' &&
-          items.map((r) => (
-            <article key={r.id} className="row-card">
-              <div className="row-main">
-                <h3 className="row-title" style={{ cursor: 'pointer' }} onClick={() => goToListing(r.listing_id)}>
-                  {r.listing_title || `Объявление #${r.listing_id}`}
-                </h3>
-                <div className="meta">
-                  <span className="chip warn">{REPORT_REASON_LABEL[r.reason] || r.reason}</span>
-                  <span className="chip neutral">{r.reporter_name}</span>
-                  <span className="chip">{REPORT_STATUS_LABEL[r.status] || r.status}</span>
-                </div>
-                {r.note && <p className="row-body">{r.note}</p>}
-                {r.moderator_reply && <p className="muted">Ответ: {r.moderator_reply}</p>}
-                <p className="muted">{formatDate(r.created_at)}</p>
-              </div>
-              <div className="actions">
-                <button className="btn ghost" type="button" onClick={() => goToListing(r.listing_id)}>
-                  К объявлению
-                </button>
-                {r.status === 'open' && (
-                  <>
-                    <button className="btn" type="button" onClick={() => openReplyModal('listing', r, 'reviewed')}>
-                      Просмотрено
-                    </button>
-                    <button
-                      className="btn secondary"
-                      type="button"
-                      onClick={() => openReplyModal('listing', r, 'dismissed')}
-                    >
-                      Отклонить
-                    </button>
-                  </>
-                )}
-              </div>
-            </article>
-          ))}
-        {tab === 'directory' &&
-          dirItems.map((r) => (
-            <article key={r.id} className="row-card">
-              <div className="row-main">
-                <h3 className="row-title">{r.directory_title || `Контакт #${r.directory_id}`}</h3>
-                <div className="meta">
-                  <span className="chip warn">{REPORT_REASON_LABEL[r.reason] || r.reason}</span>
-                  <span className="chip neutral">{r.reporter_name}</span>
-                  <span className="chip">{REPORT_STATUS_LABEL[r.status] || r.status}</span>
-                </div>
-                {r.note && <p className="row-body">{r.note}</p>}
-                {r.moderator_reply && <p className="muted">Ответ: {r.moderator_reply}</p>}
-                <p className="muted">{formatDate(r.created_at)}</p>
-              </div>
-              <div className="actions">
-                <button className="btn ghost" type="button" onClick={() => navigate('/directory')}>
-                  К справочнику
-                </button>
-                {r.status === 'open' && (
-                  <>
-                    <button className="btn" type="button" onClick={() => openReplyModal('directory', r, 'reviewed')}>
-                      Просмотрено
-                    </button>
-                    <button
-                      className="btn secondary"
-                      type="button"
-                      onClick={() => openReplyModal('directory', r, 'dismissed')}
-                    >
-                      Отклонить
-                    </button>
-                  </>
-                )}
-              </div>
-            </article>
-          ))}
-        {tab === 'listings' && !items.length && <div className="empty">Жалоб нет</div>}
-        {tab === 'directory' && !dirItems.length && <div className="empty">Жалоб на контакты нет</div>}
-        {tab === 'users' &&
-          userItems.map((r) => (
-            <article key={r.id} className="row-card">
-              <div className="row-main">
-                <h3 className="row-title">{r.target_name || `Пользователь #${r.target_id}`}</h3>
-                <div className="meta">
-                  <span className="chip warn">{REPORT_REASON_LABEL[r.reason] || r.reason}</span>
-                  <span className="chip neutral">{r.reporter_name}</span>
-                  <span className="chip">{REPORT_STATUS_LABEL[r.status] || r.status}</span>
-                  {r.listing_title ? <span className="chip">с объявления</span> : null}
-                </div>
-                {r.note && <p className="row-body">{r.note}</p>}
-                {r.listing_title && <p className="muted">Объявление: {r.listing_title}</p>}
-                {r.moderator_reply && <p className="muted">Ответ: {r.moderator_reply}</p>}
-                <p className="muted">{formatDate(r.created_at)}</p>
-              </div>
-              <div className="actions">
-                <button className="btn ghost" type="button" onClick={() => navigate(`/users`)}>
-                  К пользователям
-                </button>
-                {r.status === 'open' && (
-                  <>
-                    <button className="btn" type="button" onClick={() => openReplyModal('user', r, 'reviewed')}>
-                      Просмотрено
-                    </button>
-                    <button
-                      className="btn secondary"
-                      type="button"
-                      onClick={() => openReplyModal('user', r, 'dismissed')}
-                    >
-                      Отклонить
-                    </button>
-                  </>
-                )}
-              </div>
-            </article>
-          ))}
-        {tab === 'users' && !userItems.length && <div className="empty">Жалоб на людей нет</div>}
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Когда</th>
+              <th>На что</th>
+              <th>Причина</th>
+              <th>Кто пожаловался</th>
+              <th>Комментарий</th>
+              <th>Статус</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {reportPageItems.map((r) => {
+              const kind = reportKind(r);
+              const listingId =
+                kind === 'listing'
+                  ? (r as ListingReport).listing_id
+                  : kind === 'user'
+                    ? (r as UserReport).listing_id ?? null
+                    : null;
+              return (
+                <tr
+                  key={`${kind}-${r.id}`}
+                  className="dir-row"
+                  onClick={() => {
+                    if (listingId) goToListing(listingId);
+                  }}
+                >
+                  <td className="audit-when" title={formatDate(r.created_at)}>
+                    {formatAuditWhen(r.created_at)}
+                  </td>
+                  <td>
+                    <div className="audit-who">{titleOf(r)}</div>
+                    <div className="audit-sub">
+                      {kind === 'listing' ? 'объявление' : kind === 'directory' ? 'справочник' : 'человек'}
+                      {kind === 'user' && (r as UserReport).listing_title
+                        ? ` · ${(r as UserReport).listing_title}`
+                        : ''}
+                    </div>
+                  </td>
+                  <td>
+                    <span className="chip warn">{REPORT_REASON_LABEL[r.reason] || r.reason}</span>
+                  </td>
+                  <td className="audit-obj">{r.reporter_name || '—'}</td>
+                  <td className="audit-details">
+                    {r.note || '—'}
+                    {r.moderator_reply ? <div className="audit-sub">ответ: {r.moderator_reply}</div> : null}
+                  </td>
+                  <td>
+                    <span className={reportStatusChip(r.status)}>{REPORT_STATUS_LABEL[r.status] || r.status}</span>
+                  </td>
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <div className="actions inline">
+                      {kind === 'listing' && (
+                        <button className="btn ghost" type="button" onClick={() => goToListing((r as ListingReport).listing_id)}>
+                          К объявлению
+                        </button>
+                      )}
+                      {kind === 'directory' && (
+                        <button className="btn ghost" type="button" onClick={() => navigate('/directory')}>
+                          К справочнику
+                        </button>
+                      )}
+                      {kind === 'user' && (
+                        <button className="btn ghost" type="button" onClick={() => navigate('/users')}>
+                          К людям
+                        </button>
+                      )}
+                      {r.status === 'open' && (
+                        <>
+                          <button className="btn" type="button" onClick={() => openReplyModal(kind, r, 'reviewed')}>
+                            Просмотрено
+                          </button>
+                          <button className="btn secondary" type="button" onClick={() => openReplyModal(kind, r, 'dismissed')}>
+                            Отклонить
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+            {!current.length && (
+              <tr>
+                <td colSpan={7} className="empty">
+                  Жалоб нет
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
+      <Pager page={reportSafePage} pageCount={reportPageCount} total={current.length} onPage={setPage} />
 
       {replyModal && (
         <div className="modal-backdrop" onClick={closeReplyModal}>
@@ -1709,124 +2834,397 @@ function ReportsPage({ canListings }: { canListings: boolean }) {
   );
 }
 
+const AUDIT_PAGE_SIZE = 25;
+
+const ENTITY_LABELS: Record<string, string> = {
+  listing: 'Объявление',
+  event: 'Событие',
+  news: 'Новость',
+  transport: 'Маршрут',
+  user: 'Пользователь',
+  alert: 'Срочное',
+  legal: 'Юр. документ',
+  blacklist: 'Чёрный список',
+  chat: 'Чат',
+  listing_chat: 'Чат',
+  report: 'Жалоба на объявление',
+  directory_report: 'Жалоба на место',
+  user_report: 'Жалоба на человека',
+  app_update: 'Обновление приложения',
+  directory: 'Справочник',
+};
+
+const ACTION_LABELS: Record<string, string> = {
+  'event.create': 'Создал событие',
+  'event.update': 'Изменил событие',
+  'event.cover': 'Обновил обложку события',
+  'event.delete': 'Удалил событие',
+  'news.create': 'Создал новость',
+  'news.update': 'Изменил новость',
+  'news.cover': 'Обновил обложку новости',
+  'news.delete': 'Удалил новость',
+  'transport.create': 'Добавил маршрут',
+  'transport.update': 'Изменил маршрут',
+  'transport.delete': 'Удалил маршрут',
+  'alert.create': 'Включил срочное',
+  'alert.update': 'Изменил срочное',
+  'alert.delete': 'Снял срочное',
+  'user.create': 'Создал пользователя',
+  'user.update': 'Изменил пользователя',
+  'user.revoke_sessions': 'Сбросил сессии',
+  'user.push': 'Отправил пуш',
+  'listing.update': 'Изменил объявление',
+  'listing.delete': 'Удалил объявление',
+  'listing.pin': 'Закрепил объявление',
+  'listing.unpin': 'Открепил объявление',
+  'listing.status:approved': 'Опубликовал объявление',
+  'listing.status:rejected': 'Отклонил объявление',
+  'listing.status:archived': 'Снял объявление',
+  'listing.status:pending': 'Вернул объявление на проверку',
+  'listing.status:draft': 'Сделал черновик объявления',
+  'legal.update': 'Обновил юр. текст',
+  'blacklist.add': 'Добавил в чёрный список',
+  'blacklist.delete': 'Убрал из чёрного списка',
+  'chat.message_delete': 'Удалил сообщение чата',
+  'chat.thread_delete': 'Удалил переписку',
+  'app_update.patch': 'Настроил обновление',
+  'app_update.apk_upload': 'Залил APK',
+  'moderate:approved': 'Одобрил объявление',
+  'moderate:rejected': 'Отклонил объявление',
+  'moderate:archived': 'Снял объявление',
+  'bulk_moderate:approved': 'Массово одобрил',
+  'bulk_moderate:rejected': 'Массово отклонил',
+  'bulk_moderate:archived': 'Массово снял',
+  'report.reviewed': 'Разобрал жалобу на объявление',
+  'report.rejected': 'Отклонил жалобу на объявление',
+  'directory_report.reviewed': 'Разобрал жалобу на место',
+  'directory_report.rejected': 'Отклонил жалобу на место',
+  'user_report.reviewed': 'Разобрал жалобу на человека',
+  'user_report.rejected': 'Отклонил жалобу на человека',
+};
+
+function auditActionLabel(action: string) {
+  if (ACTION_LABELS[action]) return ACTION_LABELS[action];
+  const [head, tail] = action.split(/:(.+)/);
+  if (tail) {
+    const verb = ACTION_LABELS[`${head}:${tail}`];
+    if (verb) return verb;
+  }
+  return action.replace(/[._]/g, ' ');
+}
+
+function auditActionTone(action: string) {
+  if (/delete|rejected|revoke|unpin/.test(action)) return 'danger';
+  if (/approved|create|add|pin$|cover|apk/.test(action)) return 'ok';
+  if (/moderate|report|push|archived/.test(action)) return 'warn';
+  return '';
+}
+
+function auditEntityLabel(type: string, id?: number | null) {
+  const name = ENTITY_LABELS[type] || type;
+  return id != null ? `${name} №${id}` : name;
+}
+
+function formatAuditWhen(value?: string | null) {
+  const d = parseApiDate(value ?? null);
+  if (!d) return '—';
+  const now = new Date();
+  const sameDay = d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate();
+  const yday = new Date(now);
+  yday.setDate(now.getDate() - 1);
+  const isYday =
+    d.getFullYear() === yday.getFullYear() && d.getMonth() === yday.getMonth() && d.getDate() === yday.getDate();
+  const clock = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  if (sameDay) return `сегодня ${clock}`;
+  if (isYday) return `вчера ${clock}`;
+  const months = ['янв', 'фев', 'мар', 'апр', 'мая', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
+  if (d.getFullYear() === now.getFullYear()) return `${d.getDate()} ${months[d.getMonth()]} ${clock}`;
+  return `${pad2(d.getDate())}.${pad2(d.getMonth() + 1)}.${d.getFullYear()} ${clock}`;
+}
+
 function AuditPage() {
   const [items, setItems] = useState<AuditLog[]>([]);
+  const [total, setTotal] = useState(0);
   const [query, setQuery] = useState('');
+  const [appliedQ, setAppliedQ] = useState('');
+  const [entity, setEntity] = useState('');
+  const [page, setPage] = useState(1);
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
 
-  async function load(q = query) {
+  const pageCount = Math.max(1, Math.ceil(total / AUDIT_PAGE_SIZE));
+  const safePage = Math.min(page, pageCount);
+
+  async function load(nextPage = safePage, q = appliedQ, kind = entity) {
+    setBusy(true);
     try {
-      const qs = q.trim() ? `?q=${encodeURIComponent(q.trim())}` : '';
-      setItems(await api<AuditLog[]>(`/admin/audit-log${qs}`));
+      const params = new URLSearchParams();
+      params.set('limit', String(AUDIT_PAGE_SIZE));
+      params.set('offset', String((nextPage - 1) * AUDIT_PAGE_SIZE));
+      if (q.trim()) params.set('q', q.trim());
+      if (kind) params.set('entity_type', kind);
+      const data = await api<{ items: AuditLog[]; total: number }>(`/admin/audit-log?${params}`);
+      setItems(data.items || []);
+      setTotal(data.total || 0);
+      setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
     }
   }
 
   useEffect(() => {
-    load('').catch(console.error);
-  }, []);
+    load(safePage, appliedQ, entity).catch(console.error);
+  }, [safePage, appliedQ, entity]);
+
+  useEffect(() => {
+    if (page !== safePage) setPage(safePage);
+  }, [page, safePage]);
+
+  function search(e?: React.FormEvent) {
+    e?.preventDefault();
+    setPage(1);
+    setAppliedQ(query);
+  }
 
   return (
     <div>
-      <div className="page-head">
+      <div className="page-head compact">
         <div>
           <h1>Лог действий</h1>
-          <p>Модераторы, админы и редакторы</p>
+          <p>Кто что сделал в админке: модерация, правки, удаления</p>
         </div>
       </div>
-      <div className="toolbar">
+      <form className="toolbar compact" onSubmit={search}>
         <input
-          placeholder="Поиск по действию, автору, деталям…"
+          placeholder="Имя, email, действие, текст…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        <button className="btn" type="button" onClick={() => load(query)}>
+        <select
+          value={entity}
+          onChange={(e) => {
+            setPage(1);
+            setEntity(e.target.value);
+          }}
+        >
+          <option value="">Все разделы</option>
+          <option value="listing">Объявления</option>
+          <option value="user">Пользователи</option>
+          <option value="event">Афиша</option>
+          <option value="news">Новости</option>
+          <option value="transport">Транспорт</option>
+          <option value="alert">Срочные</option>
+          <option value="report">Жалобы</option>
+          <option value="chat">Чаты</option>
+          <option value="legal">Юр. тексты</option>
+          <option value="blacklist">Чёрный список</option>
+          <option value="app_update">Приложение</option>
+        </select>
+        <button className="btn" type="submit" disabled={busy}>
           Найти
         </button>
-      </div>
+      </form>
       {error && <p className="error">{error}</p>}
-      <div className="list">
-        {items.map((row) => (
-          <article key={row.id} className="row-card">
-            <div className="row-main">
-              <h3 className="row-title">{row.action}</h3>
-              <div className="meta">
-                <span className="chip">{row.actor_name || `user #${row.actor_id}`}</span>
-                <span className="chip neutral">
-                  {row.entity_type}
-                  {row.entity_id != null ? ` #${row.entity_id}` : ''}
-                </span>
-                <span className="chip neutral">{formatDate(row.created_at)}</span>
-              </div>
-              {row.details && <p className="row-body">{row.details}</p>}
-            </div>
-          </article>
-        ))}
-        {!items.length && <div className="empty">Записей пока нет</div>}
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Когда</th>
+              <th>Кто</th>
+              <th>Действие</th>
+              <th>Объект</th>
+              <th>Подробности</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((row) => {
+              const tone = auditActionTone(row.action);
+              return (
+              <tr key={row.id}>
+                <td className="audit-when" title={formatDate(row.created_at)}>
+                  {formatAuditWhen(row.created_at)}
+                </td>
+                <td>
+                  <div className="audit-who">{row.actor_name || `user #${row.actor_id}`}</div>
+                  <div className="audit-sub">
+                    {row.actor_role ? ROLE_LABELS[row.actor_role as User['role']] || row.actor_role : ''}
+                    {row.actor_role ? ' · ' : ''}№{row.actor_id}
+                  </div>
+                </td>
+                <td>
+                  <span className={tone ? `chip ${tone}` : 'chip neutral'}>{auditActionLabel(row.action)}</span>
+                </td>
+                <td className="audit-obj">{auditEntityLabel(row.entity_type, row.entity_id)}</td>
+                <td className="audit-details">{row.details || '—'}</td>
+              </tr>
+              );
+            })}
+            {!items.length && (
+              <tr>
+                <td colSpan={5} className="empty">
+                  {appliedQ || entity ? 'Ничего не найдено' : 'Записей пока нет'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
+      <Pager page={safePage} pageCount={pageCount} total={total} onPage={setPage} />
     </div>
   );
 }
 
+const ERROR_PAGE_SIZE = 25;
+
+const SCREEN_LABELS: Record<string, string> = {
+  flutter: 'Сбой Flutter',
+  zone: 'Необработанная ошибка',
+};
+
+function errorScreenLabel(screen?: string | null) {
+  if (!screen) return '—';
+  return SCREEN_LABELS[screen] || screen;
+}
+
+function errorDevice(row: ClientErrorLog) {
+  const name = [row.device_brand, row.device_model].filter(Boolean).join(' ').trim();
+  return { name: name || 'неизвестно', os: row.device_os || '' };
+}
+
 function ErrorsPage() {
   const [items, setItems] = useState<ClientErrorLog[]>([]);
+  const [total, setTotal] = useState(0);
   const [query, setQuery] = useState('');
+  const [appliedQ, setAppliedQ] = useState('');
+  const [page, setPage] = useState(1);
+  const [openId, setOpenId] = useState<number | null>(null);
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
 
-  async function load(q = query) {
+  const pageCount = Math.max(1, Math.ceil(total / ERROR_PAGE_SIZE));
+  const safePage = Math.min(page, pageCount);
+
+  async function load(nextPage = safePage, q = appliedQ) {
+    setBusy(true);
     try {
-      const qs = q.trim() ? `?q=${encodeURIComponent(q.trim())}` : '';
-      setItems(await api<ClientErrorLog[]>(`/admin/client-errors${qs}`));
+      const params = new URLSearchParams();
+      params.set('limit', String(ERROR_PAGE_SIZE));
+      params.set('offset', String((nextPage - 1) * ERROR_PAGE_SIZE));
+      if (q.trim()) params.set('q', q.trim());
+      const data = await api<{ items: ClientErrorLog[]; total: number }>(`/admin/client-errors?${params}`);
+      setItems(data.items || []);
+      setTotal(data.total || 0);
+      setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
     }
   }
 
   useEffect(() => {
-    load('').catch(console.error);
-  }, []);
+    load(safePage, appliedQ).catch(console.error);
+  }, [safePage, appliedQ]);
+
+  useEffect(() => {
+    if (page !== safePage) setPage(safePage);
+  }, [page, safePage]);
+
+  function search(e?: React.FormEvent) {
+    e?.preventDefault();
+    setPage(1);
+    setOpenId(null);
+    setAppliedQ(query);
+  }
 
   return (
     <div>
-      <div className="page-head">
+      <div className="page-head compact">
         <div>
           <h1>Сбои приложения</h1>
-          <p>Ошибки с телефонов пользователей</p>
+          <p>Ошибки с телефонов. Нажмите строку, чтобы открыть стек</p>
         </div>
       </div>
-      <div className="toolbar">
+      <form className="toolbar compact" onSubmit={search}>
         <input
-          placeholder="Поиск по тексту, модели, версии…"
+          placeholder="Текст, модель, версия, экран, IP…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        <button className="btn" type="button" onClick={() => load(query)}>
+        <button className="btn" type="submit" disabled={busy}>
           Найти
         </button>
-      </div>
+      </form>
       {error && <p className="error">{error}</p>}
-      <div className="list">
-        {items.map((row) => (
-          <article key={row.id} className="row-card">
-            <div className="row-main">
-              <h3 className="row-title">{row.message}</h3>
-              <div className="meta">
-                {row.app_version && <span className="chip">{row.app_version}</span>}
-                {(row.device_brand || row.device_model) && (
-                  <span className="chip neutral">
-                    {[row.device_brand, row.device_model].filter(Boolean).join(' ')}
-                  </span>
-                )}
-                {row.screen && <span className="chip neutral">{row.screen}</span>}
-                <span className="chip neutral">{formatDate(row.created_at)}</span>
-              </div>
-              {row.stack && <p className="row-body">{row.stack.slice(0, 800)}</p>}
-            </div>
-          </article>
-        ))}
-        {!items.length && <div className="empty">Сбоев пока нет</div>}
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Когда</th>
+              <th>Ошибка</th>
+              <th>Где</th>
+              <th>Телефон</th>
+              <th>Версия</th>
+              <th>Кто</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((row) => {
+              const device = errorDevice(row);
+              const open = openId === row.id;
+              return (
+                <Fragment key={row.id}>
+                  <tr
+                    className={`error-row${open ? ' is-open' : ''}`}
+                    onClick={() => setOpenId(open ? null : row.id)}
+                  >
+                    <td className="audit-when" title={formatDate(row.created_at)}>
+                      {formatAuditWhen(row.created_at)}
+                    </td>
+                    <td className="error-msg" title={row.message}>
+                      {row.message}
+                      {row.stack ? <div className="audit-sub">{open ? 'скрыть стек' : 'есть стек'}</div> : null}
+                    </td>
+                    <td>{errorScreenLabel(row.screen)}</td>
+                    <td>
+                      <div className="audit-who">{device.name}</div>
+                      {device.os ? <div className="audit-sub">{device.os}</div> : null}
+                    </td>
+                    <td className="audit-obj">{row.app_version || '—'}</td>
+                    <td>
+                      <div className="audit-who">
+                        {row.user_name || (row.user_id ? `user #${row.user_id}` : 'гость')}
+                      </div>
+                      <div className="audit-sub">
+                        {row.user_id ? `№${row.user_id}` : ''}
+                        {row.user_id && row.client_ip ? ' · ' : ''}
+                        {row.client_ip || ''}
+                      </div>
+                    </td>
+                  </tr>
+                  {open && (
+                    <tr className="stack-row">
+                      <td colSpan={6}>
+                        <pre className="stack-pre">{row.stack || 'Стека нет'}</pre>
+                      </td>
+                    </tr>
+                  )}
+                </Fragment>
+              );
+            })}
+            {!items.length && (
+              <tr>
+                <td colSpan={6} className="empty">
+                  {appliedQ ? 'Ничего не найдено' : 'Сбоев пока нет'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
+      <Pager page={safePage} pageCount={pageCount} total={total} onPage={setPage} />
     </div>
   );
 }
@@ -1853,17 +3251,22 @@ function CallsPage() {
   const [items, setItems] = useState<AppCall[]>([]);
   const [total, setTotal] = useState(0);
   const [query, setQuery] = useState('');
+  const [appliedQ, setAppliedQ] = useState('');
   const [status, setStatus] = useState('');
+  const [page, setPage] = useState(1);
   const [error, setError] = useState('');
+  const CALL_PAGE = 25;
+  const pageCount = Math.max(1, Math.ceil(total / CALL_PAGE));
+  const safePage = Math.min(page, pageCount);
 
-  async function load() {
+  async function load(nextPage = safePage) {
     try {
       const params = new URLSearchParams();
-      if (query.trim()) params.set('q', query.trim());
+      if (appliedQ.trim()) params.set('q', appliedQ.trim());
       if (status) params.set('status', status);
-      params.set('limit', '80');
-      const qs = params.toString();
-      const data = await api<{ items: AppCall[]; total: number }>(`/admin/calls?${qs}`);
+      params.set('limit', String(CALL_PAGE));
+      params.set('offset', String((nextPage - 1) * CALL_PAGE));
+      const data = await api<{ items: AppCall[]; total: number }>(`/admin/calls?${params}`);
       setItems(data.items || []);
       setTotal(data.total || 0);
       setError('');
@@ -1873,28 +3276,52 @@ function CallsPage() {
   }
 
   useEffect(() => {
-    load().catch(console.error);
+    load(safePage).catch(console.error);
     const id = window.setInterval(() => {
-      load().catch(() => undefined);
+      load(safePage).catch(() => undefined);
     }, 15000);
     return () => window.clearInterval(id);
-  }, []);
+  }, [safePage, appliedQ, status]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [appliedQ, status]);
+
+  function callTone(s: string) {
+    if (s === 'active' || s === 'ringing') return 'chip warn';
+    if (s === 'ended') return 'chip ok';
+    if (s === 'missed' || s === 'declined' || s === 'failed') return 'chip danger';
+    return 'chip neutral';
+  }
 
   return (
     <div>
-      <div className="page-head">
+      <div className="page-head compact">
         <div>
           <h1>Звонки</h1>
-          <p>Журнал интернет-звонков в приложении. Без записи разговора.</p>
+          <p>Журнал интернет-звонков. Без записи разговора.</p>
         </div>
       </div>
-      <div className="toolbar">
+      <form
+        className="toolbar compact"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setPage(1);
+          setAppliedQ(query);
+        }}
+      >
         <input
           placeholder="Имя, объявление, номер звонка…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        <select value={status} onChange={(e) => setStatus(e.target.value)}>
+        <select
+          value={status}
+          onChange={(e) => {
+            setPage(1);
+            setStatus(e.target.value);
+          }}
+        >
           <option value="">Все статусы</option>
           {Object.entries(CALL_STATUS_LABEL).map(([k, v]) => (
             <option key={k} value={k}>
@@ -1902,34 +3329,55 @@ function CallsPage() {
             </option>
           ))}
         </select>
-        <button className="btn" type="button" onClick={() => load()}>
-          Обновить
+        <button className="btn" type="submit">
+          Найти
         </button>
-      </div>
+      </form>
       {error && <p className="error">{error}</p>}
-      <p className="muted">Всего: {total}</p>
-      <div className="list">
-        {items.map((row) => (
-          <article key={row.id} className="row-card">
-            <div className="row-main">
-              <h3 className="row-title">
-                {row.caller_name || `#${row.caller_id}`} → {row.callee_name || `#${row.callee_id}`}
-              </h3>
-              <div className="meta">
-                <span className="chip">{CALL_STATUS_LABEL[row.status] || row.status}</span>
-                {row.listing_title && <span className="chip neutral">{row.listing_title}</span>}
-                {row.status === 'ended' || row.duration_sec ? (
-                  <span className="chip neutral">{formatDuration(row.duration_sec)}</span>
-                ) : null}
-                <span className="chip neutral">{formatDate(row.created_at)}</span>
-              </div>
-              {row.end_reason && <p className="muted">Причина: {row.end_reason}</p>}
-              {row.ended_by_name && <p className="muted">Завершил: {row.ended_by_name}</p>}
-            </div>
-          </article>
-        ))}
-        {!items.length && <div className="empty">Звонков пока нет</div>}
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Когда</th>
+              <th>Кто → кому</th>
+              <th>Объявление</th>
+              <th>Статус</th>
+              <th>Длительность</th>
+              <th>Завершил</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((row) => (
+              <tr key={row.id}>
+                <td className="audit-when" title={formatDate(row.created_at)}>
+                  {formatAuditWhen(row.created_at)}
+                </td>
+                <td>
+                  <div className="audit-who">{row.caller_name || `#${row.caller_id}`}</div>
+                  <div className="audit-sub">→ {row.callee_name || `#${row.callee_id}`}</div>
+                </td>
+                <td className="audit-obj">{row.listing_title || '—'}</td>
+                <td>
+                  <span className={callTone(row.status)}>{CALL_STATUS_LABEL[row.status] || row.status}</span>
+                  {row.end_reason ? <div className="audit-sub">{row.end_reason}</div> : null}
+                </td>
+                <td className="audit-when">
+                  {row.status === 'ended' || row.duration_sec ? formatDuration(row.duration_sec) : '—'}
+                </td>
+                <td className="audit-obj">{row.ended_by_name || '—'}</td>
+              </tr>
+            ))}
+            {!items.length && (
+              <tr>
+                <td colSpan={6} className="empty">
+                  {appliedQ || status ? 'Ничего не найдено' : 'Звонков пока нет'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
+      <Pager page={safePage} pageCount={pageCount} total={total} onPage={setPage} />
     </div>
   );
 }
@@ -1978,8 +3426,24 @@ function directoryPayload(form: DirectoryForm) {
   };
 }
 
+const DIR_PAGE_SIZE = 25;
+const DIR_CATEGORIES = [
+  'school',
+  'hospital',
+  'shop',
+  'pharmacy',
+  'admin',
+  'bank',
+  'post',
+  'transport',
+  'culture',
+  'sport',
+  'other',
+];
+
 function DirectoryPage() {
   const [items, setItems] = useState<DirectoryItem[]>([]);
+  const [total, setTotal] = useState(0);
   const [settlements, setSettlements] = useState<Settlement[]>([]);
   const [form, setForm] = useState<DirectoryForm>(EMPTY_DIR);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -1987,19 +3451,48 @@ function DirectoryPage() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
+  const [appliedQ, setAppliedQ] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [publishedFilter, setPublishedFilter] = useState<'all' | 'published' | 'hidden'>('all');
   const [settlementFilter, setSettlementFilter] = useState<number | ''>('');
+  const [page, setPage] = useState(1);
 
-  async function load() {
-    const data = await api<{ items: DirectoryItem[] } | DirectoryItem[]>('/directory?limit=500&offset=0');
-    setItems(Array.isArray(data) ? data : data.items ?? []);
+  const pageCount = Math.max(1, Math.ceil(total / DIR_PAGE_SIZE));
+  const safePage = Math.min(page, pageCount);
+
+  async function loadSettlements() {
     setSettlements(await api<Settlement[]>('/settlements'));
   }
 
+  async function load(nextPage = safePage) {
+    const params = new URLSearchParams();
+    params.set('limit', String(DIR_PAGE_SIZE));
+    params.set('offset', String((nextPage - 1) * DIR_PAGE_SIZE));
+    if (appliedQ.trim()) params.set('q', appliedQ.trim());
+    if (categoryFilter) params.set('category', categoryFilter);
+    if (settlementFilter !== '') params.set('settlement_id', String(settlementFilter));
+    if (publishedFilter === 'published') params.set('published', 'true');
+    if (publishedFilter === 'hidden') params.set('published', 'false');
+    const data = await api<{ items: DirectoryItem[]; total: number }>(`/directory?${params}`);
+    setItems(data.items || []);
+    setTotal(data.total || 0);
+  }
+
   useEffect(() => {
-    load().catch((err) => setError(err.message));
+    loadSettlements().catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
   }, []);
+
+  useEffect(() => {
+    load(safePage).catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+  }, [safePage, appliedQ, categoryFilter, publishedFilter, settlementFilter]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [appliedQ, categoryFilter, publishedFilter, settlementFilter]);
+
+  useEffect(() => {
+    if (page !== safePage) setPage(safePage);
+  }, [page, safePage]);
 
   function openCreate() {
     setEditingId(null);
@@ -2061,14 +3554,19 @@ function DirectoryPage() {
 
   async function remove(id: number) {
     if (!(await confirmAction('Удалить запись из справочника? Это действие нельзя отменить.'))) return;
-    await api(`/directory/${id}`, { method: 'DELETE' });
-    if (editingId === id) closeModal();
-    await load();
+    try {
+      await api(`/directory/${id}`, { method: 'DELETE' });
+      if (editingId === id) closeModal();
+      await load();
+      pushToast('Запись удалена');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    }
   }
 
   return (
     <div>
-      <div className="page-head">
+      <div className="page-head compact">
         <div>
           <h1>Справочник</h1>
           <p>Школы, больницы, магазины и другие точки района</p>
@@ -2078,21 +3576,35 @@ function DirectoryPage() {
         </button>
       </div>
 
-      <div className="toolbar">
-        <input placeholder="Поиск по справочнику…" value={query} onChange={(e) => setQuery(e.target.value)} />
-        <select value={categoryFilter} onChange={(e) => setCategoryFilter(e.target.value)}>
+      <form
+        className="toolbar compact"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setPage(1);
+          setAppliedQ(query);
+        }}
+      >
+        <input placeholder="Название, адрес, телефон…" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <select
+          value={categoryFilter}
+          onChange={(e) => {
+            setPage(1);
+            setCategoryFilter(e.target.value);
+          }}
+        >
           <option value="">Все категории</option>
-          {['school', 'hospital', 'shop', 'pharmacy', 'admin', 'bank', 'post', 'transport', 'culture', 'sport', 'other'].map(
-            (c) => (
-              <option key={c} value={c}>
-                {CATEGORY_LABELS[c]}
-              </option>
-            ),
-          )}
+          {DIR_CATEGORIES.map((c) => (
+            <option key={c} value={c}>
+              {CATEGORY_LABELS[c]}
+            </option>
+          ))}
         </select>
         <select
           value={publishedFilter}
-          onChange={(e) => setPublishedFilter(e.target.value as 'all' | 'published' | 'hidden')}
+          onChange={(e) => {
+            setPage(1);
+            setPublishedFilter(e.target.value as 'all' | 'published' | 'hidden');
+          }}
         >
           <option value="all">Все статусы</option>
           <option value="published">Опубликованные</option>
@@ -2100,7 +3612,10 @@ function DirectoryPage() {
         </select>
         <select
           value={settlementFilter === '' ? '' : String(settlementFilter)}
-          onChange={(e) => setSettlementFilter(e.target.value ? Number(e.target.value) : '')}
+          onChange={(e) => {
+            setPage(1);
+            setSettlementFilter(e.target.value ? Number(e.target.value) : '');
+          }}
         >
           <option value="">Все населённые пункты</option>
           {settlements.map((s) => (
@@ -2109,57 +3624,82 @@ function DirectoryPage() {
             </option>
           ))}
         </select>
-      </div>
+        <button className="btn" type="submit">
+          Найти
+        </button>
+      </form>
+      {error && !modalOpen && <p className="error">{error}</p>}
 
-      <div className="list">
-        {items
-          .filter((item) => {
-            if (categoryFilter && item.category !== categoryFilter) return false;
-            if (publishedFilter === 'published' && !item.is_published) return false;
-            if (publishedFilter === 'hidden' && item.is_published) return false;
-            if (settlementFilter !== '' && item.settlement_id !== settlementFilter) return false;
-            if (!query.trim()) return true;
-            const q = query.trim().toLowerCase();
-            return (
-              item.title.toLowerCase().includes(q) ||
-              (item.address || '').toLowerCase().includes(q) ||
-              (item.phone || '').toLowerCase().includes(q) ||
-              (item.settlement_name || '').toLowerCase().includes(q)
-            );
-          })
-          .map((item) => (
-            <article key={item.id} className="row-card">
-              <div className="row-main">
-                <h3 className="row-title">{item.title}</h3>
-                <div className="meta">
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Место</th>
+              <th>Категория</th>
+              <th>Село</th>
+              <th>Телефон</th>
+              <th>Адрес / часы</th>
+              <th>Статус</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.id} className="dir-row" onClick={() => startEdit(item)}>
+                <td>
+                  <div className="audit-who">{item.title}</div>
+                  {item.view_count ? <div className="audit-sub">{item.view_count} откр.</div> : null}
+                </td>
+                <td>
                   <span className="chip">{CATEGORY_LABELS[item.category] || item.category}</span>
-                  <span className="chip neutral">{item.settlement_name || 'без привязки'}</span>
-                  {item.is_published ? <span className="chip ok">Опубликовано</span> : <span className="chip warn">Скрыто</span>}
-                </div>
-                {item.address && <p className="row-body">{item.address}</p>}
-                {item.phone && (
-                  <p className="row-body">
+                </td>
+                <td className="audit-obj">{item.settlement_name || 'без села'}</td>
+                <td onClick={(e) => e.stopPropagation()}>
+                  {item.phone ? (
                     <a href={`tel:${item.phone}`}>{item.phone}</a>
-                  </p>
-                )}
-              </div>
-              <div className="actions">
-                <button className="btn" type="button" onClick={() => startEdit(item)}>
-                  Изменить
-                </button>
-                {item.phone && (
-                  <a className="btn secondary" href={`tel:${item.phone}`}>
-                    Позвонить
-                  </a>
-                )}
-                <button className="btn danger" type="button" onClick={() => remove(item.id)}>
-                  Удалить
-                </button>
-              </div>
-            </article>
-          ))}
-        {!items.length && <div className="empty">Справочник пуст — нажмите «Добавить запись»</div>}
+                  ) : (
+                    <span className="audit-sub">нет</span>
+                  )}
+                </td>
+                <td className="audit-details">
+                  {item.address || '—'}
+                  {item.hours ? <div className="audit-sub">{item.hours}</div> : null}
+                  {safeHttpUrl(item.website) ? (
+                    <div className="audit-sub">
+                      <a href={safeHttpUrl(item.website)} target="_blank" rel="noreferrer" onClick={(e) => e.stopPropagation()}>
+                        сайт
+                      </a>
+                    </div>
+                  ) : null}
+                </td>
+                <td>
+                  {item.is_published ? <span className="chip ok">В приложении</span> : <span className="chip warn">Скрыто</span>}
+                </td>
+                <td onClick={(e) => e.stopPropagation()}>
+                  <div className="actions inline">
+                    <button className="btn" type="button" onClick={() => startEdit(item)}>
+                      Изменить
+                    </button>
+                    <button className="btn danger" type="button" onClick={() => remove(item.id)}>
+                      Удалить
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {!items.length && (
+              <tr>
+                <td colSpan={7} className="empty">
+                  {appliedQ || categoryFilter || publishedFilter !== 'all' || settlementFilter !== ''
+                    ? 'Ничего не найдено'
+                    : 'Справочник пуст — нажмите «Добавить запись»'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
+      <Pager page={safePage} pageCount={pageCount} total={total} onPage={setPage} />
 
       {modalOpen && (
         <div className="modal-backdrop" onClick={closeModal}>
@@ -2174,13 +3714,11 @@ function DirectoryPage() {
                 <label className="field">
                   Категория
                   <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-                    {['school', 'hospital', 'shop', 'pharmacy', 'admin', 'bank', 'post', 'transport', 'culture', 'sport', 'other'].map(
-                      (c) => (
-                        <option key={c} value={c}>
-                          {CATEGORY_LABELS[c]}
-                        </option>
-                      ),
-                    )}
+                    {DIR_CATEGORIES.map((c) => (
+                      <option key={c} value={c}>
+                        {CATEGORY_LABELS[c]}
+                      </option>
+                    ))}
                   </select>
                 </label>
                 <label className="field">
@@ -2260,11 +3798,13 @@ function DirectoryPage() {
 function ChatsModerationPage() {
   const [items, setItems] = useState<AdminConversation[]>([]);
   const [query, setQuery] = useState('');
-  const [flaggedOnly, setFlaggedOnly] = useState(true);
+  const [flaggedOnly, setFlaggedOnly] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [selected, setSelected] = useState<AdminConversation | null>(null);
   const [messages, setMessages] = useState<AdminChatMessage[]>([]);
+  const [page, setPage] = useState(1);
+  const CHAT_PAGE = 25;
 
   async function loadList() {
     const params = new URLSearchParams();
@@ -2284,7 +3824,7 @@ function ChatsModerationPage() {
     loadList()
       .catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'))
       .finally(() => setBusy(false));
-  }, []);
+  }, [flaggedOnly]);
 
   async function refresh() {
     setBusy(true);
@@ -2329,123 +3869,143 @@ function ChatsModerationPage() {
     }
   }
 
+  const chatPageCount = Math.max(1, Math.ceil(items.length / CHAT_PAGE));
+  const chatSafePage = Math.min(page, chatPageCount);
+  const chatPageItems = items.slice((chatSafePage - 1) * CHAT_PAGE, chatSafePage * CHAT_PAGE);
+
   return (
     <div>
       <div className="page-head compact">
         <div>
-          <h1>Чаты по объявлениям</h1>
-          <p>Проверка переписок на спам, ссылки и слова из чёрного списка</p>
+          <h1>Чаты</h1>
+          <p>Переписки по объявлениям: спам, ссылки, чёрный список</p>
         </div>
       </div>
       <form
         className="toolbar compact"
         onSubmit={(e) => {
           e.preventDefault();
+          setPage(1);
           refresh();
         }}
       >
         <input
-          placeholder="Поиск: объявление, имена, текст…"
+          placeholder="Объявление, имена, текст…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
-        <label className="chip neutral" style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+        <label className="check-inline">
           <input type="checkbox" checked={flaggedOnly} onChange={(e) => setFlaggedOnly(e.target.checked)} />
           Только подозрительные
         </label>
         <button className="btn" type="submit" disabled={busy}>
-          {busy ? '…' : 'Обновить'}
+          {busy ? '…' : 'Найти'}
         </button>
       </form>
       {error && <p className="error">{error}</p>}
-      <div className="list compact" style={{ display: 'grid', gridTemplateColumns: selected ? '1fr 1.2fr' : '1fr', gap: 12 }}>
+      <div className="chat-layout">
         <div>
-          {items.map((row) => (
-            <article
-              key={`${row.listing_id}-${row.buyer_id}`}
-              className="row-card compact"
-              style={{
-                outline: selected?.listing_id === row.listing_id && selected?.buyer_id === row.buyer_id ? '2px solid var(--accent, #2a6)' : undefined,
-                cursor: 'pointer',
-              }}
-              onClick={() => openThread(row).catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'))}
-            >
-              <div className="row-main">
-                <h3 className="row-title">{row.listing_title}</h3>
-                <div className="meta">
-                  {row.flagged && <span className="chip danger">Подозрительно</span>}
-                  <span className="chip neutral">{row.message_count} сообщ.</span>
-                  <span className="chip">продавец: {row.seller_name || `#${row.seller_id}`}</span>
-                  <span className="chip">покупатель: {row.buyer_name || `#${row.buyer_id}`}</span>
-                </div>
-                {row.last_message && <p style={{ margin: '6px 0 0', opacity: 0.85 }}>{row.last_message}</p>}
-                {!!row.flag_reasons?.length && (
-                  <div className="meta" style={{ marginTop: 6 }}>
-                    {row.flag_reasons.map((r) => (
-                      <span key={r} className="chip danger">
-                        {r}
-                      </span>
-                    ))}
-                  </div>
+          <div className="table-wrap">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Объявление</th>
+                  <th>Участники</th>
+                  <th>Последнее</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {chatPageItems.map((row) => {
+                  const on = selected?.listing_id === row.listing_id && selected?.buyer_id === row.buyer_id;
+                  return (
+                    <tr
+                      key={`${row.listing_id}-${row.buyer_id}`}
+                      className={`dir-row${on ? ' is-open' : ''}`}
+                      onClick={() => openThread(row).catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'))}
+                    >
+                      <td>
+                        <div className="audit-who">{row.listing_title}</div>
+                        <div className="audit-sub">
+                          {row.message_count} сообщ.
+                          {row.flagged ? ' · подозрительно' : ''}
+                        </div>
+                      </td>
+                      <td className="audit-obj">
+                        {row.seller_name || `#${row.seller_id}`}
+                        <div className="audit-sub">{row.buyer_name || `#${row.buyer_id}`}</div>
+                      </td>
+                      <td className="audit-details">
+                        {row.last_message || '—'}
+                        {row.last_message_at ? (
+                          <div className="audit-sub">{formatAuditWhen(row.last_message_at)}</div>
+                        ) : null}
+                        {!!row.flag_reasons?.length && (
+                          <div className="audit-sub">{row.flag_reasons.join(', ')}</div>
+                        )}
+                      </td>
+                      <td onClick={(e) => e.stopPropagation()}>
+                        <div className="actions inline">
+                          <button
+                            className="btn danger"
+                            type="button"
+                            onClick={() => deleteThread(row)}
+                          >
+                            Удалить
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+                {!items.length && !busy && (
+                  <tr>
+                    <td colSpan={4} className="empty">
+                      Переписок нет
+                    </td>
+                  </tr>
                 )}
-              </div>
-              <div className="actions inline">
-                <button
-                  className="btn danger"
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    deleteThread(row);
-                  }}
-                >
-                  Удалить тред
-                </button>
-              </div>
-            </article>
-          ))}
-          {!items.length && !busy && <div className="empty">Переписок нет</div>}
+              </tbody>
+            </table>
+          </div>
+          <Pager page={chatSafePage} pageCount={chatPageCount} total={items.length} onPage={setPage} />
         </div>
         {selected && (
-          <div className="row-card compact">
-            <div className="page-head compact" style={{ marginBottom: 8 }}>
+          <div className="table-wrap chat-thread">
+            <div className="page-head compact" style={{ padding: '12px 14px 0' }}>
               <div>
-                <h2 style={{ margin: 0, fontSize: '1.1rem' }}>{selected.listing_title}</h2>
-                <p style={{ margin: '4px 0 0' }}>
+                <h2 style={{ margin: 0, fontSize: 16 }}>{selected.listing_title}</h2>
+                <p className="muted" style={{ margin: '4px 0 8px' }}>
                   {selected.seller_name} ↔ {selected.buyer_name}
                 </p>
               </div>
-              <button className="btn ghost" type="button" onClick={() => { setSelected(null); setMessages([]); }}>
+              <button
+                className="btn ghost"
+                type="button"
+                onClick={() => {
+                  setSelected(null);
+                  setMessages([]);
+                }}
+              >
                 Закрыть
               </button>
             </div>
-            <div className="list compact">
+            <div>
               {messages.map((m) => (
-                <article key={m.id} className="row-card compact" style={{ opacity: m.flagged ? 1 : 0.95 }}>
-                  <div className="row-main">
-                    <div className="meta">
-                      <strong>{m.kind === 'call' ? 'Звонок' : (m.sender_name || `#${m.sender_id}`)}</strong>
-                      <span className="chip neutral">{formatDate(m.created_at)}</span>
-                      {m.kind === 'call' && <span className="chip">звонок</span>}
-                      {m.is_read ? <span className="chip">прочитано</span> : <span className="chip neutral">не прочитано</span>}
-                      {m.flagged && <span className="chip danger">Флаг</span>}
-                    </div>
-                    <p style={{ margin: '6px 0 0', whiteSpace: 'pre-wrap' }}>{m.body}</p>
-                    {!!m.flag_reasons?.length && (
-                      <div className="meta" style={{ marginTop: 6 }}>
-                        {m.flag_reasons.map((r) => (
-                          <span key={r} className="chip danger">
-                            {r}
-                          </span>
-                        ))}
-                      </div>
-                    )}
+                <div key={m.id} className={`chat-msg${m.flagged ? ' is-flag' : ''}`}>
+                  <div className="meta">
+                    <strong>{m.kind === 'call' ? 'Звонок' : m.sender_name || `#${m.sender_id}`}</strong>
+                    <span className="chip neutral">{formatAuditWhen(m.created_at)}</span>
+                    {m.kind === 'call' && <span className="chip">звонок</span>}
+                    {m.is_read ? <span className="chip ok">прочитано</span> : <span className="chip neutral">не прочитано</span>}
+                    {m.flagged && <span className="chip danger">флаг</span>}
                   </div>
-                  <div className="actions inline">
-                    <button className="btn danger" type="button" onClick={() => deleteMessage(m.id)}>
-                      Удалить
-                    </button>
-                  </div>
-                </article>
+                  <p style={{ margin: '6px 0 8px', whiteSpace: 'pre-wrap' }}>{m.body}</p>
+                  {!!m.flag_reasons?.length && <div className="audit-sub">{m.flag_reasons.join(', ')}</div>}
+                  <button className="btn danger" type="button" onClick={() => deleteMessage(m.id)}>
+                    Удалить
+                  </button>
+                </div>
               ))}
               {!messages.length && <div className="empty">Сообщений нет</div>}
             </div>
@@ -2456,12 +4016,214 @@ function ChatsModerationPage() {
   );
 }
 
+function ContactsPage() {
+  const [items, setItems] = useState<SiteContact[]>([]);
+  const [total, setTotal] = useState(0);
+  const [status, setStatus] = useState('new');
+  const [query, setQuery] = useState('');
+  const [appliedQ, setAppliedQ] = useState('');
+  const [page, setPage] = useState(1);
+  const [error, setError] = useState('');
+  const [selected, setSelected] = useState<SiteContact | null>(null);
+  const PAGE = 25;
+  const pageCount = Math.max(1, Math.ceil(total / PAGE));
+  const safePage = Math.min(page, pageCount);
+
+  async function load(nextPage = safePage) {
+    const params = new URLSearchParams();
+    params.set('limit', String(PAGE));
+    params.set('offset', String((nextPage - 1) * PAGE));
+    if (status) params.set('status', status);
+    if (appliedQ.trim()) params.set('q', appliedQ.trim());
+    const data = await api<{ items: SiteContact[]; total: number }>(`/admin/contacts?${params}`);
+    setItems(data.items || []);
+    setTotal(data.total || 0);
+  }
+
+  useEffect(() => {
+    load(safePage).catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+  }, [safePage, status, appliedQ]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [status, appliedQ]);
+
+  async function setStatusOf(row: SiteContact, next: 'new' | 'read' | 'done', quiet = false) {
+    try {
+      const updated = await api<SiteContact>(`/admin/contacts/${row.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: next }),
+      });
+      setItems((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
+      if (selected?.id === updated.id) setSelected(updated);
+      if (!quiet && status && updated.status !== status) {
+        await load();
+      }
+      if (!quiet) {
+        pushToast(next === 'done' ? 'Обращение закрыто' : next === 'read' ? 'Прочитано' : 'Снова новое');
+      }
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : 'Ошибка');
+    }
+  }
+
+  async function openRow(row: SiteContact) {
+    setSelected(row);
+    if (row.status === 'new') {
+      await setStatusOf(row, 'read', true);
+    }
+  }
+
+  function statusChip(s: string) {
+    if (s === 'new') return 'chip warn';
+    if (s === 'done') return 'chip ok';
+    return 'chip';
+  }
+
+  function statusLabel(s: string) {
+    if (s === 'new') return 'Новое';
+    if (s === 'read') return 'Прочитано';
+    if (s === 'done') return 'Закрыто';
+    return s;
+  }
+
+  return (
+    <div>
+      <div className="page-head compact">
+        <div>
+          <h1>С сайта</h1>
+          <p>Письма с формы на legac.ru. Почта на info@legac.ru дублируется, если SMTP живой.</p>
+        </div>
+      </div>
+      <form
+        className="toolbar compact"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setPage(1);
+          setAppliedQ(query);
+        }}
+      >
+        <select value={status} onChange={(e) => setStatus(e.target.value)}>
+          <option value="new">Новые</option>
+          <option value="read">Прочитанные</option>
+          <option value="done">Закрытые</option>
+          <option value="">Все</option>
+        </select>
+        <input
+          placeholder="Имя, село, телефон, текст…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+        />
+        <button className="btn" type="submit">
+          Найти
+        </button>
+      </form>
+      {error ? <p className="error">{error}</p> : null}
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Когда</th>
+              <th>Кто</th>
+              <th>Село</th>
+              <th>Текст</th>
+              <th>Статус</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((row) => (
+              <tr key={row.id} className="dir-row" onClick={() => openRow(row)}>
+                <td className="audit-when">{formatAuditWhen(row.created_at)}</td>
+                <td>
+                  <div className="audit-who">{row.name}</div>
+                  {row.phone ? <div className="audit-sub">{row.phone}</div> : null}
+                </td>
+                <td className="audit-obj">{row.settlement || '—'}</td>
+                <td className="audit-details">
+                  {row.message.length > 90 ? `${row.message.slice(0, 90)}…` : row.message}
+                </td>
+                <td>
+                  <span className={statusChip(row.status)}>{statusLabel(row.status)}</span>
+                  <div className="audit-sub">№ {row.id}</div>
+                </td>
+                <td onClick={(e) => e.stopPropagation()}>
+                  <div className="actions inline">
+                    {row.status !== 'done' && (
+                      <button className="btn" type="button" onClick={() => setStatusOf(row, 'done')}>
+                        Закрыть
+                      </button>
+                    )}
+                    {row.status === 'done' && (
+                      <button className="btn ghost" type="button" onClick={() => setStatusOf(row, 'new')}>
+                        Снова новое
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {!items.length && (
+              <tr>
+                <td colSpan={6} className="empty">
+                  {appliedQ || status ? 'Ничего не найдено' : 'Писем с сайта пока нет'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <Pager page={safePage} pageCount={pageCount} total={total} onPage={setPage} />
+
+      {selected && (
+        <div className="modal-backdrop" onClick={() => setSelected(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 'min(560px, 100%)' }}>
+            <h2>Обращение № {selected.id}</h2>
+            <p className="muted" style={{ marginTop: 0 }}>
+              {formatAuditWhen(selected.created_at)} · {selected.settlement || 'село не указано'}
+              {selected.ip ? ` · IP ${selected.ip}` : ''}
+            </p>
+            <p>
+              <strong>{selected.name}</strong>
+              {selected.phone ? (
+                <>
+                  {' · '}
+                  <a href={`tel:${selected.phone}`}>{selected.phone}</a>
+                </>
+              ) : null}
+            </p>
+            <p style={{ whiteSpace: 'pre-wrap' }}>{selected.message}</p>
+            <div className="modal-actions">
+              {selected.status !== 'done' && (
+                <button className="btn" type="button" onClick={() => setStatusOf(selected, 'done')}>
+                  Закрыть обращение
+                </button>
+              )}
+              {selected.status === 'done' && (
+                <button className="btn ghost" type="button" onClick={() => setStatusOf(selected, 'new')}>
+                  Снова новое
+                </button>
+              )}
+              <button className="btn secondary" type="button" onClick={() => setSelected(null)}>
+                Закрыть окно
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BlacklistPage() {
   const [items, setItems] = useState<BlacklistEntry[]>([]);
   const [kind, setKind] = useState<'phone' | 'word'>('word');
+  const [kindFilter, setKindFilter] = useState<'all' | 'phone' | 'word'>('all');
   const [value, setValue] = useState('');
   const [note, setNote] = useState('');
   const [error, setError] = useState('');
+  const [page, setPage] = useState(1);
+  const BL_PAGE = 25;
 
   async function load() {
     setItems(await api<BlacklistEntry[]>('/admin/blacklist'));
@@ -2482,6 +4244,7 @@ function BlacklistPage() {
       setValue('');
       setNote('');
       await load();
+      pushToast('Добавлено в чёрный список');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка');
     }
@@ -2497,6 +4260,19 @@ function BlacklistPage() {
       pushToast(err instanceof Error ? err.message : 'Ошибка');
     }
   }
+
+  const visible = kindFilter === 'all' ? items : items.filter((row) => row.kind === kindFilter);
+  const pageCount = Math.max(1, Math.ceil(visible.length / BL_PAGE));
+  const safePage = Math.min(page, pageCount);
+  const pageItems = visible.slice((safePage - 1) * BL_PAGE, safePage * BL_PAGE);
+
+  useEffect(() => {
+    setPage(1);
+  }, [kindFilter]);
+
+  useEffect(() => {
+    if (page !== safePage) setPage(safePage);
+  }, [page, safePage]);
 
   return (
     <div>
@@ -2521,27 +4297,60 @@ function BlacklistPage() {
         <button className="btn" type="submit">
           Добавить
         </button>
+        <select
+          value={kindFilter}
+          onChange={(e) => setKindFilter(e.target.value as 'all' | 'phone' | 'word')}
+        >
+          <option value="all">Все записи</option>
+          <option value="word">Только слова</option>
+          <option value="phone">Только телефоны</option>
+        </select>
       </form>
       {error && <p className="error">{error}</p>}
-      <div className="list compact">
-        {items.map((row) => (
-          <article key={row.id} className="row-card compact">
-            <div className="row-main">
-              <h3 className="row-title">{row.value}</h3>
-              <div className="meta">
-                <span className="chip">{row.kind === 'phone' ? 'Телефон' : 'Слово'}</span>
-                {row.note && <span className="chip neutral">{row.note}</span>}
-              </div>
-            </div>
-            <div className="actions inline">
-              <button className="btn danger" type="button" onClick={() => remove(row.id)}>
-                Удалить
-              </button>
-            </div>
-          </article>
-        ))}
-        {!items.length && <div className="empty">Список пуст</div>}
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Значение</th>
+              <th>Тип</th>
+              <th>Заметка</th>
+              <th>Добавлено</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {pageItems.map((row) => (
+              <tr key={row.id}>
+                <td>
+                  <div className="audit-who">{row.value}</div>
+                </td>
+                <td>
+                  <span className={row.kind === 'phone' ? 'chip warn' : 'chip'}>
+                    {row.kind === 'phone' ? 'Телефон' : 'Слово'}
+                  </span>
+                </td>
+                <td className="audit-details">{row.note || '—'}</td>
+                <td className="audit-when">{formatAuditWhen(row.created_at)}</td>
+                <td>
+                  <div className="actions inline">
+                    <button className="btn danger" type="button" onClick={() => remove(row.id)}>
+                      Удалить
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {!visible.length && (
+              <tr>
+                <td colSpan={5} className="empty">
+                  {kindFilter !== 'all' ? 'Нет записей этого типа' : 'Список пуст — добавьте слово или телефон'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
+      <Pager page={safePage} pageCount={pageCount} total={visible.length} onPage={setPage} />
     </div>
   );
 }
@@ -2568,41 +4377,56 @@ function UsersPage() {
   const [busy, setBusy] = useState(false);
   const [pushBusy, setPushBusy] = useState(false);
   const [query, setQuery] = useState('');
+  const [appliedQ, setAppliedQ] = useState('');
   const [suspicious, setSuspicious] = useState(false);
   const [pushTitle, setPushTitle] = useState('Рядом56');
   const [pushBody, setPushBody] = useState('');
+  const [page, setPage] = useState(1);
+  const USER_PAGE = 25;
 
-  async function load() {
-    const params = new URLSearchParams();
-    if (query.trim()) params.set('q', query.trim());
-    if (suspicious) params.set('suspicious', '1');
-    const qs = params.toString();
-    const [u, s] = await Promise.all([
-      api<User[]>(`/admin/users${qs ? `?${qs}` : ''}`),
-      api<Settlement[]>('/settlements'),
-    ]);
-    setUsers(u);
+  async function loadSettlements() {
+    const s = await api<Settlement[]>('/settlements');
     setSettlements(s);
     setForm((prev) => (prev.settlement_id ? prev : { ...prev, settlement_id: s[0]?.id || 0 }));
   }
 
-  useEffect(() => {
-    load().catch(console.error);
-  }, [suspicious]);
-
-  async function exportCsv() {
+  async function load() {
     const params = new URLSearchParams();
-    if (query.trim()) params.set('q', query.trim());
+    if (appliedQ.trim()) params.set('q', appliedQ.trim());
     if (suspicious) params.set('suspicious', '1');
     const qs = params.toString();
-    const text = await apiText(`/admin/users/export${qs ? `?${qs}` : ''}`);
-    const blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = suspicious ? 'users-suspicious.csv' : 'users.csv';
-    a.click();
-    URL.revokeObjectURL(url);
+    setUsers(await api<User[]>(`/admin/users${qs ? `?${qs}` : ''}`));
+  }
+
+  useEffect(() => {
+    loadSettlements().catch(console.error);
+  }, []);
+
+  useEffect(() => {
+    load().catch(console.error);
+  }, [appliedQ, suspicious]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [appliedQ, suspicious]);
+
+  async function exportCsv() {
+    try {
+      const params = new URLSearchParams();
+      if (appliedQ.trim()) params.set('q', appliedQ.trim());
+      if (suspicious) params.set('suspicious', '1');
+      const qs = params.toString();
+      const text = await apiText(`/admin/users/export${qs ? `?${qs}` : ''}`);
+      const blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = suspicious ? 'users-suspicious.csv' : 'users.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Не удалось скачать CSV');
+    }
   }
 
   function openCreate() {
@@ -2748,6 +4572,20 @@ function UsersPage() {
     }
   }
 
+  const pageCount = Math.max(1, Math.ceil(users.length / USER_PAGE));
+  const safePage = Math.min(page, pageCount);
+  const pageItems = users.slice((safePage - 1) * USER_PAGE, safePage * USER_PAGE);
+
+  useEffect(() => {
+    if (page !== safePage) setPage(safePage);
+  }, [page, safePage]);
+
+  function roleChip(role: User['role']) {
+    if (role === 'admin') return 'chip warn';
+    if (role === 'moderator' || role === 'editor') return 'chip ok';
+    return 'chip';
+  }
+
   return (
     <div>
       <div className="page-head compact">
@@ -2759,85 +4597,111 @@ function UsersPage() {
           <button className="btn" type="button" onClick={openCreate}>
             Создать пользователя
           </button>
-          <button className="btn secondary" type="button" onClick={() => load().catch(console.error)}>
-            Обновить
-          </button>
           <button className="btn secondary" type="button" onClick={() => exportCsv().catch(console.error)}>
             Экспорт CSV
           </button>
         </div>
       </div>
-
-      <div className="toolbar compact">
+      <form
+        className="toolbar compact"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setPage(1);
+          setAppliedQ(query);
+        }}
+      >
         <input
-          placeholder="Поиск: имя, email, телефон, IP, устройство…"
+          placeholder="Имя, email, телефон, IP, устройство…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') load().catch(console.error);
-          }}
         />
-        <button className="btn" type="button" onClick={() => load().catch(console.error)}>
-          Найти
-        </button>
         <label className="check-inline">
           <input type="checkbox" checked={suspicious} onChange={(e) => setSuspicious(e.target.checked)} />
           Только подозрительные
         </label>
-      </div>
-
-      <div className="list compact">
-        {users.map((u) => (
-          <article key={u.id} className="row-card user-row compact" onClick={() => openEdit(u)}>
-            <div className="row-main">
-              <h3 className="row-title">{u.full_name}</h3>
-              <div className="meta">
-                <span className="chip neutral">{u.email}</span>
-                <span className="chip">{ROLE_LABELS[u.role]}</span>
-                {u.badge ? <span className="chip neutral">{BADGE_LABELS[u.badge] || u.badge}</span> : null}
-                {!u.is_active && <span className="chip danger">Заблокирован</span>}
-                {!u.is_active && u.ban_reason ? <span className="chip warn">{u.ban_reason}</span> : null}
-                {u.has_push ? <span className="chip ok">Пуш</span> : <span className="chip neutral">Без пуша</span>}
-              </div>
-              <div className="device-grid">
-                <div>
-                  <span className="device-label">IP</span>
-                  <strong>{u.last_ip || '—'}</strong>
-                </div>
-                <div>
-                  <span className="device-label">Устройство</span>
-                  <strong>{[u.device_brand, u.device_model].filter(Boolean).join(' ') || '—'}</strong>
-                </div>
-                <div>
-                  <span className="device-label">ОС</span>
-                  <strong>{u.device_os || '—'}</strong>
-                </div>
-                <div>
-                  <span className="device-label">Приложение</span>
-                  <strong>{u.app_version || '—'}</strong>
-                </div>
-                <div>
-                  <span className="device-label">Был(а)</span>
-                  <strong>{formatDate(u.last_seen_at)}</strong>
-                </div>
-              </div>
-            </div>
-            <div className="actions" onClick={(e) => e.stopPropagation()}>
-              <button
-                className="btn ghost"
-                type="button"
-                onClick={() => navigate(`/moderation?authorId=${u.id}`)}
+        <button className="btn" type="submit">
+          Найти
+        </button>
+      </form>
+      {error && !creating && !selected && <p className="error">{error}</p>}
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Человек</th>
+              <th>Село</th>
+              <th>Роль</th>
+              <th>Статус</th>
+              <th>Устройство</th>
+              <th>Был</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {pageItems.map((u) => (
+              <tr
+                key={u.id}
+                className={`dir-row${selected?.id === u.id ? ' is-open' : ''}`}
+                onClick={() => openEdit(u)}
               >
-                Объявления
-              </button>
-              <button className="btn" type="button" onClick={() => openEdit(u)}>
-                Изменить
-              </button>
-            </div>
-          </article>
-        ))}
-        {!users.length && <div className="empty">Пользователи не найдены</div>}
+                <td>
+                  <div className="audit-who">{u.full_name}</div>
+                  <div className="audit-sub">{u.email}</div>
+                  {u.phone ? <div className="audit-sub">{u.phone}</div> : null}
+                </td>
+                <td className="audit-obj">{u.settlement?.display_name || '—'}</td>
+                <td>
+                  <span className={roleChip(u.role)}>{ROLE_LABELS[u.role]}</span>
+                  {u.badge ? (
+                    <div className="audit-sub">{BADGE_LABELS[u.badge] || u.badge}</div>
+                  ) : null}
+                </td>
+                <td>
+                  {u.is_active ? (
+                    <span className="chip ok">Активен</span>
+                  ) : (
+                    <span className="chip danger">Заблокирован</span>
+                  )}
+                  {!u.is_active && u.ban_reason ? <div className="audit-sub">{u.ban_reason}</div> : null}
+                  <div className="audit-sub">{u.has_push ? 'пуш есть' : 'без пуша'}</div>
+                </td>
+                <td className="audit-details">
+                  {u.last_ip || 'нет IP'}
+                  <div className="audit-sub">
+                    {[u.device_brand, u.device_model].filter(Boolean).join(' ') || 'нет устройства'}
+                  </div>
+                  {(u.device_os || u.app_version) && (
+                    <div className="audit-sub">{[u.device_os, u.app_version].filter(Boolean).join(' · ')}</div>
+                  )}
+                </td>
+                <td className="audit-when">{formatAuditWhen(u.last_seen_at)}</td>
+                <td onClick={(e) => e.stopPropagation()}>
+                  <div className="actions inline">
+                    <button
+                      className="btn ghost"
+                      type="button"
+                      onClick={() => navigate(`/listings?authorId=${u.id}`)}
+                    >
+                      Объявления
+                    </button>
+                    <button className="btn" type="button" onClick={() => openEdit(u)}>
+                      Изменить
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {!users.length && (
+              <tr>
+                <td colSpan={7} className="empty">
+                  {appliedQ || suspicious ? 'Ничего не найдено' : 'Пользователей пока нет'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
+      <Pager page={safePage} pageCount={pageCount} total={users.length} onPage={setPage} />
 
       {(creating || selected) && (
         <div className="modal-backdrop" onClick={closeEditor}>
@@ -3040,7 +4904,7 @@ function UsersPage() {
                   onClick={() => {
                     const id = selected.id;
                     closeEditor();
-                    navigate(`/moderation?authorId=${id}`);
+                    navigate(`/listings?authorId=${id}`);
                   }}
                 >
                   Объявления
@@ -3088,7 +4952,14 @@ const EMPTY_EVENT: EventForm = {
   publish_at: '',
 };
 
+const EVENT_PAGE_SIZE = 10;
+
 function EventsPage() {
+  const [searchParams] = useSearchParams();
+  const statusParam = searchParams.get('status');
+  const upcomingParam = searchParams.get('upcoming') === '1' || searchParams.get('upcoming') === 'true';
+  const idParam = searchParams.get('id');
+  const openedFromUrl = useRef<string | null>(null);
   const [items, setItems] = useState<EventItem[]>([]);
   const [settlements, setSettlements] = useState<Settlement[]>([]);
   const [form, setForm] = useState<EventForm>(EMPTY_EVENT);
@@ -3099,12 +4970,23 @@ function EventsPage() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'all' | 'draft' | 'scheduled' | 'published'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'draft' | 'scheduled' | 'published'>(() => {
+    if (upcomingParam) return 'published';
+    if (statusParam === 'draft' || statusParam === 'scheduled' || statusParam === 'published') return statusParam;
+    return 'all';
+  });
+  const [page, setPage] = useState(1);
 
   async function load() {
-    const qs = statusFilter === 'all' ? '?limit=500' : `?status=${statusFilter}&limit=500`;
+    const params = new URLSearchParams({ limit: '500' });
+    if (upcomingParam) {
+      params.set('upcoming', 'true');
+      params.set('status', 'published');
+    } else if (statusFilter !== 'all') {
+      params.set('status', statusFilter);
+    }
     const [ev, s] = await Promise.all([
-      api<EventItem[] | { items: EventItem[] }>(`/events${qs}`),
+      api<EventItem[] | { items: EventItem[] }>(`/events?${params}`),
       api<Settlement[]>('/settlements'),
     ]);
     setItems(asItems(ev));
@@ -3112,8 +4994,39 @@ function EventsPage() {
   }
 
   useEffect(() => {
+    if (upcomingParam) setStatusFilter('published');
+    else if (statusParam === 'draft' || statusParam === 'scheduled' || statusParam === 'published') {
+      setStatusFilter(statusParam);
+    }
+  }, [statusParam, upcomingParam]);
+
+  useEffect(() => {
     load().catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
-  }, [statusFilter]);
+  }, [statusFilter, upcomingParam]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter(
+      (item) =>
+        item.title.toLowerCase().includes(q) ||
+        item.place_text.toLowerCase().includes(q) ||
+        (item.settlement_name || '').toLowerCase().includes(q) ||
+        (item.address || '').toLowerCase().includes(q),
+    );
+  }, [items, query]);
+
+  const pageCount = Math.max(1, Math.ceil(filtered.length / EVENT_PAGE_SIZE));
+  const safePage = Math.min(page, pageCount);
+  const visible = filtered.slice((safePage - 1) * EVENT_PAGE_SIZE, safePage * EVENT_PAGE_SIZE);
+
+  useEffect(() => {
+    setPage(1);
+  }, [query, statusFilter]);
+
+  useEffect(() => {
+    if (page !== safePage) setPage(safePage);
+  }, [page, safePage]);
 
   function openCreate() {
     setEditingId(null);
@@ -3142,6 +5055,28 @@ function EventsPage() {
     setError('');
     setModalOpen(true);
   }
+
+  useEffect(() => {
+    if (!idParam) {
+      openedFromUrl.current = null;
+      return;
+    }
+    if (openedFromUrl.current === idParam) return;
+    const id = Number(idParam);
+    if (!Number.isFinite(id)) return;
+    const found = items.find((x) => x.id === id);
+    if (found) {
+      openedFromUrl.current = idParam;
+      startEdit(found);
+      return;
+    }
+    api<EventItem>(`/events/${id}`)
+      .then((item) => {
+        openedFromUrl.current = idParam;
+        startEdit(item);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+  }, [idParam, items]);
 
   function closeModal() {
     if (busy) return;
@@ -3200,15 +5135,19 @@ function EventsPage() {
 
   async function remove(id: number) {
     if (!(await confirmAction('Удалить событие? Это действие нельзя отменить.'))) return;
-    await api(`/events/${id}`, { method: 'DELETE' });
-    if (editingId === id) closeModal();
-    await load();
-    pushToast('Событие удалено');
+    try {
+      await api(`/events/${id}`, { method: 'DELETE' });
+      if (editingId === id) closeModal();
+      await load();
+      pushToast('Событие удалено');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    }
   }
 
   return (
     <div>
-      <div className="page-head">
+      <div className="page-head compact">
         <div>
           <h1>Афиша</h1>
           <p>События района для вкладки «Афиша» в приложении</p>
@@ -3217,7 +5156,7 @@ function EventsPage() {
           Добавить событие
         </button>
       </div>
-      <div className="toolbar">
+      <div className="toolbar compact">
         <input placeholder="Поиск…" value={query} onChange={(e) => setQuery(e.target.value)} />
         <select
           value={statusFilter}
@@ -3230,30 +5169,28 @@ function EventsPage() {
         </select>
       </div>
       {error && !modalOpen && <p className="error">{error}</p>}
-      <div className="list">
-        {items
-          .filter((item) => {
-            if (!query.trim()) return true;
-            const q = query.trim().toLowerCase();
-            return (
-              item.title.toLowerCase().includes(q) ||
-              item.place_text.toLowerCase().includes(q) ||
-              (item.settlement_name || '').toLowerCase().includes(q)
-            );
-          })
-          .map((item) => (
-            <article key={item.id} className="row-card">
-              {item.cover_url && (
-                <img
-                  src={mediaUrl(item.cover_url)}
-                  alt=""
-                  style={{ width: 72, height: 72, objectFit: 'cover', borderRadius: 10, border: '1px solid var(--line)' }}
-                />
-              )}
+      <div className="list compact">
+        {visible.map((item) => {
+          const extra = extraSeanceCount(item.description);
+          const preview = eventPreview(item.description);
+          return (
+            <article
+              key={item.id}
+              className="row-card compact event-card"
+              onClick={() => startEdit(item)}
+            >
+              <div className="event-cover">
+                {item.cover_url ? (
+                  <img src={mediaUrl(item.cover_url)} alt="" />
+                ) : (
+                  <div className="event-cover-empty">Нет фото</div>
+                )}
+              </div>
               <div className="row-main">
                 <h3 className="row-title">{item.title}</h3>
                 <div className="meta">
-                  <span className="chip">{formatDate(item.starts_at)}</span>
+                  <span className="chip">{formatEventWhen(item.starts_at, item.ends_at)}</span>
+                  {extra > 0 && <span className="chip neutral">ещё {extra} дат</span>}
                   <span className="chip neutral">{item.place_text}</span>
                   {item.settlement_name && <span className="chip neutral">{item.settlement_name}</span>}
                   <span
@@ -3261,13 +5198,13 @@ function EventsPage() {
                   >
                     {EVENT_STATUS_LABELS[item.status || ''] || (item.is_published ? 'Опубликовано' : 'Черновик')}
                   </span>
-                  {item.view_count != null && (
-                    <span className="chip neutral">просмотры: {item.view_count}</span>
+                  {item.view_count != null && item.view_count > 0 && (
+                    <span className="chip neutral">{item.view_count} просм.</span>
                   )}
                 </div>
-                <p className="row-body">{item.description.length > 160 ? `${item.description.slice(0, 160)}…` : item.description}</p>
+                {preview ? <p className="row-body">{preview}</p> : null}
               </div>
-              <div className="actions">
+              <div className="actions inline" onClick={(e) => e.stopPropagation()}>
                 <button className="btn" type="button" onClick={() => startEdit(item)}>
                   Изменить
                 </button>
@@ -3276,9 +5213,11 @@ function EventsPage() {
                 </button>
               </div>
             </article>
-          ))}
-        {!items.length && <div className="empty">Событий пока нет</div>}
+          );
+        })}
+        {!filtered.length && <div className="empty">{query.trim() ? 'Ничего не найдено' : 'Событий пока нет'}</div>}
       </div>
+      <Pager page={safePage} pageCount={pageCount} total={filtered.length} onPage={setPage} />
 
       {modalOpen && (
         <div className="modal-backdrop" onClick={closeModal}>
@@ -3401,21 +5340,36 @@ function EventsPage() {
   );
 }
 
-const DAYS_MODE_LABELS: Record<string, string> = {
-  all: 'Все дни',
-  weekdays: 'Будни',
-  weekends: 'Выходные',
+const TRANSPORT_PAGE_SIZE = 25;
+const WEEK_DAYS = [
+  { id: 'mon', short: 'Пн' },
+  { id: 'tue', short: 'Вт' },
+  { id: 'wed', short: 'Ср' },
+  { id: 'thu', short: 'Чт' },
+  { id: 'fri', short: 'Пт' },
+  { id: 'sat', short: 'Сб' },
+  { id: 'sun', short: 'Вс' },
+] as const;
+const ALL_DAYS = WEEK_DAYS.map((d) => d.id);
+const WEEKDAY_IDS = ALL_DAYS.slice(0, 5);
+const WEEKEND_IDS = ALL_DAYS.slice(5);
+
+type TripDraft = {
+  depart: string;
+  arrive: string;
+  days: string[];
 };
 
 type TransportForm = {
-  title: string;
-  route_number: string;
+  fromName: string;
+  toName: string;
+  via: TransportStop[];
+  viaDraft: string;
+  trips: TripDraft[];
+  tripDays: string[];
+  departDraft: string;
+  arriveDraft: string;
   description: string;
-  schedule_text: string;
-  schedule_weekdays: string;
-  schedule_weekends: string;
-  stops_text: string;
-  days_mode: 'all' | 'weekdays' | 'weekends';
   notes: string;
   fare_text: string;
   phone: string;
@@ -3424,14 +5378,15 @@ type TransportForm = {
 };
 
 const EMPTY_TRANSPORT: TransportForm = {
-  title: '',
-  route_number: '',
+  fromName: '',
+  toName: '',
+  via: [],
+  viaDraft: '',
+  trips: [],
+  tripDays: [...ALL_DAYS],
+  departDraft: '',
+  arriveDraft: '',
   description: '',
-  schedule_text: '',
-  schedule_weekdays: '',
-  schedule_weekends: '',
-  stops_text: '',
-  days_mode: 'all',
   notes: '',
   fare_text: '',
   phone: '',
@@ -3439,48 +5394,146 @@ const EMPTY_TRANSPORT: TransportForm = {
   is_published: true,
 };
 
+function sameDays(a: string[], b: string[]) {
+  return a.length === b.length && a.every((id) => b.includes(id));
+}
+
+function daysLabel(days: string[]) {
+  if (sameDays(days, ALL_DAYS)) return 'все дни';
+  if (sameDays(days, WEEKDAY_IDS)) return 'будни';
+  if (sameDays(days, WEEKEND_IDS)) return 'выходные';
+  return WEEK_DAYS.filter((d) => days.includes(d.id))
+    .map((d) => d.short)
+    .join(', ');
+}
+
+function tripStamp(trip: { depart: string; arrive?: string | null }) {
+  return trip.arrive ? `${trip.depart} → ${trip.arrive}` : trip.depart;
+}
+
+function tripCaption(trip: { depart: string; arrive?: string | null; days: string[]; days_label?: string }) {
+  return `${trip.days_label || daysLabel(trip.days)} ${tripStamp(trip)}`;
+}
+
+function parseTimesFromText(text: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const re = /\b([01]?\d|2[0-3])[:.]([0-5]\d)\b/g;
+  let match: RegExpExecArray | null;
+  while ((match = re.exec(text || ''))) {
+    const stamp = `${String(Number(match[1])).padStart(2, '0')}:${match[2]}`;
+    if (!seen.has(stamp)) {
+      seen.add(stamp);
+      out.push(stamp);
+    }
+  }
+  return out.sort();
+}
+
+function tripsFromItem(item: TransportRoute): TripDraft[] {
+  if (item.trips?.length) {
+    return item.trips.map((trip) => ({
+      depart: trip.depart,
+      arrive: trip.arrive || '',
+      days: trip.days?.length ? [...trip.days] : [...ALL_DAYS],
+    }));
+  }
+  const times = item.times?.length ? item.times : parseTimesFromText(item.schedule_text);
+  return times.map((stamp) => {
+    const parts = stamp.split('→').map((s) => s.trim());
+    return { depart: parts[0]?.slice(0, 5) || stamp, arrive: parts[1]?.slice(0, 5) || '', days: [...ALL_DAYS] };
+  });
+}
+
+function routePoints(item: TransportRoute): { id: number; name: string }[] {
+  if (item.stop_points && item.stop_points.length) {
+    return item.stop_points.map((p) => ({ id: p.id, name: p.name }));
+  }
+  return (item.stops || []).map((name) => ({ id: 0, name }));
+}
+
 function TransportPage() {
   const [items, setItems] = useState<TransportRoute[]>([]);
+  const [total, setTotal] = useState(0);
   const [settlements, setSettlements] = useState<Settlement[]>([]);
+  const [catalog, setCatalog] = useState<TransportStop[]>([]);
   const [form, setForm] = useState<TransportForm>(EMPTY_TRANSPORT);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [modalOpen, setModalOpen] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
+  const [appliedQ, setAppliedQ] = useState('');
   const [publishedFilter, setPublishedFilter] = useState<'all' | 'published' | 'hidden'>('all');
+  const [settlementFilter, setSettlementFilter] = useState<number | ''>('');
+  const [page, setPage] = useState(1);
 
-  async function load() {
-    const [routes, s] = await Promise.all([
-      api<TransportRoute[] | { items: TransportRoute[] }>('/transport?limit=500'),
-      api<Settlement[]>('/settlements'),
-    ]);
-    setItems(asItems(routes));
-    setSettlements(s);
+  const pageCount = Math.max(1, Math.ceil(total / TRANSPORT_PAGE_SIZE));
+  const safePage = Math.min(page, pageCount);
+  const previewTitle =
+    form.fromName.trim() && form.toName.trim()
+      ? `${form.fromName.trim()} → ${form.toName.trim()}`
+      : 'Откуда → куда';
+
+  async function loadCatalog() {
+    setCatalog(await api<TransportStop[]>('/transport/stops'));
+  }
+
+  async function loadSettlements() {
+    setSettlements(await api<Settlement[]>('/settlements'));
+  }
+
+  async function load(nextPage = safePage) {
+    const params = new URLSearchParams();
+    params.set('limit', String(TRANSPORT_PAGE_SIZE));
+    params.set('offset', String((nextPage - 1) * TRANSPORT_PAGE_SIZE));
+    if (appliedQ.trim()) params.set('q', appliedQ.trim());
+    if (settlementFilter !== '') params.set('settlement_id', String(settlementFilter));
+    if (publishedFilter === 'published') params.set('published', 'true');
+    if (publishedFilter === 'hidden') params.set('published', 'false');
+    const data = await api<{ items: TransportRoute[]; total: number }>(`/transport?${params}`);
+    setItems(data.items || []);
+    setTotal(data.total || 0);
   }
 
   useEffect(() => {
-    load().catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+    loadSettlements().catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+    loadCatalog().catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    load(safePage).catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+  }, [safePage, appliedQ, publishedFilter, settlementFilter]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [appliedQ, publishedFilter, settlementFilter]);
+
+  useEffect(() => {
+    if (page !== safePage) setPage(safePage);
+  }, [page, safePage]);
 
   function openCreate() {
     setEditingId(null);
     setForm(EMPTY_TRANSPORT);
     setError('');
     setModalOpen(true);
+    loadCatalog().catch(() => undefined);
   }
 
   function startEdit(item: TransportRoute) {
+    const points = routePoints(item);
     setEditingId(item.id);
     setForm({
-      title: item.title,
-      route_number: item.route_number || '',
+      fromName: points[0]?.name || '',
+      toName: points.length > 1 ? points[points.length - 1].name : '',
+      via: points.slice(1, -1).map((p) => ({ id: p.id, name: p.name, created_at: '' })),
+      viaDraft: '',
+      trips: tripsFromItem(item),
+      tripDays: [...ALL_DAYS],
+      departDraft: '',
+      arriveDraft: '',
       description: item.description || '',
-      schedule_text: item.schedule_text,
-      schedule_weekdays: item.schedule_weekdays || '',
-      schedule_weekends: item.schedule_weekends || '',
-      stops_text: item.stops_text || '',
-      days_mode: (item.days_mode as TransportForm['days_mode']) || 'all',
       notes: item.notes || '',
       fare_text: item.fare_text || '',
       phone: item.phone || '',
@@ -3489,45 +5542,134 @@ function TransportPage() {
     });
     setError('');
     setModalOpen(true);
+    loadCatalog().catch(() => undefined);
   }
 
   function closeModal() {
     if (busy) return;
     setModalOpen(false);
+    setEditingId(null);
+    setForm(EMPTY_TRANSPORT);
+    setError('');
+  }
+
+  async function resolveStop(name: string): Promise<TransportStop> {
+    const trimmed = name.trim();
+    if (trimmed.length < 2) throw new Error('Название остановки слишком короткое');
+    const found = catalog.find((s) => s.name.toLowerCase() === trimmed.toLowerCase());
+    if (found) return found;
+    const created = await api<TransportStop>('/transport/stops', {
+      method: 'POST',
+      body: JSON.stringify({ name: trimmed }),
+    });
+    setCatalog((prev) => {
+      if (prev.some((s) => s.id === created.id)) return prev;
+      return [...prev, created].sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    });
+    return created;
+  }
+
+  async function addVia() {
+    const name = form.viaDraft.trim();
+    if (!name) return;
+    try {
+      const stop = await resolveStop(name);
+      const used = [form.fromName, form.toName, ...form.via.map((s) => s.name)].map((s) => s.trim().toLowerCase());
+      if (used.includes(stop.name.toLowerCase())) {
+        setError('Эта остановка уже есть в маршруте');
+        return;
+      }
+      setForm({ ...form, via: [...form.via, stop], viaDraft: '' });
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    }
+  }
+
+  function moveVia(index: number, dir: -1 | 1) {
+    const next = [...form.via];
+    const target = index + dir;
+    if (target < 0 || target >= next.length) return;
+    [next[index], next[target]] = [next[target], next[index]];
+    setForm({ ...form, via: next });
+  }
+
+  function toggleTripDay(id: string) {
+    const on = form.tripDays.includes(id);
+    const next = on ? form.tripDays.filter((d) => d !== id) : [...form.tripDays, id];
+    setForm({ ...form, tripDays: ALL_DAYS.filter((d) => next.includes(d)) });
+  }
+
+  function addTrip() {
+    const depart = form.departDraft.trim().slice(0, 5);
+    const arrive = form.arriveDraft.trim().slice(0, 5);
+    if (!/^\d{2}:\d{2}$/.test(depart) || !/^\d{2}:\d{2}$/.test(arrive)) {
+      setError('Укажите время отправления и прибытия');
+      return;
+    }
+    if (!form.tripDays.length) {
+      setError('Выберите дни следования');
+      return;
+    }
+    const days = ALL_DAYS.filter((d) => form.tripDays.includes(d));
+    const exists = form.trips.some(
+      (t) => t.depart === depart && t.arrive === arrive && sameDays(t.days, days),
+    );
+    if (exists) {
+      setForm({ ...form, departDraft: '', arriveDraft: '' });
+      return;
+    }
+    const trips = [...form.trips, { depart, arrive, days }].sort((a, b) => a.depart.localeCompare(b.depart));
+    setForm({ ...form, trips, departDraft: '', arriveDraft: '' });
     setError('');
   }
 
   async function saveItem(e: React.FormEvent) {
     e.preventDefault();
     if (busy) return;
-    if (!form.title.trim() || form.schedule_text.trim().length < 3) {
-      setError('Укажите название и расписание');
+    if (!form.fromName.trim() || !form.toName.trim()) {
+      setError('Укажите откуда и куда');
+      return;
+    }
+    if (form.fromName.trim().toLowerCase() === form.toName.trim().toLowerCase()) {
+      setError('Откуда и куда должны отличаться');
+      return;
+    }
+    if (!form.trips.length) {
+      setError('Добавьте хотя бы один рейс');
       return;
     }
     setBusy(true);
     setError('');
-    const body = {
-      title: form.title.trim(),
-      route_number: form.route_number.trim() || null,
-      description: form.description.trim() || null,
-      schedule_text: form.schedule_text.trim(),
-      schedule_weekdays: form.schedule_weekdays.trim() || null,
-      schedule_weekends: form.schedule_weekends.trim() || null,
-      stops_text: form.stops_text.trim() || null,
-      days_mode: form.days_mode,
-      notes: form.notes.trim() || null,
-      fare_text: form.fare_text.trim() || null,
-      phone: form.phone.trim() || null,
-      settlement_id: form.settlement_id === '' ? null : Number(form.settlement_id),
-      is_published: form.is_published,
-    };
     try {
+      const from = await resolveStop(form.fromName);
+      const to = await resolveStop(form.toName);
+      const viaStops: TransportStop[] = [];
+      for (const stop of form.via) {
+        viaStops.push(stop.id ? stop : await resolveStop(stop.name));
+      }
+      const body = {
+        stop_ids: [from.id, ...viaStops.map((s) => s.id), to.id],
+        trips: form.trips.map((t) => ({
+          depart: t.depart,
+          arrive: t.arrive || null,
+          days: t.days,
+        })),
+        description: form.description.trim() || null,
+        notes: form.notes.trim() || null,
+        fare_text: form.fare_text.trim() || null,
+        phone: form.phone.trim() || null,
+        settlement_id: form.settlement_id === '' ? null : Number(form.settlement_id),
+        is_published: form.is_published,
+      };
       if (editingId) {
         await api(`/transport/${editingId}`, { method: 'PATCH', body: JSON.stringify(body) });
       } else {
         await api('/transport', { method: 'POST', body: JSON.stringify(body) });
       }
       setModalOpen(false);
+      setEditingId(null);
+      setForm(EMPTY_TRANSPORT);
       await load();
       pushToast(editingId ? 'Маршрут обновлён' : 'Маршрут создан');
     } catch (err) {
@@ -3539,99 +5681,298 @@ function TransportPage() {
 
   async function remove(id: number) {
     if (!(await confirmAction('Удалить маршрут?'))) return;
-    await api(`/transport/${id}`, { method: 'DELETE' });
-    if (editingId === id) closeModal();
-    await load();
-    pushToast('Маршрут удалён');
+    try {
+      await api(`/transport/${id}`, { method: 'DELETE' });
+      if (editingId === id) closeModal();
+      await load();
+      pushToast('Маршрут удалён');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    }
   }
 
   return (
     <div>
-      <div className="page-head">
+      <div className="page-head compact">
         <div>
           <h1>Транспорт</h1>
-          <p>Статические расписания автобусов и маршруток</p>
+          <p>Маршрут — откуда и куда. Время и остановки добавляются по одному.</p>
         </div>
         <button className="btn" type="button" onClick={openCreate}>
           Добавить маршрут
         </button>
       </div>
-      <div className="toolbar">
-        <input placeholder="Поиск…" value={query} onChange={(e) => setQuery(e.target.value)} />
+      <form
+        className="toolbar compact"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setPage(1);
+          setAppliedQ(query);
+        }}
+      >
+        <input placeholder="Остановка, село…" value={query} onChange={(e) => setQuery(e.target.value)} />
         <select
           value={publishedFilter}
-          onChange={(e) => setPublishedFilter(e.target.value as 'all' | 'published' | 'hidden')}
+          onChange={(e) => {
+            setPage(1);
+            setPublishedFilter(e.target.value as 'all' | 'published' | 'hidden');
+          }}
         >
           <option value="all">Все статусы</option>
           <option value="published">Опубликованные</option>
           <option value="hidden">Скрытые</option>
         </select>
-      </div>
-      {error && !modalOpen && <p className="error">{error}</p>}
-      <div className="list">
-        {items
-          .filter((item) => {
-            if (publishedFilter === 'published' && !item.is_published) return false;
-            if (publishedFilter === 'hidden' && item.is_published) return false;
-            if (!query.trim()) return true;
-            const q = query.trim().toLowerCase();
-            return (
-              item.title.toLowerCase().includes(q) ||
-              (item.route_number || '').toLowerCase().includes(q) ||
-              (item.settlement_name || '').toLowerCase().includes(q)
-            );
-          })
-          .map((item) => (
-            <article key={item.id} className="row-card">
-              <div className="row-main">
-                <h3 className="row-title">
-                  {item.route_number ? `${item.route_number} · ` : ''}
-                  {item.title}
-                </h3>
-                <div className="meta">
-                  {item.settlement_name && <span className="chip neutral">{item.settlement_name}</span>}
-                  <span className="chip neutral">{DAYS_MODE_LABELS[item.days_mode || 'all'] || item.days_mode}</span>
-                  {item.is_published ? <span className="chip ok">Опубликовано</span> : <span className="chip warn">Скрыто</span>}
-                  {item.view_count != null && (
-                    <span className="chip neutral">просмотры: {item.view_count}</span>
-                  )}
-                  <span className="chip neutral">обн. {formatDate(item.updated_at)}</span>
-                </div>
-                <p className="row-body" style={{ whiteSpace: 'pre-wrap' }}>
-                  {item.schedule_text.length > 180 ? `${item.schedule_text.slice(0, 180)}…` : item.schedule_text}
-                </p>
-              </div>
-              <div className="actions">
-                <button className="btn" type="button" onClick={() => startEdit(item)}>
-                  Изменить
-                </button>
-                <button className="btn danger" type="button" onClick={() => remove(item.id)}>
-                  Удалить
-                </button>
-              </div>
-            </article>
+        <select
+          value={settlementFilter === '' ? '' : String(settlementFilter)}
+          onChange={(e) => {
+            setPage(1);
+            setSettlementFilter(e.target.value ? Number(e.target.value) : '');
+          }}
+        >
+          <option value="">Все населённые пункты</option>
+          {settlements.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.display_name}
+            </option>
           ))}
-        {!items.length && <div className="empty">Маршрутов пока нет</div>}
+        </select>
+        <button className="btn" type="submit">
+          Найти
+        </button>
+      </form>
+      {error && !modalOpen && <p className="error">{error}</p>}
+
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Маршрут</th>
+              <th>Остановки</th>
+              <th>Рейсы</th>
+              <th>Село</th>
+              <th>Статус</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item) => {
+              const points = routePoints(item);
+              const trips = item.trips?.length ? item.trips : tripsFromItem(item);
+              return (
+                <tr key={item.id} className="dir-row" onClick={() => startEdit(item)}>
+                  <td>
+                    <div className="audit-who">{item.title}</div>
+                    {item.next_departure ? <div className="audit-sub">ближайший {item.next_departure}</div> : null}
+                  </td>
+                  <td className="audit-details">
+                    {points.length ? points.map((p) => p.name).join(' · ') : '—'}
+                  </td>
+                  <td>
+                    <div className="time-chips compact">
+                      {trips.slice(0, 4).map((t) => (
+                        <span key={tripCaption(t)} className="time-chip">
+                          {tripCaption(t)}
+                        </span>
+                      ))}
+                      {trips.length > 4 ? <span className="audit-sub">+{trips.length - 4}</span> : null}
+                    </div>
+                  </td>
+                  <td className="audit-obj">{item.settlement_name || '—'}</td>
+                  <td>
+                    {item.is_published ? <span className="chip ok">В приложении</span> : <span className="chip warn">Скрыто</span>}
+                  </td>
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <div className="actions inline">
+                      <button className="btn" type="button" onClick={() => startEdit(item)}>
+                        Изменить
+                      </button>
+                      <button className="btn danger" type="button" onClick={() => remove(item.id)}>
+                        Удалить
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              );
+            })}
+            {!items.length && (
+              <tr>
+                <td colSpan={6} className="empty">
+                  {appliedQ || publishedFilter !== 'all' || settlementFilter !== ''
+                    ? 'Ничего не найдено'
+                    : 'Маршрутов пока нет — нажмите «Добавить маршрут»'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
+      <Pager page={safePage} pageCount={pageCount} total={total} onPage={setPage} />
 
       {modalOpen && (
         <div className="modal-backdrop" onClick={closeModal}>
           <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 'min(720px, 100%)' }}>
             <h2>{editingId ? 'Редактировать маршрут' : 'Новый маршрут'}</h2>
+            <p className="route-preview">{previewTitle}</p>
             <form onSubmit={saveItem}>
+              <datalist id="transport-stop-catalog">
+                {catalog.map((s) => (
+                  <option key={s.id} value={s.name} />
+                ))}
+              </datalist>
               <div className="grid2">
                 <label className="field">
-                  Название
-                  <input required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-                </label>
-                <label className="field">
-                  Номер / тип
+                  Откуда
                   <input
-                    value={form.route_number}
-                    onChange={(e) => setForm({ ...form, route_number: e.target.value })}
-                    placeholder="112 / м/т"
+                    required
+                    list="transport-stop-catalog"
+                    value={form.fromName}
+                    onChange={(e) => setForm({ ...form, fromName: e.target.value })}
+                    placeholder="Сакмара"
                   />
                 </label>
+                <label className="field">
+                  Куда
+                  <input
+                    required
+                    list="transport-stop-catalog"
+                    value={form.toName}
+                    onChange={(e) => setForm({ ...form, toName: e.target.value })}
+                    placeholder="Оренбург"
+                  />
+                </label>
+                <div className="field full">
+                  <span>Промежуточные остановки</span>
+                  <div className="stop-stack">
+                    {form.via.map((stop, index) => (
+                      <div key={`${stop.id}-${stop.name}-${index}`} className="stop-item">
+                        <span className="stop-label">ещё</span>
+                        <span>{stop.name}</span>
+                        <div className="stop-item-actions">
+                          <button type="button" className="btn ghost" disabled={index === 0} onClick={() => moveVia(index, -1)}>
+                            ↑
+                          </button>
+                          <button
+                            type="button"
+                            className="btn ghost"
+                            disabled={index === form.via.length - 1}
+                            onClick={() => moveVia(index, 1)}
+                          >
+                            ↓
+                          </button>
+                          <button
+                            type="button"
+                            className="btn ghost"
+                            onClick={() => setForm({ ...form, via: form.via.filter((_, i) => i !== index) })}
+                          >
+                            ×
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="picker-row">
+                    <input
+                      list="transport-stop-catalog"
+                      value={form.viaDraft}
+                      onChange={(e) => setForm({ ...form, viaDraft: e.target.value })}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          addVia();
+                        }
+                      }}
+                      placeholder="Добавить остановку по пути"
+                    />
+                    <button className="btn secondary" type="button" onClick={addVia}>
+                      Добавить
+                    </button>
+                  </div>
+                  <p className="field-hint">Новое имя сохранится в общую базу и подставится в следующих маршрутах.</p>
+                </div>
+                <div className="field full">
+                  <span>Рейсы</span>
+                  <div className="time-chips">
+                    {form.trips.map((trip, index) => (
+                      <span key={`${tripCaption(trip)}-${index}`} className="time-chip">
+                        {tripCaption(trip)}
+                        <button
+                          type="button"
+                          aria-label={`Убрать ${tripCaption(trip)}`}
+                          onClick={() => setForm({ ...form, trips: form.trips.filter((_, i) => i !== index) })}
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                    {!form.trips.length && (
+                      <span className="audit-sub">Пока пусто — дни, отправление, прибытие и «Добавить рейс»</span>
+                    )}
+                  </div>
+                  <div className="day-presets">
+                    <button
+                      type="button"
+                      className={`day-pick${sameDays(form.tripDays, ALL_DAYS) ? ' is-on' : ''}`}
+                      onClick={() => setForm({ ...form, tripDays: [...ALL_DAYS] })}
+                    >
+                      Все дни
+                    </button>
+                    <button
+                      type="button"
+                      className={`day-pick${sameDays(form.tripDays, WEEKDAY_IDS) ? ' is-on' : ''}`}
+                      onClick={() => setForm({ ...form, tripDays: [...WEEKDAY_IDS] })}
+                    >
+                      Будни
+                    </button>
+                    <button
+                      type="button"
+                      className={`day-pick${sameDays(form.tripDays, WEEKEND_IDS) ? ' is-on' : ''}`}
+                      onClick={() => setForm({ ...form, tripDays: [...WEEKEND_IDS] })}
+                    >
+                      Выходные
+                    </button>
+                  </div>
+                  <div className="day-picks">
+                    {WEEK_DAYS.map((day) => (
+                      <button
+                        key={day.id}
+                        type="button"
+                        className={`day-pick${form.tripDays.includes(day.id) ? ' is-on' : ''}`}
+                        onClick={() => toggleTripDay(day.id)}
+                      >
+                        {day.short}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="trip-add">
+                    <label className="field">
+                      Отправление
+                      <input
+                        type="time"
+                        step={60}
+                        value={form.departDraft}
+                        onChange={(e) => setForm({ ...form, departDraft: e.target.value })}
+                      />
+                    </label>
+                    <label className="field">
+                      Прибытие
+                      <input
+                        type="time"
+                        step={60}
+                        value={form.arriveDraft}
+                        onChange={(e) => setForm({ ...form, arriveDraft: e.target.value })}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            addTrip();
+                          }
+                        }}
+                      />
+                    </label>
+                    <button className="btn secondary" type="button" onClick={addTrip}>
+                      Добавить рейс
+                    </button>
+                  </div>
+                </div>
                 <label className="field">
                   Населённый пункт
                   <select
@@ -3649,19 +5990,6 @@ function TransportPage() {
                   </select>
                 </label>
                 <label className="field">
-                  Дни работы
-                  <select
-                    value={form.days_mode}
-                    onChange={(e) =>
-                      setForm({ ...form, days_mode: e.target.value as TransportForm['days_mode'] })
-                    }
-                  >
-                    <option value="all">Все дни</option>
-                    <option value="weekdays">Будни</option>
-                    <option value="weekends">Выходные</option>
-                  </select>
-                </label>
-                <label className="field">
                   Статус
                   <select
                     value={form.is_published ? '1' : '0'}
@@ -3670,45 +5998,6 @@ function TransportPage() {
                     <option value="1">Опубликовано</option>
                     <option value="0">Скрыто</option>
                   </select>
-                </label>
-                <label className="field full">
-                  Краткое описание
-                  <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-                </label>
-                <label className="field full">
-                  Остановки (по одной в строке)
-                  <textarea
-                    rows={5}
-                    value={form.stops_text}
-                    onChange={(e) => setForm({ ...form, stops_text: e.target.value })}
-                    placeholder={'Сакмара (остановка у ДК)\nТатарская Каргала\nОренбург, автовокзал'}
-                  />
-                </label>
-                <label className="field full">
-                  Расписание (общее)
-                  <textarea
-                    required
-                    rows={6}
-                    value={form.schedule_text}
-                    onChange={(e) => setForm({ ...form, schedule_text: e.target.value })}
-                    placeholder="Времена отправления…"
-                  />
-                </label>
-                <label className="field full">
-                  Расписание в будни (необяз.)
-                  <textarea
-                    rows={3}
-                    value={form.schedule_weekdays}
-                    onChange={(e) => setForm({ ...form, schedule_weekdays: e.target.value })}
-                  />
-                </label>
-                <label className="field full">
-                  Расписание в выходные (необяз.)
-                  <textarea
-                    rows={3}
-                    value={form.schedule_weekends}
-                    onChange={(e) => setForm({ ...form, schedule_weekends: e.target.value })}
-                  />
                 </label>
                 <label className="field">
                   Цена проезда
@@ -3725,6 +6014,10 @@ function TransportPage() {
                     onChange={(e) => setForm({ ...form, phone: e.target.value })}
                     placeholder="+7…"
                   />
+                </label>
+                <label className="field full">
+                  Краткое описание
+                  <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
                 </label>
                 <label className="field full">
                   Заметки
@@ -3765,7 +6058,11 @@ const EMPTY_NEWS: NewsForm = {
 };
 
 function NewsPage() {
+  const [searchParams] = useSearchParams();
+  const idParam = searchParams.get('id');
+  const openedFromUrl = useRef<string | null>(null);
   const [items, setItems] = useState<NewsItem[]>([]);
+  const [total, setTotal] = useState(0);
   const [settlements, setSettlements] = useState<Settlement[]>([]);
   const [form, setForm] = useState<NewsForm>(EMPTY_NEWS);
   const [editingId, setEditingId] = useState<number | null>(null);
@@ -3773,21 +6070,45 @@ function NewsPage() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [query, setQuery] = useState('');
+  const [appliedQ, setAppliedQ] = useState('');
   const [publishedFilter, setPublishedFilter] = useState<'all' | 'published' | 'hidden'>('all');
   const [coverFile, setCoverFile] = useState<File | null>(null);
+  const [page, setPage] = useState(1);
+  const NEWS_PAGE = 25;
+  const pageCount = Math.max(1, Math.ceil(total / NEWS_PAGE));
+  const safePage = Math.min(page, pageCount);
 
-  async function load() {
-    const [news, s] = await Promise.all([
-      api<NewsItem[] | { items: NewsItem[] }>('/news?limit=500'),
-      api<Settlement[]>('/settlements'),
-    ]);
-    setItems(asItems(news));
-    setSettlements(s);
+  async function loadSettlements() {
+    setSettlements(await api<Settlement[]>('/settlements'));
+  }
+
+  async function load(nextPage = safePage) {
+    const params = new URLSearchParams();
+    params.set('limit', String(NEWS_PAGE));
+    params.set('offset', String((nextPage - 1) * NEWS_PAGE));
+    if (appliedQ.trim()) params.set('q', appliedQ.trim());
+    if (publishedFilter === 'published') params.set('published', 'true');
+    if (publishedFilter === 'hidden') params.set('published', 'false');
+    const data = await api<{ items: NewsItem[]; total: number }>(`/news?${params}`);
+    setItems(data.items || []);
+    setTotal(data.total || 0);
   }
 
   useEffect(() => {
-    load().catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+    loadSettlements().catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
   }, []);
+
+  useEffect(() => {
+    load(safePage).catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+  }, [safePage, appliedQ, publishedFilter]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [appliedQ, publishedFilter]);
+
+  useEffect(() => {
+    if (page !== safePage) setPage(safePage);
+  }, [page, safePage]);
 
   function openCreate() {
     setEditingId(null);
@@ -3810,6 +6131,28 @@ function NewsPage() {
     setError('');
     setModalOpen(true);
   }
+
+  useEffect(() => {
+    if (!idParam) {
+      openedFromUrl.current = null;
+      return;
+    }
+    if (openedFromUrl.current === idParam) return;
+    const id = Number(idParam);
+    if (!Number.isFinite(id)) return;
+    const found = items.find((x) => x.id === id);
+    if (found) {
+      openedFromUrl.current = idParam;
+      startEdit(found);
+      return;
+    }
+    api<NewsItem>(`/news/${id}`)
+      .then((item) => {
+        openedFromUrl.current = idParam;
+        startEdit(item);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+  }, [idParam, items]);
 
   function closeModal() {
     if (busy) return;
@@ -3858,75 +6201,101 @@ function NewsPage() {
 
   async function remove(id: number) {
     if (!(await confirmAction('Удалить новость?'))) return;
-    await api(`/news/${id}`, { method: 'DELETE' });
-    if (editingId === id) closeModal();
-    await load();
-    pushToast('Новость удалена');
+    try {
+      await api(`/news/${id}`, { method: 'DELETE' });
+      if (editingId === id) closeModal();
+      await load();
+      pushToast('Новость удалена');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    }
   }
 
   return (
     <div>
-      <div className="page-head">
+      <div className="page-head compact">
         <div>
           <h1>Новости</h1>
-          <p>Новости района для приложения</p>
+          <p>Новости района для ленты приложения</p>
         </div>
         <button className="btn" type="button" onClick={openCreate}>
           Добавить новость
         </button>
       </div>
-      <div className="toolbar">
-        <input placeholder="Поиск…" value={query} onChange={(e) => setQuery(e.target.value)} />
+      <form
+        className="toolbar compact"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setPage(1);
+          setAppliedQ(query);
+        }}
+      >
+        <input placeholder="Заголовок, текст…" value={query} onChange={(e) => setQuery(e.target.value)} />
         <select
           value={publishedFilter}
-          onChange={(e) => setPublishedFilter(e.target.value as 'all' | 'published' | 'hidden')}
+          onChange={(e) => {
+            setPage(1);
+            setPublishedFilter(e.target.value as 'all' | 'published' | 'hidden');
+          }}
         >
           <option value="all">Все статусы</option>
           <option value="published">Опубликованные</option>
           <option value="hidden">Скрытые</option>
         </select>
-      </div>
+        <button className="btn" type="submit">
+          Найти
+        </button>
+      </form>
       {error && !modalOpen && <p className="error">{error}</p>}
-      <div className="list">
-        {items
-          .filter((item) => {
-            if (publishedFilter === 'published' && !item.is_published) return false;
-            if (publishedFilter === 'hidden' && item.is_published) return false;
-            if (!query.trim()) return true;
-            const q = query.trim().toLowerCase();
-            return (
-              item.title.toLowerCase().includes(q) ||
-              item.body.toLowerCase().includes(q) ||
-              (item.settlement_name || '').toLowerCase().includes(q)
-            );
-          })
-          .map((item) => (
-            <article key={item.id} className="row-card">
-              <div className="row-main">
-                <h3 className="row-title">{item.title}</h3>
-                <div className="meta">
-                  {item.settlement_name && <span className="chip neutral">{item.settlement_name}</span>}
-                  {item.is_published ? (
-                    <span className="chip ok">Опубликовано</span>
-                  ) : (
-                    <span className="chip warn">Скрыто</span>
-                  )}
-                  <span className="chip neutral">{formatDate(item.published_at || item.created_at)}</span>
-                </div>
-                <p className="row-body">{item.body.length > 160 ? `${item.body.slice(0, 160)}…` : item.body}</p>
-              </div>
-              <div className="actions">
-                <button className="btn" type="button" onClick={() => startEdit(item)}>
-                  Изменить
-                </button>
-                <button className="btn danger" type="button" onClick={() => remove(item.id)}>
-                  Удалить
-                </button>
-              </div>
-            </article>
-          ))}
-        {!items.length && <div className="empty">Новостей пока нет</div>}
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Новость</th>
+              <th>Село</th>
+              <th>Дата</th>
+              <th>Статус</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.id} className="dir-row" onClick={() => startEdit(item)}>
+                <td>
+                  <div className="audit-who">{item.title}</div>
+                  <div className="audit-sub">
+                    {item.is_pinned ? 'закреплена · ' : ''}
+                    {item.body.length > 90 ? `${item.body.slice(0, 90)}…` : item.body}
+                  </div>
+                </td>
+                <td className="audit-obj">{item.settlement_name || 'весь район'}</td>
+                <td className="audit-when">{formatAuditWhen(item.published_at || item.created_at)}</td>
+                <td>
+                  {item.is_published ? <span className="chip ok">В приложении</span> : <span className="chip warn">Скрыто</span>}
+                </td>
+                <td onClick={(e) => e.stopPropagation()}>
+                  <div className="actions inline">
+                    <button className="btn" type="button" onClick={() => startEdit(item)}>
+                      Изменить
+                    </button>
+                    <button className="btn danger" type="button" onClick={() => remove(item.id)}>
+                      Удалить
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {!items.length && (
+              <tr>
+                <td colSpan={5} className="empty">
+                  {appliedQ || publishedFilter !== 'all' ? 'Ничего не найдено' : 'Новостей пока нет — нажмите «Добавить новость»'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
+      <Pager page={safePage} pageCount={pageCount} total={total} onPage={setPage} />
 
       {modalOpen && (
         <div className="modal-backdrop" onClick={closeModal}>
@@ -4029,7 +6398,19 @@ const EMPTY_ALERT: AlertForm = {
   ends_at: '',
 };
 
+function alertPeriod(item: DistrictAlert) {
+  const start = item.starts_at ? formatAuditWhen(item.starts_at) : '';
+  const end = item.ends_at ? formatAuditWhen(item.ends_at) : '';
+  if (start && end) return `${start} — ${end}`;
+  if (start) return `с ${start}`;
+  if (end) return `до ${end}`;
+  return 'без срока';
+}
+
 function AlertsPage() {
+  const [searchParams] = useSearchParams();
+  const idParam = searchParams.get('id');
+  const openedFromUrl = useRef<string | null>(null);
   const [items, setItems] = useState<DistrictAlert[]>([]);
   const [history, setHistory] = useState<DistrictAlert[]>([]);
   const [tab, setTab] = useState<'active' | 'history'>('active');
@@ -4038,6 +6419,8 @@ function AlertsPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [page, setPage] = useState(1);
+  const ALERT_PAGE = 25;
 
   async function load() {
     const [all, hist] = await Promise.all([
@@ -4072,6 +6455,28 @@ function AlertsPage() {
     setError('');
     setModalOpen(true);
   }
+
+  useEffect(() => {
+    if (!idParam) {
+      openedFromUrl.current = null;
+      return;
+    }
+    if (openedFromUrl.current === idParam) return;
+    const id = Number(idParam);
+    if (!Number.isFinite(id)) return;
+    const found = [...items, ...history].find((x) => x.id === id);
+    if (found) {
+      openedFromUrl.current = idParam;
+      startEdit(found);
+      return;
+    }
+    api<DistrictAlert>(`/alerts/${id}`)
+      .then((item) => {
+        openedFromUrl.current = idParam;
+        startEdit(item);
+      })
+      .catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+  }, [idParam, items, history]);
 
   function closeModal() {
     if (busy) return;
@@ -4114,20 +6519,45 @@ function AlertsPage() {
 
   async function remove(id: number) {
     if (!(await confirmAction('Удалить срочное объявление?'))) return;
-    await api(`/alerts/${id}`, { method: 'DELETE' });
-    if (editingId === id) closeModal();
-    await load();
-    pushToast('Объявление удалено');
+    try {
+      await api(`/alerts/${id}`, { method: 'DELETE' });
+      if (editingId === id) closeModal();
+      await load();
+      pushToast('Объявление удалено');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    }
   }
 
   const shown = tab === 'history' ? history : items;
+  const alertPageCount = Math.max(1, Math.ceil(shown.length / ALERT_PAGE));
+  const alertSafePage = Math.min(page, alertPageCount);
+  const alertPageItems = shown.slice((alertSafePage - 1) * ALERT_PAGE, alertSafePage * ALERT_PAGE);
+
+  useEffect(() => {
+    setPage(1);
+  }, [tab]);
+
+  useEffect(() => {
+    if (page !== alertSafePage) setPage(alertSafePage);
+  }, [page, alertSafePage]);
+
+  function kindChip(kind: string) {
+    if (kind === 'danger') return 'chip danger';
+    if (kind === 'warn') return 'chip warn';
+    return 'chip ok';
+  }
 
   return (
     <div>
-      <div className="page-head">
+      <div className="page-head compact">
         <div>
           <h1>Срочное</h1>
-          <p>Несколько баннеров по приоритету. Срок действия и история прошлых оповещений.</p>
+          <p>
+            {tab === 'history'
+              ? 'Выключенные, прошедшие и ещё не начавшиеся баннеры'
+              : 'Сейчас показываются в приложении — как цифра на сводке'}
+          </p>
         </div>
         <button className="btn" type="button" onClick={openCreate}>
           Добавить объявление
@@ -4135,46 +6565,64 @@ function AlertsPage() {
       </div>
       <div className="toolbar compact">
         <button type="button" className={`btn ${tab === 'active' ? '' : 'secondary'}`} onClick={() => setTab('active')}>
-          Все / текущие
+          Текущие
         </button>
         <button type="button" className={`btn ${tab === 'history' ? '' : 'secondary'}`} onClick={() => setTab('history')}>
           История
         </button>
       </div>
       {error && !modalOpen && <p className="error">{error}</p>}
-      <div className="list">
-        {shown.map((item) => (
-          <article key={item.id} className="row-card">
-            <div className="row-main">
-              <h3 className="row-title">{item.message}</h3>
-              <div className="meta">
-                <span
-                  className={`chip ${item.kind === 'danger' ? 'warn' : item.kind === 'warn' ? 'warn' : 'neutral'}`}
-                >
-                  {ALERT_KIND_LABELS[item.kind] || item.kind}
-                </span>
-                <span className="chip neutral">приоритет {item.priority ?? 0}</span>
-                {item.is_active ? (
-                  <span className="chip ok">Активно</span>
-                ) : (
-                  <span className="chip neutral">Выкл.</span>
-                )}
-                {item.ends_at && <span className="chip neutral">до {formatDate(item.ends_at)}</span>}
-                <span className="chip neutral">{formatDate(item.updated_at)}</span>
-              </div>
-            </div>
-            <div className="actions">
-              <button className="btn" type="button" onClick={() => startEdit(item)}>
-                Изменить
-              </button>
-              <button className="btn danger" type="button" onClick={() => remove(item.id)}>
-                Удалить
-              </button>
-            </div>
-          </article>
-        ))}
-        {!shown.length && <div className="empty">{tab === 'history' ? 'История пуста' : 'Срочных объявлений пока нет'}</div>}
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Текст</th>
+              <th>Тип</th>
+              <th>Период</th>
+              <th>Статус</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {alertPageItems.map((item) => (
+              <tr key={item.id} className="dir-row" onClick={() => startEdit(item)}>
+                <td>
+                  <div className="audit-who">{item.message}</div>
+                  <div className="audit-sub">приоритет {item.priority ?? 0}</div>
+                </td>
+                <td>
+                  <span className={kindChip(item.kind)}>{ALERT_KIND_LABELS[item.kind] || item.kind}</span>
+                </td>
+                <td className="audit-details">
+                  {alertPeriod(item)}
+                  <div className="audit-sub">обновлено {formatAuditWhen(item.updated_at)}</div>
+                </td>
+                <td>
+                  {item.is_active ? <span className="chip ok">В приложении</span> : <span className="chip warn">Выкл.</span>}
+                </td>
+                <td onClick={(e) => e.stopPropagation()}>
+                  <div className="actions inline">
+                    <button className="btn" type="button" onClick={() => startEdit(item)}>
+                      Изменить
+                    </button>
+                    <button className="btn danger" type="button" onClick={() => remove(item.id)}>
+                      Удалить
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {!shown.length && (
+              <tr>
+                <td colSpan={5} className="empty">
+                  {tab === 'history' ? 'История пуста' : 'Срочных объявлений пока нет — нажмите «Добавить объявление»'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
       </div>
+      <Pager page={alertSafePage} pageCount={alertPageCount} total={shown.length} onPage={setPage} />
 
       {modalOpen && (
         <div className="modal-backdrop" onClick={closeModal}>
@@ -4257,15 +6705,171 @@ function AlertsPage() {
   );
 }
 
+type CalKind = 'event' | 'news' | 'alert';
+
+type CalEntry = {
+  id: string;
+  kind: CalKind;
+  dateKey: string;
+  sort: string;
+  title: string;
+  time: string;
+  place: string;
+  status: string;
+  statusTone: string;
+  note: string;
+  href: string;
+};
+
+const CAL_MONTHS: Record<string, number> = {
+  января: 0,
+  февраля: 1,
+  марта: 2,
+  апреля: 3,
+  мая: 4,
+  июня: 5,
+  июля: 6,
+  августа: 7,
+  сентября: 8,
+  октября: 9,
+  ноября: 10,
+  декабря: 11,
+};
+
+function dateKeyOf(d: Date) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function formatClockRange(startIso?: string | null, endIso?: string | null) {
+  const start = parseApiDate(startIso ?? null);
+  if (!start) return '';
+  const t1 = `${pad2(start.getHours())}:${pad2(start.getMinutes())}`;
+  const end = parseApiDate(endIso ?? null);
+  if (!end) return t1;
+  return `${t1}–${pad2(end.getHours())}:${pad2(end.getMinutes())}`;
+}
+
+function eachDateKey(from: Date, to: Date, cap = 62) {
+  const keys: string[] = [];
+  const cur = new Date(from.getFullYear(), from.getMonth(), from.getDate());
+  const last = new Date(to.getFullYear(), to.getMonth(), to.getDate());
+  for (let i = 0; i < cap && cur <= last; i += 1) {
+    keys.push(dateKeyOf(cur));
+    cur.setDate(cur.getDate() + 1);
+  }
+  return keys;
+}
+
+function eventSeanceEntries(item: EventItem): CalEntry[] {
+  const base = parseApiDate(item.starts_at);
+  const year = base?.getFullYear() ?? new Date().getFullYear();
+  const block = (item.description || '').split(/Источник:/i)[0];
+  const re = /(\d{1,2})\s+([а-яё]+),\s*(\d{2}):(\d{2})(?:\s*[–-]\s*(\d{2}):(\d{2}))?/gi;
+  const place = [item.place_text, item.settlement_name].filter(Boolean).join(' · ');
+  const status = EVENT_STATUS_LABELS[item.status || ''] || (item.is_published ? 'Опубликовано' : 'Черновик');
+  const statusTone = item.status === 'published' || item.is_published ? 'ok' : item.status === 'scheduled' ? 'warn' : 'neutral';
+  const found: CalEntry[] = [];
+  for (const m of block.matchAll(re)) {
+    const month = CAL_MONTHS[m[2].toLowerCase()];
+    if (month == null) continue;
+    const day = Number(m[1]);
+    const t1 = `${m[3]}:${m[4]}`;
+    const t2 = m[5] && m[6] ? `${m[5]}:${m[6]}` : '';
+    const key = `${year}-${pad2(month + 1)}-${pad2(day)}`;
+    found.push({
+      id: `event-${item.id}-${key}`,
+      kind: 'event',
+      dateKey: key,
+      sort: t1,
+      title: item.title,
+      time: t2 ? `${t1}–${t2}` : t1,
+      place,
+      status,
+      statusTone,
+      note: item.address || '',
+      href: `/events?id=${item.id}`,
+    });
+  }
+  if (found.length) return found;
+  if (!base) return [];
+  return [
+    {
+      id: `event-${item.id}-${localDateKey(item.starts_at)}`,
+      kind: 'event',
+      dateKey: localDateKey(item.starts_at),
+      sort: formatClockRange(item.starts_at, item.ends_at) || '99:99',
+      title: item.title,
+      time: formatClockRange(item.starts_at, item.ends_at),
+      place,
+      status,
+      statusTone,
+      note: item.address || '',
+      href: `/events?id=${item.id}`,
+    },
+  ];
+}
+
+function buildCalendarEntries(events: EventItem[], news: NewsItem[], alerts: DistrictAlert[]): CalEntry[] {
+  const out: CalEntry[] = [];
+  for (const item of events) out.push(...eventSeanceEntries(item));
+  for (const item of news) {
+    const when = item.published_at || item.created_at;
+    const key = localDateKey(when);
+    if (!key) continue;
+    out.push({
+      id: `news-${item.id}`,
+      kind: 'news',
+      dateKey: key,
+      sort: formatClockRange(when) || '99:99',
+      title: item.title,
+      time: formatClockRange(when),
+      place: item.settlement_name || 'Весь район',
+      status: item.is_published ? (item.is_pinned ? 'Закреплена' : 'Опубликована') : 'Черновик',
+      statusTone: item.is_published ? 'ok' : 'neutral',
+      note: (item.body || '').replace(/\s+/g, ' ').slice(0, 180),
+      href: `/news?id=${item.id}`,
+    });
+  }
+  for (const item of alerts) {
+    const start = parseApiDate(item.starts_at || item.created_at);
+    if (!start) continue;
+    const end = parseApiDate(item.ends_at || item.starts_at || item.created_at) || start;
+    const kindLabel = item.kind === 'danger' ? 'Тревога' : item.kind === 'warn' ? 'Важно' : 'Инфо';
+    for (const key of eachDateKey(start, end)) {
+      out.push({
+        id: `alert-${item.id}-${key}`,
+        kind: 'alert',
+        dateKey: key,
+        sort: formatClockRange(item.starts_at) || '00:00',
+        title: item.message,
+        time: formatClockRange(item.starts_at, item.ends_at) || 'весь день',
+        place: kindLabel,
+        status: item.is_active ? 'Активно' : 'Выключено',
+        statusTone: item.is_active ? (item.kind === 'danger' ? 'danger' : 'warn') : 'neutral',
+        note: '',
+        href: `/alerts?id=${item.id}`,
+      });
+    }
+  }
+  return out.sort((a, b) => a.sort.localeCompare(b.sort) || a.title.localeCompare(b.title, 'ru'));
+}
+
+const CAL_KIND_LABEL: Record<CalKind, string> = {
+  event: 'Афиша',
+  news: 'Новость',
+  alert: 'Срочное',
+};
+
 function EditorialCalendarPage() {
-  const [month, setMonth] = useState(() => {
-    const d = new Date();
-    return new Date(d.getFullYear(), d.getMonth(), 1);
-  });
+  const navigate = useNavigate();
+  const now = new Date();
+  const [month, setMonth] = useState(() => new Date(now.getFullYear(), now.getMonth(), 1));
   const [events, setEvents] = useState<EventItem[]>([]);
   const [news, setNews] = useState<NewsItem[]>([]);
   const [alerts, setAlerts] = useState<DistrictAlert[]>([]);
   const [error, setError] = useState('');
+  const [kindFilter, setKindFilter] = useState<'all' | CalKind>('all');
+  const [selectedDay, setSelectedDay] = useState(now.getDate());
 
   useEffect(() => {
     Promise.all([
@@ -4284,89 +6888,143 @@ function EditorialCalendarPage() {
   const year = month.getFullYear();
   const mon = month.getMonth();
   const daysInMonth = new Date(year, mon + 1, 0).getDate();
-  const startWeekday = (new Date(year, mon, 1).getDay() + 6) % 7; // пн=0
+  const startWeekday = (new Date(year, mon, 1).getDay() + 6) % 7;
+  const isCurrentMonth = year === now.getFullYear() && mon === now.getMonth();
+  const todayKey = dateKeyOf(now);
+  const safeDay = Math.min(selectedDay, daysInMonth);
+  const selectedKey = `${year}-${pad2(mon + 1)}-${pad2(safeDay)}`;
 
-  function itemsForDay(day: number) {
-    const key = `${year}-${String(mon + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
-    const dayEvents = events.filter((e) => localDateKey(e.publish_at || e.starts_at) === key);
-    const dayNews = news.filter((n) => localDateKey(n.published_at || n.created_at) === key);
-    const dayAlerts = alerts.filter((a) => localDateKey(a.starts_at || a.created_at) === key);
-    return { dayEvents, dayNews, dayAlerts };
+  useEffect(() => {
+    if (isCurrentMonth) setSelectedDay(now.getDate());
+    else setSelectedDay(1);
+  }, [year, mon]);
+
+  const entries = useMemo(() => buildCalendarEntries(events, news, alerts), [events, news, alerts]);
+  const visible = kindFilter === 'all' ? entries : entries.filter((e) => e.kind === kindFilter);
+  const byDay = useMemo(() => {
+    const map = new Map<string, CalEntry[]>();
+    for (const row of visible) {
+      const list = map.get(row.dateKey);
+      if (list) list.push(row);
+      else map.set(row.dateKey, [row]);
+    }
+    return map;
+  }, [visible]);
+
+  const selectedItems = byDay.get(selectedKey) || [];
+  const monthPrefix = `${year}-${pad2(mon + 1)}-`;
+  const monthItems = visible.filter((e) => e.dateKey.startsWith(monthPrefix));
+  const monthCounts = {
+    event: monthItems.filter((e) => e.kind === 'event').length,
+    news: monthItems.filter((e) => e.kind === 'news').length,
+    alert: monthItems.filter((e) => e.kind === 'alert').length,
+  };
+
+  function goToday() {
+    setMonth(new Date(now.getFullYear(), now.getMonth(), 1));
+    setSelectedDay(now.getDate());
   }
 
   return (
     <div>
       <div className="page-head compact">
         <div>
-          <h1>Редакторский календарь</h1>
-          <p>Сетка месяца: события, новости и срочные по дате публикации / старта</p>
+          <h1>Календарь</h1>
+          <p>
+            {monthCounts.event} в афише · {monthCounts.news} новостей · {monthCounts.alert} срочных
+          </p>
         </div>
-        <div className="toolbar compact">
-          <button
-            type="button"
-            className="btn secondary"
-            onClick={() => setMonth(new Date(year, mon - 1, 1))}
-          >
+        <div className="toolbar compact" style={{ margin: 0 }}>
+          <button type="button" className="btn secondary" onClick={() => setMonth(new Date(year, mon - 1, 1))}>
             ←
           </button>
-          <strong>
+          <strong style={{ textTransform: 'capitalize', minWidth: 160, textAlign: 'center' }}>
             {month.toLocaleDateString('ru-RU', { month: 'long', year: 'numeric' })}
           </strong>
-          <button
-            type="button"
-            className="btn secondary"
-            onClick={() => setMonth(new Date(year, mon + 1, 1))}
-          >
+          <button type="button" className="btn secondary" onClick={() => setMonth(new Date(year, mon + 1, 1))}>
             →
+          </button>
+          <button type="button" className="btn ghost" onClick={goToday}>
+            Сегодня
           </button>
         </div>
       </div>
+      <div className="cal-legend">
+        {(['all', 'event', 'news', 'alert'] as const).map((k) => (
+          <button
+            key={k}
+            type="button"
+            className={`cal-legend-btn ${k}${kindFilter === k ? ' is-on' : ''}`}
+            onClick={() => setKindFilter(k)}
+          >
+            {k === 'all' ? 'Всё' : CAL_KIND_LABEL[k]}
+          </button>
+        ))}
+      </div>
       {error && <p className="error">{error}</p>}
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(7, 1fr)',
-          gap: 6,
-        }}
-      >
-        {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((d) => (
-          <div key={d} className="muted" style={{ textAlign: 'center', fontSize: 12 }}>
-            {d}
-          </div>
-        ))}
-        {Array.from({ length: startWeekday }).map((_, i) => (
-          <div key={`e-${i}`} />
-        ))}
-        {Array.from({ length: daysInMonth }).map((_, i) => {
-          const day = i + 1;
-          const { dayEvents, dayNews, dayAlerts } = itemsForDay(day);
-          return (
-            <div
-              key={day}
-              className="panel"
-              style={{ minHeight: 88, padding: 8, margin: 0 }}
-            >
-              <strong style={{ fontSize: 13 }}>{day}</strong>
-              <ul style={{ margin: '6px 0 0', padding: 0, listStyle: 'none', fontSize: 11 }}>
-                {dayEvents.map((e) => (
-                  <li key={`e-${e.id}`} title={e.title}>
-                    Аф: {e.title.slice(0, 28)}
-                  </li>
-                ))}
-                {dayNews.map((n) => (
-                  <li key={`n-${n.id}`} title={n.title}>
-                    Нов: {n.title.slice(0, 28)}
-                  </li>
-                ))}
-                {dayAlerts.map((a) => (
-                  <li key={`a-${a.id}`} title={a.message}>
-                    Ср: {a.message.slice(0, 28)}
-                  </li>
-                ))}
-              </ul>
+      <div className="cal-layout">
+        <div className="cal-grid">
+          {['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((d) => (
+            <div key={d} className="cal-dow">
+              {d}
             </div>
-          );
-        })}
+          ))}
+          {Array.from({ length: startWeekday }).map((_, i) => (
+            <div key={`pad-${i}`} />
+          ))}
+          {Array.from({ length: daysInMonth }).map((_, i) => {
+            const day = i + 1;
+            const key = `${year}-${pad2(mon + 1)}-${pad2(day)}`;
+            const rows = byDay.get(key) || [];
+            const extra = rows.length > 3 ? rows.length - 3 : 0;
+            const weekend = (startWeekday + day - 1) % 7 >= 5;
+            return (
+              <button
+                type="button"
+                key={key}
+                className={`cal-day${key === todayKey ? ' is-today' : ''}${key === selectedKey ? ' is-selected' : ''}${
+                  weekend ? ' is-weekend' : ''
+                }${rows.length ? '' : ' is-empty'}`}
+                onClick={() => setSelectedDay(day)}
+              >
+                <span className="cal-num">{day}</span>
+                {rows.slice(0, 3).map((row) => (
+                  <span key={row.id} className={`cal-item ${row.kind}${row.statusTone === 'danger' ? ' danger' : ''}`}>
+                    {row.time ? `${row.time} ` : ''}
+                    {row.title}
+                  </span>
+                ))}
+                {extra > 0 && <span className="cal-more">ещё {extra}</span>}
+              </button>
+            );
+          })}
+        </div>
+        <aside className="panel cal-detail">
+          <h2>
+            {safeDay} {MONTHS_GEN[mon]}
+            {isCurrentMonth && safeDay === now.getDate() ? ' · сегодня' : ''}
+          </h2>
+          {!selectedItems.length && <p className="muted">В этот день ничего не стоит в афише, новостях и срочных.</p>}
+          <div className="cal-detail-list">
+            {selectedItems.map((row) => (
+              <article key={row.id} className="cal-card">
+                <div className="meta">
+                  <span className={`chip ${row.kind === 'alert' ? row.statusTone : row.kind === 'news' ? 'neutral' : ''}`.trim()}>
+                    {CAL_KIND_LABEL[row.kind]}
+                  </span>
+                  {row.time && <span className="chip">{row.time}</span>}
+                  <span className={`chip ${row.statusTone}`}>{row.status}</span>
+                </div>
+                <h3>{row.title}</h3>
+                {row.place && <p className="cal-place">{row.place}</p>}
+                {row.note && <p className="muted">{row.note}</p>}
+                <button type="button" className="btn ghost" onClick={() => navigate(row.href)}>
+                  Открыть раздел
+                </button>
+              </article>
+            ))}
+          </div>
+        </aside>
       </div>
     </div>
   );
@@ -4507,13 +7165,6 @@ function LegalPage() {
       )}
     </div>
   );
-}
-
-function formatBytes(n?: number | null) {
-  if (n == null || n <= 0) return '—';
-  if (n < 1024) return `${n} B`;
-  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} КБ`;
-  return `${(n / (1024 * 1024)).toFixed(1)} МБ`;
 }
 
 function AppUpdatePage() {
@@ -4704,8 +7355,10 @@ export default function App() {
       }}
     >
       <Routes>
-        <Route path="/" element={<Dashboard isAdmin={user!.role === 'admin'} />} />
+        <Route path="/" element={<Dashboard role={user!.role} />} />
+        {canSeeInbox(user!.role) && <Route path="/inbox" element={<ContactsPage />} />}
         {canModerate(user!.role) && <Route path="/moderation" element={<ModerationPage />} />}
+        {canModerate(user!.role) && <Route path="/listings" element={<ListingsPage />} />}
         {(canModerate(user!.role) || canEditDirectory(user!.role)) && (
           <Route path="/reports" element={<ReportsPage canListings={canModerate(user!.role)} />} />
         )}

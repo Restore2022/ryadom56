@@ -55,12 +55,6 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
     }
   }
 
-  String _fmt(String? iso, {bool withTime = true}) {
-    final dt = parseApiTime(iso);
-    if (dt == null) return iso == null || iso.isEmpty ? '—' : iso;
-    return formatDateTimeLocal(dt, withTime: withTime);
-  }
-
   Future<void> _share() async {
     try {
       await shareEvent(item);
@@ -114,7 +108,7 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+        padding: EdgeInsets.fromLTRB(16, 8, 16, 28 + MediaQuery.paddingOf(context).bottom),
         children: [
           if (cover != null && cover.isNotEmpty) ...[
             ClipRRect(
@@ -139,11 +133,15 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
             style: GoogleFonts.manrope(fontSize: 24, fontWeight: FontWeight.w800, height: 1.2),
           ),
           const SizedBox(height: 12),
+          Text(
+            formatEventWhen(item['starts_at']?.toString(), item['ends_at']?.toString()),
+            style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w800, fontSize: 16),
+          ),
+          const SizedBox(height: 12),
           Wrap(
             spacing: 8,
             runSpacing: 8,
             children: [
-              _chip(context, _fmt(item['starts_at']?.toString()), Icons.event),
               if (item['settlement_name'] != null)
                 _chip(context, '${item['settlement_name']}', Icons.place_outlined),
             ],
@@ -179,12 +177,6 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
           if (address != null && address.isNotEmpty) ...[
             const SizedBox(height: 4),
             Text(address, style: TextStyle(color: scheme.onSurfaceVariant)),
-          ],
-          if (item['ends_at'] != null) ...[
-            const SizedBox(height: 16),
-            Text('Окончание', style: TextStyle(color: scheme.onSurfaceVariant, fontWeight: FontWeight.w600)),
-            const SizedBox(height: 4),
-            Text(_fmt(item['ends_at']?.toString())),
           ],
           const SizedBox(height: 20),
           Text('Описание', style: TextStyle(color: scheme.onSurfaceVariant, fontWeight: FontWeight.w600)),

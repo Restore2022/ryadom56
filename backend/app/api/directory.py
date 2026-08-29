@@ -1,4 +1,5 @@
 from datetime import datetime
+from zoneinfo import ZoneInfo
 import re
 from urllib.parse import quote
 
@@ -21,6 +22,9 @@ from app.models import (
 from app.schemas import DirectoryCreate, DirectoryOut, DirectoryPageOut, DirectoryReportIn, DirectoryUpdate
 from app.services.notify import notify_user
 from app.services.rate_limit import limiter
+from app.services.urls import safe_http_url
+
+LOCAL_TZ = ZoneInfo("Asia/Yekaterinburg")
 
 router = APIRouter(prefix="/directory", tags=["directory"])
 
@@ -45,7 +49,9 @@ def is_open_now(hours: str | None, now: datetime | None = None) -> bool | None:
     if "выходн" in text and "без выход" not in text:
         # не парсим сложные исключения — только явные диапазоны времени
         pass
-    now = now or datetime.now()
+    now = now or datetime.now(LOCAL_TZ)
+    if now.tzinfo is not None:
+        now = now.astimezone(LOCAL_TZ).replace(tzinfo=None)
     match = _RANGE_RE.search(text)
     if not match:
         return None
@@ -80,7 +86,7 @@ def to_out(item: DirectoryItem, favorited_ids: set[int] | None = None, distance_
         description=item.description,
         address=item.address,
         phone=item.phone,
-        website=item.website,
+        website=safe_http_url(item.website),
         hours=item.hours,
         is_open_now=is_open_now(item.hours),
         maps_url=maps_url(item),
@@ -117,6 +123,7 @@ def list_directory(
     category: DirectoryCategory | None = None,
     settlement_id: int | None = None,
     q: str | None = None,
+    published: bool | None = Query(default=None),
     sort: str = Query(default="title", pattern="^(title|near)$"),
     lat: float | None = Query(default=None, ge=-90, le=90),
     lon: float | None = Query(default=None, ge=-180, le=180),
@@ -129,6 +136,10 @@ def list_directory(
     is_staff = user and user.role in (UserRole.admin, UserRole.editor)
     if not is_staff:
         filters.append(DirectoryItem.is_published.is_(True))
+    elif published is True:
+        filters.append(DirectoryItem.is_published.is_(True))
+    elif published is False:
+        filters.append(DirectoryItem.is_published.is_(False))
     if category:
         filters.append(DirectoryItem.category == category)
     origin = resolve_origin(db, lat, lon, settlement_id) if sort == "near" else None
@@ -312,7 +323,9 @@ def create_directory_item(
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(UserRole.editor, UserRole.admin)),
 ):
-    item = DirectoryItem(**payload.model_dump())
+    data = payload.model_dump()
+    data["website"] = safe_http_url(data.get("website"))
+    item = DirectoryItem(**data)
     db.add(item)
     db.commit()
     item = db.execute(
@@ -333,7 +346,10 @@ def update_directory_item(
     ).scalar_one_or_none()
     if not item:
         raise HTTPException(status_code=404, detail="Запись не найдена")
-    for key, value in payload.model_dump(exclude_unset=True).items():
+    data = payload.model_dump(exclude_unset=True)
+    if "website" in data:
+        data["website"] = safe_http_url(data.get("website"))
+    for key, value in data.items():
         setattr(item, key, value)
     db.commit()
     item = db.execute(

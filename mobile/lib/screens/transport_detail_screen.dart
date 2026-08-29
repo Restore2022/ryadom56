@@ -105,12 +105,19 @@ class _TransportDetailScreenState extends State<TransportDetailScreen> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final state = context.watch<AppState>();
-    final number = item['route_number']?.toString();
     final nextDeparture = item['next_departure']?.toString();
     final fareText = item['fare_text']?.toString();
     final phone = item['phone']?.toString();
     final notes = item['notes']?.toString();
     final description = item['description']?.toString();
+    final times = (item['times'] as List?)?.map((e) => e.toString()).where((e) => e.isNotEmpty).toList() ?? [];
+    final trips = <Map<String, dynamic>>[];
+    final rawTrips = item['trips'];
+    if (rawTrips is List) {
+      for (final row in rawTrips) {
+        if (row is Map) trips.add(Map<String, dynamic>.from(row));
+      }
+    }
     final weekdays = item['schedule_weekdays']?.toString();
     final weekends = item['schedule_weekends']?.toString();
     final schedule = item['schedule_text']?.toString() ?? '';
@@ -135,11 +142,6 @@ class _TransportDetailScreenState extends State<TransportDetailScreen> {
       body: ListView(
         padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
         children: [
-          if (number != null && number.isNotEmpty)
-            Text(
-              number,
-              style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w800, fontSize: 13),
-            ),
           Text(
             '${item['title']}',
             style: GoogleFonts.manrope(fontSize: 24, fontWeight: FontWeight.w800, height: 1.2),
@@ -208,47 +210,99 @@ class _TransportDetailScreenState extends State<TransportDetailScreen> {
             Text('Остановки', style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 16)),
             const SizedBox(height: 10),
             ...stops.asMap().entries.map(
-              (e) => Padding(
-                padding: const EdgeInsets.only(bottom: 8),
-                child: Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Container(
-                      width: 26,
-                      height: 26,
-                      alignment: Alignment.center,
-                      decoration: BoxDecoration(
-                        color: scheme.primary.withValues(alpha: 0.12),
-                        borderRadius: BorderRadius.circular(8),
+              (e) {
+                final last = e.key == stops.length - 1;
+                final label = e.key == 0 ? 'откуда' : (last ? 'куда' : '${e.key + 1}');
+                return Padding(
+                  padding: const EdgeInsets.only(bottom: 8),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Container(
+                        width: 64,
+                        height: 26,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: scheme.primary.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          label,
+                          style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w800, fontSize: 11),
+                        ),
                       ),
-                      child: Text(
-                        '${e.key + 1}',
-                        style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w800, fontSize: 12),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(child: Text(e.value, style: const TextStyle(height: 1.35))),
-                  ],
-                ),
-              ),
+                      const SizedBox(width: 10),
+                      Expanded(child: Text(e.value, style: const TextStyle(height: 1.35))),
+                    ],
+                  ),
+                );
+              },
             ),
           ],
           const SizedBox(height: 20),
-          if (weekdays != null && weekdays.isNotEmpty) ...[
-            _scheduleBlock(context, 'Будни', weekdays),
-            const SizedBox(height: 16),
-          ],
-          if (weekends != null && weekends.isNotEmpty) ...[
-            _scheduleBlock(context, 'Выходные', weekends),
-            const SizedBox(height: 16),
-          ],
-          if (schedule.isNotEmpty &&
-              (weekdays == null || weekdays.isEmpty) &&
-              (weekends == null || weekends.isEmpty))
-            _scheduleBlock(context, 'Расписание', schedule)
-          else if (schedule.isNotEmpty &&
-              ((weekdays != null && weekdays.isNotEmpty) || (weekends != null && weekends.isNotEmpty))) ...[
-            _scheduleBlock(context, 'Общее расписание', schedule),
+          if (trips.isNotEmpty) ...[
+            Text('Рейсы', style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 16)),
+            const SizedBox(height: 10),
+            ...trips.map((trip) {
+              final days = trip['days_label']?.toString() ?? '';
+              final depart = trip['depart']?.toString() ?? '';
+              final arrive = trip['arrive']?.toString();
+              final stamp = (arrive != null && arrive.isNotEmpty) ? '$depart → $arrive' : depart;
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: scheme.primary.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          stamp,
+                          style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w800, fontSize: 16),
+                        ),
+                      ),
+                      if (days.isNotEmpty)
+                        Text(days, style: TextStyle(color: scheme.onSurfaceVariant, fontWeight: FontWeight.w700, fontSize: 13)),
+                    ],
+                  ),
+                ),
+              );
+            }),
+          ] else if (times.isNotEmpty) ...[
+            Text('Отправления', style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 16)),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                for (final stamp in times)
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: scheme.primary.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Text(
+                      stamp,
+                      style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w800, fontSize: 15),
+                    ),
+                  ),
+              ],
+            ),
+          ] else ...[
+            if (weekdays != null && weekdays.isNotEmpty) ...[
+              _scheduleBlock(context, 'Будни', weekdays),
+              const SizedBox(height: 16),
+            ],
+            if (weekends != null && weekends.isNotEmpty) ...[
+              _scheduleBlock(context, 'Выходные', weekends),
+              const SizedBox(height: 16),
+            ],
+            if (schedule.isNotEmpty) _scheduleBlock(context, 'Расписание', schedule),
           ],
           if (notes != null && notes.isNotEmpty) ...[
             const SizedBox(height: 20),

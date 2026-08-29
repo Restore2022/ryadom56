@@ -204,7 +204,7 @@ class _DistrictHubScreenState extends State<DistrictHubScreen> {
                       final item = e as Map<String, dynamic>;
                       return _HubCard(
                         title: '${item['title']}',
-                        subtitle: '${formatApiDateTime(item['starts_at']?.toString())} · ${item['place_text'] ?? ''}',
+                        subtitle: '${formatEventWhen(item['starts_at']?.toString(), item['ends_at']?.toString())} · ${item['place_text'] ?? ''}',
                         onTap: () => Navigator.push(context, fastRoute(EventDetailScreen(item: item))),
                       );
                     }),

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, PlainTextResponse
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import require_roles
@@ -13,6 +13,7 @@ from app.api.listings import load_listing, to_out
 from app.core.config import settings
 from app.core.database import get_db
 from app.core.security import hash_password
+from app.services.call_hub import hub
 from app.models import (
     AuditLog,
     BlacklistEntry,
@@ -28,7 +29,9 @@ from app.models import (
     ListingMessage,
     ListingReport,
     ListingStatus,
+    Presence,
     Settlement,
+    SiteContact,
     TransportFavorite,
     TransportRoute,
     User,
@@ -41,17 +44,24 @@ from app.schemas import (
     AdminChatMessageOut,
     AdminConversationOut,
     AuditLogOut,
+    AuditLogPageOut,
+    BackupListOut,
+    BackupFileOut,
     BlacklistCreate,
     BlacklistOut,
     BulkModerateIn,
     CategoryStat,
     ClientErrorOut,
+    ClientErrorPageOut,
     DayStat,
     DirectoryReportOut,
     ListingOut,
     ListingReportOut,
     ReportStatusUpdate,
     SettlementStat,
+    SiteContactOut,
+    SiteContactPageOut,
+    SiteContactPatch,
     StatsOut,
     AdminPushIn,
     AdminPushOut,
@@ -61,6 +71,7 @@ from app.schemas import (
     UserRoleUpdate,
 )
 from app.services.audit import log_action
+from app.services.backup import backup_meta, create_backup, disk_info, ensure_daily_backup, list_backup_files
 from app.services.blacklist import looks_like_chat_spam, match_blacklist, normalize_phone, normalize_word
 from app.services.notify import fcm_tokens_for_user, notify_user
 from app.services.sessions import revoke_all_sessions
@@ -217,8 +228,83 @@ def stats(
         for c, n in cat_rows
     ]
 
+    online_since = now - timedelta(minutes=5)
+    yekat = timezone(timedelta(hours=5))
+    today_start = datetime.now(yekat).replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+    week_ago = now - timedelta(days=7)
+    users_total = int(db.execute(select(func.count(User.id))).scalar_one() or 0)
+    users_new_7d = int(
+        db.execute(select(func.count(User.id)).where(User.created_at >= week_ago)).scalar_one() or 0
+    )
+    users_new_today = int(
+        db.execute(select(func.count(User.id)).where(User.created_at >= today_start)).scalar_one() or 0
+    )
+    users_active_30d = int(
+        db.execute(select(func.count(User.id)).where(User.last_seen_at >= month_ago)).scalar_one() or 0
+    )
+    session_ids = {
+        uid
+        for uid in db.execute(
+            select(UserSession.user_id).where(
+                UserSession.revoked_at.is_(None),
+                UserSession.last_seen_at >= online_since,
+            )
+        ).scalars().all()
+        if uid
+    }
+    presence_user_ids = {
+        uid
+        for uid in db.execute(
+            select(Presence.user_id).where(
+                Presence.source == "app",
+                Presence.user_id.is_not(None),
+                Presence.last_seen_at >= online_since,
+            )
+        ).scalars().all()
+        if uid
+    }
+    online_app_users = len(session_ids | presence_user_ids)
+    online_app_guests = int(
+        db.execute(
+            select(func.count(Presence.id)).where(
+                Presence.source == "app",
+                Presence.user_id.is_(None),
+                Presence.last_seen_at >= online_since,
+            )
+        ).scalar_one()
+        or 0
+    )
+    online_site = int(
+        db.execute(
+            select(func.count(Presence.id)).where(
+                Presence.source == "site",
+                Presence.last_seen_at >= online_since,
+            )
+        ).scalar_one()
+        or 0
+    )
+    site_today = int(
+        db.execute(
+            select(func.count(Presence.id)).where(
+                Presence.source == "site",
+                Presence.last_seen_at >= today_start,
+            )
+        ).scalar_one()
+        or 0
+    )
+    app_guests_today = int(
+        db.execute(
+            select(func.count(Presence.id)).where(
+                Presence.source == "app",
+                Presence.user_id.is_(None),
+                Presence.last_seen_at >= today_start,
+            )
+        ).scalar_one()
+        or 0
+    )
+
     return StatsOut(
-        users=db.execute(select(func.count(User.id))).scalar_one(),
+        users=users_total,
         listings_pending=int(pending),
         listings_approved=db.execute(
             select(func.count(Listing.id)).where(Listing.status == ListingStatus.approved)
@@ -228,6 +314,9 @@ def stats(
         pending_over_24h=int(pending_over),
         open_reports=open_reports,
         open_directory_reports=open_directory_reports,
+        open_contacts=int(
+            db.execute(select(func.count(SiteContact.id)).where(SiteContact.status == "new")).scalar_one()
+        ),
         moderated_approved_30d=approved_30,
         moderated_rejected_30d=rejected_30,
         moderation_conversion=conversion,
@@ -238,14 +327,24 @@ def stats(
             db.execute(
                 select(func.count(Event.id)).where(
                     Event.is_published.is_(True),
-                    Event.starts_at >= now,
+                    or_(
+                        Event.starts_at >= now,
+                        Event.ends_at >= now,
+                        and_(Event.ends_at.is_(None), Event.starts_at >= now - timedelta(hours=12)),
+                    ),
                 )
             ).scalar_one()
         ),
         transport_routes=int(db.execute(select(func.count(TransportRoute.id))).scalar_one()),
         news_total=int(db.execute(select(func.count(DistrictNews.id))).scalar_one()),
         active_alerts=int(
-            db.execute(select(func.count(DistrictAlert.id)).where(DistrictAlert.is_active.is_(True))).scalar_one()
+            db.execute(
+                select(func.count(DistrictAlert.id)).where(
+                    DistrictAlert.is_active.is_(True),
+                    or_(DistrictAlert.starts_at.is_(None), DistrictAlert.starts_at <= now),
+                    or_(DistrictAlert.ends_at.is_(None), DistrictAlert.ends_at >= now),
+                )
+            ).scalar_one()
         ),
         top_events=[
             {
@@ -285,6 +384,17 @@ def stats(
             db.execute(select(func.coalesce(func.sum(Event.favorite_add_count), 0))).scalar_one()
         ),
         by_settlement=by_settlement,
+        online_site=online_site,
+        online_app=online_app_users + online_app_guests,
+        online_app_users=online_app_users,
+        online_app_guests=online_app_guests,
+        users_new_7d=users_new_7d,
+        users_new_today=users_new_today,
+        users_older=max(0, users_total - users_new_7d),
+        users_active_30d=users_active_30d,
+        online_calls=hub.connected_count(),
+        site_today=site_today,
+        app_guests_today=app_guests_today,
     )
 
 
@@ -306,10 +416,115 @@ def download_backup(
     )
 
 
+@router.get("/backups", response_model=BackupListOut)
+def list_backups(
+    user: User = Depends(require_roles(UserRole.admin)),
+):
+    ensure_daily_backup()
+    files = list_backup_files()
+    info = disk_info()
+    return BackupListOut(
+        items=[BackupFileOut(**backup_meta(p)) for p in files],
+        disk_free_mb=info["disk_free_mb"],
+        disk_total_mb=info["disk_total_mb"],
+        data_dir_mb=info["data_dir_mb"],
+    )
+
+
+@router.post("/backups", response_model=BackupListOut)
+def make_backup(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(UserRole.admin)),
+):
+    created = create_backup()
+    files = list_backup_files()
+    info = disk_info()
+    log_action(db, actor=user, action="backup.create", entity_type="backup", entity_id=None, details=created.name)
+    db.commit()
+    return BackupListOut(
+        items=[BackupFileOut(**backup_meta(p)) for p in files],
+        disk_free_mb=info["disk_free_mb"],
+        disk_total_mb=info["disk_total_mb"],
+        data_dir_mb=info["data_dir_mb"],
+    )
+
+
+@router.get("/backups/{name}")
+def download_backup_file(
+    name: str,
+    user: User = Depends(require_roles(UserRole.admin)),
+):
+    match = next((p for p in list_backup_files() if p.name == name), None)
+    if match is None:
+        raise HTTPException(status_code=404, detail="Копия не найдена")
+    return FileResponse(
+        match,
+        filename=match.name,
+        media_type="application/octet-stream",
+    )
+
+
+@router.get("/contacts", response_model=SiteContactPageOut)
+def list_contacts(
+    status: str | None = None,
+    q: str | None = None,
+    limit: int = Query(default=25, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(UserRole.admin, UserRole.moderator, UserRole.editor)),
+):
+    stmt = select(SiteContact)
+    if status in ("new", "read", "done"):
+        stmt = stmt.where(SiteContact.status == status)
+    if q and q.strip():
+        like = f"%{q.strip()}%"
+        stmt = stmt.where(
+            or_(
+                SiteContact.name.ilike(like),
+                SiteContact.settlement.ilike(like),
+                SiteContact.phone.ilike(like),
+                SiteContact.message.ilike(like),
+            )
+        )
+    count_stmt = select(func.count()).select_from(stmt.subquery())
+    total = int(db.execute(count_stmt).scalar_one())
+    rows = db.execute(stmt.order_by(SiteContact.created_at.desc()).offset(offset).limit(limit)).scalars().all()
+    return SiteContactPageOut(
+        items=[SiteContactOut.model_validate(r) for r in rows],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.patch("/contacts/{contact_id}", response_model=SiteContactOut)
+def patch_contact(
+    contact_id: int,
+    payload: SiteContactPatch,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(UserRole.admin, UserRole.moderator, UserRole.editor)),
+):
+    row = db.get(SiteContact, contact_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Обращение не найдено")
+    row.status = payload.status
+    log_action(
+        db,
+        actor=user,
+        action=f"contact.{payload.status}",
+        entity_type="contact",
+        entity_id=row.id,
+        details=row.name,
+    )
+    db.commit()
+    db.refresh(row)
+    return SiteContactOut.model_validate(row)
+
+
 @router.get("/alerts", response_model=AdminAlertsOut)
 def alerts(
     db: Session = Depends(get_db),
-    user: User = Depends(require_roles(UserRole.admin, UserRole.moderator)),
+    user: User = Depends(require_roles(UserRole.admin, UserRole.moderator, UserRole.editor)),
 ):
     day_ago = datetime.now(timezone.utc) - timedelta(hours=24)
     return AdminAlertsOut(
@@ -334,6 +549,9 @@ def alerts(
         )
         + int(
             db.execute(select(func.count(UserReport.id)).where(UserReport.status == "open")).scalar_one()
+        ),
+        open_contacts=int(
+            db.execute(select(func.count(SiteContact.id)).where(SiteContact.status == "new")).scalar_one()
         ),
     )
 
@@ -702,7 +920,7 @@ def list_reports(
         selectinload(ListingReport.listing),
         selectinload(ListingReport.reporter),
     )
-    if status_filter:
+    if status_filter and status_filter != "all":
         stmt = stmt.where(ListingReport.status == status_filter)
     stmt = stmt.order_by(ListingReport.created_at.desc())
     rows = db.execute(stmt).scalars().unique().all()
@@ -733,7 +951,7 @@ def list_directory_reports(
         selectinload(DirectoryReport.directory_item),
         selectinload(DirectoryReport.reporter),
     )
-    if status_filter:
+    if status_filter and status_filter != "all":
         stmt = stmt.where(DirectoryReport.status == status_filter)
     stmt = stmt.order_by(DirectoryReport.created_at.desc())
     rows = db.execute(stmt).scalars().unique().all()
@@ -893,7 +1111,7 @@ def list_user_reports(
         selectinload(UserReport.reporter),
         selectinload(UserReport.listing),
     )
-    if status_filter:
+    if status_filter and status_filter != "all":
         stmt = stmt.where(UserReport.status == status_filter)
     stmt = stmt.order_by(UserReport.created_at.desc())
     rows = db.execute(stmt).scalars().unique().all()
@@ -956,43 +1174,77 @@ def list_chats(
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(UserRole.moderator, UserRole.admin)),
 ):
-    pairs = db.execute(
-        select(ListingMessage.listing_id, ListingMessage.buyer_id)
+    pairs = (
+        select(
+            ListingMessage.listing_id,
+            ListingMessage.buyer_id,
+            func.max(ListingMessage.id).label("last_id"),
+            func.count(ListingMessage.id).label("msg_count"),
+        )
         .where(ListingMessage.buyer_id.is_not(None))
-        .distinct()
-    ).all()
+        .group_by(ListingMessage.listing_id, ListingMessage.buyer_id)
+        .subquery()
+    )
+    agg_rows = db.execute(select(pairs)).all()
+    last_ids = [row.last_id for row in agg_rows if row.last_id]
+    lasts = {
+        m.id: m
+        for m in (
+            db.execute(select(ListingMessage).where(ListingMessage.id.in_(last_ids))).scalars().all() if last_ids else []
+        )
+    }
+    rn = func.row_number().over(
+        partition_by=(ListingMessage.listing_id, ListingMessage.buyer_id),
+        order_by=ListingMessage.id.desc(),
+    )
+    ranked = (
+        select(
+            ListingMessage.listing_id,
+            ListingMessage.buyer_id,
+            ListingMessage.body,
+            ListingMessage.kind,
+            rn.label("rn"),
+        ).where(ListingMessage.buyer_id.is_not(None))
+    ).subquery()
+    recent = db.execute(select(ranked).where(ranked.c.rn <= 12)).all()
+    flags_map: dict[tuple[int, int], list[str]] = {}
+    for row in recent:
+        if (row.kind or "text") == "call":
+            continue
+        key = (row.listing_id, row.buyer_id)
+        acc = flags_map.setdefault(key, [])
+        for reason in _chat_flag_reasons(db, row.body):
+            if reason not in acc:
+                acc.append(reason)
+    listing_ids = {row.listing_id for row in agg_rows}
+    listings = {
+        item.id: item
+        for item in (
+            db.execute(select(Listing).where(Listing.id.in_(listing_ids))).scalars().all() if listing_ids else []
+        )
+    }
+    user_ids: set[int] = set()
+    for item in listings.values():
+        user_ids.add(item.author_id)
+    for row in agg_rows:
+        if row.buyer_id:
+            user_ids.add(row.buyer_id)
+    users = {
+        u.id: u for u in (db.execute(select(User).where(User.id.in_(user_ids))).scalars().all() if user_ids else [])
+    }
     out: list[AdminConversationOut] = []
     needle = (q or "").strip().lower()
-    for lid, buyer_id in pairs:
-        if buyer_id is None:
+    for row in agg_rows:
+        item = listings.get(row.listing_id)
+        last = lasts.get(row.last_id)
+        if not item or not last or row.buyer_id is None:
             continue
-        item = db.execute(select(Listing).where(Listing.id == lid)).scalar_one_or_none()
-        if not item:
-            continue
-        msgs = (
-            db.execute(
-                select(ListingMessage)
-                .where(ListingMessage.listing_id == lid, ListingMessage.buyer_id == buyer_id)
-                .order_by(ListingMessage.created_at.desc())
-            )
-            .scalars()
-            .all()
-        )
-        if not msgs:
-            continue
-        last = msgs[0]
-        flag_reasons: list[str] = []
-        for m in msgs:
-            if (m.kind or "text") == "call":
-                continue
-            for reason in _chat_flag_reasons(db, m.body):
-                if reason not in flag_reasons:
-                    flag_reasons.append(reason)
-        seller = db.execute(select(User).where(User.id == item.author_id)).scalar_one_or_none()
-        buyer = db.execute(select(User).where(User.id == buyer_id)).scalar_one_or_none()
-        row = AdminConversationOut(
-            listing_id=lid,
-            buyer_id=buyer_id,
+        flag_reasons = flags_map.get((row.listing_id, row.buyer_id), [])[:8]
+        seller = users.get(item.author_id)
+        buyer = users.get(row.buyer_id)
+        conv = AdminConversationOut(
+            listing_id=row.listing_id,
+            buyer_id=row.buyer_id,
             listing_title=item.title,
             listing_status=item.status.value if hasattr(item.status, "value") else str(item.status),
             seller_id=item.author_id,
@@ -1000,25 +1252,25 @@ def list_chats(
             buyer_name=buyer.full_name if buyer else None,
             last_message=last.body[:200],
             last_message_at=last.created_at,
-            message_count=len(msgs),
+            message_count=int(row.msg_count or 0),
             flagged=bool(flag_reasons),
-            flag_reasons=flag_reasons[:8],
+            flag_reasons=flag_reasons,
         )
-        if flagged_only and not row.flagged:
+        if flagged_only and not conv.flagged:
             continue
         if needle:
             hay = " ".join(
                 [
-                    row.listing_title,
-                    row.seller_name or "",
-                    row.buyer_name or "",
-                    row.last_message or "",
-                    " ".join(row.flag_reasons),
+                    conv.listing_title,
+                    conv.seller_name or "",
+                    conv.buyer_name or "",
+                    conv.last_message or "",
+                    " ".join(conv.flag_reasons),
                 ]
             ).lower()
             if needle not in hay:
                 continue
-        out.append(row)
+        out.append(conv)
     out.sort(key=lambda r: (r.last_message_at or datetime.min.replace(tzinfo=timezone.utc)), reverse=True)
     return out[:limit]
 
@@ -1121,17 +1373,20 @@ def delete_chat_thread(
     return {"ok": True, "deleted": count}
 
 
-@router.get("/audit-log", response_model=list[AuditLogOut])
+@router.get("/audit-log", response_model=AuditLogPageOut)
 def audit_log(
     q: str | None = None,
-    limit: int = Query(default=100, ge=1, le=500),
+    entity_type: str | None = None,
+    limit: int = Query(default=30, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(UserRole.admin, UserRole.moderator, UserRole.editor)),
 ):
-    stmt = select(AuditLog).options(selectinload(AuditLog.actor)).order_by(AuditLog.created_at.desc()).limit(limit)
+    filters = []
+    need_actor = bool(q and q.strip())
     if q and q.strip():
         like = f"%{q.strip()}%"
-        stmt = stmt.join(AuditLog.actor).where(
+        filters.append(
             or_(
                 AuditLog.action.ilike(like),
                 AuditLog.details.ilike(like),
@@ -1140,39 +1395,101 @@ def audit_log(
                 User.email.ilike(like),
             )
         )
+    if entity_type and entity_type.strip():
+        kind = entity_type.strip()
+        if kind == "report":
+            filters.append(AuditLog.entity_type.in_(("report", "directory_report", "user_report")))
+        elif kind == "chat":
+            filters.append(AuditLog.entity_type.in_(("chat", "listing_chat")))
+        else:
+            filters.append(AuditLog.entity_type == kind)
+
+    stmt = select(AuditLog).options(selectinload(AuditLog.actor))
+    count_stmt = select(func.count()).select_from(AuditLog)
+    if need_actor:
+        stmt = stmt.join(AuditLog.actor)
+        count_stmt = count_stmt.join(AuditLog.actor)
+    if filters:
+        stmt = stmt.where(*filters)
+        count_stmt = count_stmt.where(*filters)
+    total = int(db.execute(count_stmt).scalar_one())
+    stmt = stmt.order_by(AuditLog.created_at.desc()).offset(offset).limit(limit)
     rows = db.execute(stmt).scalars().unique().all()
-    return [
-        AuditLogOut(
-            id=r.id,
-            actor_id=r.actor_id,
-            actor_name=r.actor.full_name if r.actor else None,
-            action=r.action,
-            entity_type=r.entity_type,
-            entity_id=r.entity_id,
-            details=r.details,
-            created_at=r.created_at,
-        )
-        for r in rows
-    ]
+    return AuditLogPageOut(
+        items=[
+            AuditLogOut(
+                id=r.id,
+                actor_id=r.actor_id,
+                actor_name=r.actor.full_name if r.actor else None,
+                actor_role=r.actor.role.value if r.actor else None,
+                action=r.action,
+                entity_type=r.entity_type,
+                entity_id=r.entity_id,
+                details=r.details,
+                created_at=r.created_at,
+            )
+            for r in rows
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
-@router.get("/client-errors", response_model=list[ClientErrorOut])
+@router.get("/client-errors", response_model=ClientErrorPageOut)
 def list_client_errors(
     q: str | None = None,
-    limit: int = Query(default=100, ge=1, le=500),
+    limit: int = Query(default=25, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(UserRole.admin, UserRole.moderator)),
 ):
-    stmt = select(ClientErrorLog).order_by(ClientErrorLog.created_at.desc()).limit(limit)
+    stmt = select(ClientErrorLog)
+    count_stmt = select(func.count()).select_from(ClientErrorLog)
     if q and q.strip():
         like = f"%{q.strip()}%"
-        stmt = stmt.where(
-            or_(
-                ClientErrorLog.message.ilike(like),
-                ClientErrorLog.stack.ilike(like),
-                ClientErrorLog.device_model.ilike(like),
-                ClientErrorLog.app_version.ilike(like),
-                ClientErrorLog.screen.ilike(like),
-            )
+        cond = or_(
+            ClientErrorLog.message.ilike(like),
+            ClientErrorLog.stack.ilike(like),
+            ClientErrorLog.device_brand.ilike(like),
+            ClientErrorLog.device_model.ilike(like),
+            ClientErrorLog.device_os.ilike(like),
+            ClientErrorLog.app_version.ilike(like),
+            ClientErrorLog.screen.ilike(like),
+            ClientErrorLog.client_ip.ilike(like),
         )
-    return db.execute(stmt).scalars().all()
+        stmt = stmt.where(cond)
+        count_stmt = count_stmt.where(cond)
+    total = int(db.execute(count_stmt).scalar_one())
+    rows = (
+        db.execute(stmt.order_by(ClientErrorLog.created_at.desc()).offset(offset).limit(limit))
+        .scalars()
+        .all()
+    )
+    names: dict[int, str] = {}
+    uids = {r.user_id for r in rows if r.user_id}
+    if uids:
+        for u in db.execute(select(User.id, User.full_name).where(User.id.in_(uids))).all():
+            names[int(u[0])] = u[1]
+    return ClientErrorPageOut(
+        items=[
+            ClientErrorOut(
+                id=r.id,
+                created_at=r.created_at,
+                user_id=r.user_id,
+                user_name=names.get(r.user_id) if r.user_id else None,
+                message=r.message,
+                stack=r.stack,
+                screen=r.screen,
+                app_version=r.app_version,
+                device_brand=r.device_brand,
+                device_model=r.device_model,
+                device_os=r.device_os,
+                client_ip=r.client_ip,
+            )
+            for r in rows
+        ],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )

@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily Ryadom56 SQLite backup
+
+[Timer]
+OnCalendar=*-*-* 22:00:00
+Persistent=true
+RandomizedDelaySec=180
+
+[Install]
+WantedBy=timers.target

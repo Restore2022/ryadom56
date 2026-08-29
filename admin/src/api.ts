@@ -75,6 +75,11 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
       path.startsWith('/auth/reset-password');
     if (res.status === 401 && !authCall) {
       setToken(null);
+      try {
+        sessionStorage.setItem('ryadom56.loginMsg', 'Сессия истекла. Войдите снова');
+      } catch {
+        /* ignore */
+      }
       window.dispatchEvent(new CustomEvent('ryadom56:unauthorized'));
       throw new Error('Сессия истекла. Войдите снова');
     }
@@ -101,6 +106,11 @@ export async function apiText(path: string): Promise<string> {
   }
   if (res.status === 401) {
     setToken(null);
+    try {
+      sessionStorage.setItem('ryadom56.loginMsg', 'Сессия истекла. Войдите снова');
+    } catch {
+      /* ignore */
+    }
     window.dispatchEvent(new CustomEvent('ryadom56:unauthorized'));
     throw new Error('Сессия истекла. Войдите снова');
   }
@@ -120,6 +130,11 @@ export async function apiDownload(path: string, filename: string): Promise<void>
   }
   if (res.status === 401) {
     setToken(null);
+    try {
+      sessionStorage.setItem('ryadom56.loginMsg', 'Сессия истекла. Войдите снова');
+    } catch {
+      /* ignore */
+    }
     window.dispatchEvent(new CustomEvent('ryadom56:unauthorized'));
     throw new Error('Сессия истекла. Войдите снова');
   }
@@ -180,6 +195,7 @@ export type Listing = {
   category: string;
   status: string;
   price?: number | null;
+  settlement_id?: number;
   settlement_name?: string | null;
   author_id?: number;
   author_name?: string | null;
@@ -194,6 +210,8 @@ export type Listing = {
   images?: { id: number; url: string; sort_order: number }[];
   created_at: string;
   updated_at?: string;
+  lifetime_days?: number;
+  expires_at?: string | null;
 };
 
 export type ListingReport = {
@@ -241,6 +259,7 @@ export type AuditLog = {
   id: number;
   actor_id: number;
   actor_name?: string | null;
+  actor_role?: string | null;
   action: string;
   entity_type: string;
   entity_id?: number | null;
@@ -252,6 +271,7 @@ export type ClientErrorLog = {
   id: number;
   created_at: string;
   user_id?: number | null;
+  user_name?: string | null;
   message: string;
   stack?: string | null;
   screen?: string | null;
@@ -305,6 +325,7 @@ export type DirectoryItem = {
   lat?: number | null;
   lon?: number | null;
   is_published: boolean;
+  view_count?: number;
 };
 
 export type Settlement = {
@@ -338,6 +359,18 @@ export type Stats = {
   directory_favorites_total?: number;
   event_favorite_adds_total?: number;
   open_directory_reports?: number;
+  open_contacts?: number;
+  online_site?: number;
+  online_app?: number;
+  online_app_users?: number;
+  online_app_guests?: number;
+  users_new_7d?: number;
+  users_new_today?: number;
+  users_older?: number;
+  users_active_30d?: number;
+  online_calls?: number;
+  site_today?: number;
+  app_guests_today?: number;
   by_settlement?: {
     settlement_id?: number | null;
     settlement_name: string;
@@ -367,6 +400,20 @@ export type EventItem = {
   updated_at: string;
 };
 
+export type TransportStop = {
+  id: number;
+  name: string;
+  settlement_id?: number | null;
+  created_at: string;
+};
+
+export type TransportTrip = {
+  depart: string;
+  arrive?: string | null;
+  days: string[];
+  days_label: string;
+};
+
 export type TransportRoute = {
   id: number;
   title: string;
@@ -377,6 +424,9 @@ export type TransportRoute = {
   schedule_weekends?: string | null;
   stops_text?: string | null;
   stops?: string[];
+  stop_points?: TransportStop[];
+  times?: string[];
+  trips?: TransportTrip[];
   days_mode?: 'all' | 'weekdays' | 'weekends' | string;
   notes?: string | null;
   fare_text?: string | null;
@@ -430,6 +480,30 @@ export type BlacklistEntry = {
   value: string;
   note?: string | null;
   created_at: string;
+};
+
+export type SiteContact = {
+  id: number;
+  name: string;
+  settlement?: string | null;
+  phone?: string | null;
+  message: string;
+  ip?: string | null;
+  status: 'new' | 'read' | 'done' | string;
+  created_at: string;
+};
+
+export type BackupFile = {
+  name: string;
+  size: number;
+  created_at: string;
+};
+
+export type BackupList = {
+  items: BackupFile[];
+  disk_free_mb?: number;
+  disk_total_mb?: number;
+  data_dir_mb?: number;
 };
 
 export type LegalDocument = {

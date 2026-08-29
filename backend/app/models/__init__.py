@@ -251,12 +251,41 @@ class TransportRoute(Base):
     view_count: Mapped[int] = mapped_column(Integer, default=0)
     favorite_count: Mapped[int] = mapped_column(Integer, default=0)
     outdated_reports: Mapped[int] = mapped_column(Integer, default=0)
+    times_json: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         UtcDateTime(), server_default=func.now(), onupdate=func.now()
     )
 
     settlement: Mapped["Settlement | None"] = relationship()
+    stop_links: Mapped[list["TransportRouteStop"]] = relationship(
+        back_populates="route",
+        cascade="all, delete-orphan",
+        order_by="TransportRouteStop.sort_order",
+    )
+
+
+class TransportStop(Base):
+    __tablename__ = "transport_stops"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), nullable=False, index=True)
+    settlement_id: Mapped[int | None] = mapped_column(ForeignKey("settlements.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
+
+    settlement: Mapped["Settlement | None"] = relationship()
+
+
+class TransportRouteStop(Base):
+    __tablename__ = "transport_route_stops"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    route_id: Mapped[int] = mapped_column(ForeignKey("transport_routes.id"), nullable=False, index=True)
+    stop_id: Mapped[int] = mapped_column(ForeignKey("transport_stops.id"), nullable=False, index=True)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    route: Mapped["TransportRoute"] = relationship(back_populates="stop_links")
+    stop: Mapped["TransportStop"] = relationship()
 
 
 class TransportFavorite(Base):
@@ -519,3 +548,29 @@ class ClientErrorLog(Base):
     device_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     device_os: Mapped[str | None] = mapped_column(String(80), nullable=True)
     client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+
+
+class SiteContact(Base):
+    __tablename__ = "site_contacts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), nullable=False)
+    settlement: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="new", index=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now(), index=True)
+
+
+class Presence(Base):
+    """Анонимный пульс сайта и приложения: кто сейчас онлайн, в том числе без входа."""
+
+    __tablename__ = "presence"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    client_key: Mapped[str] = mapped_column(String(48), unique=True, index=True, nullable=False)
+    source: Mapped[str] = mapped_column(String(12), index=True, nullable=False)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    first_seen_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
+    last_seen_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now(), index=True)

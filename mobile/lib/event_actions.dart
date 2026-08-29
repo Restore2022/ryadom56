@@ -40,7 +40,7 @@ String _gcalStamp(DateTime dt) {
 
 Future<void> shareEvent(Map<String, dynamic> event) async {
   final title = event['title']?.toString() ?? 'Событие';
-  final when = _fmtLocal(event['starts_at']?.toString());
+  final when = formatEventWhen(event['starts_at']?.toString(), event['ends_at']?.toString());
   final place = event['place_text']?.toString() ?? '';
   final settlement = event['settlement_name']?.toString() ?? '';
   final loc = [place, if (settlement.isNotEmpty) settlement].where((e) => e.isNotEmpty).join(' · ');

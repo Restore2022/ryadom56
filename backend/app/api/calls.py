@@ -2,7 +2,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy import func, or_, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, aliased, selectinload
 
 from app.api.deps import get_current_user, require_roles
 from app.api.listings import author_replied_to_buyer, emit_listing_chat
@@ -513,22 +513,24 @@ def admin_list_calls(
     if status and status.strip():
         stmt = stmt.where(AppCall.status == status.strip())
         count_stmt = count_stmt.where(AppCall.status == status.strip())
-    total = int(db.execute(count_stmt).scalar_one())
-    rows = db.execute(stmt.order_by(AppCall.id.desc()).limit(800 if q else offset + limit)).scalars().unique().all()
     if q and q.strip():
-        needle = q.strip().lower()
-        rows = [
-            c
-            for c in rows
-            if needle in (c.caller.full_name if c.caller else "").lower()
-            or needle in (c.callee.full_name if c.callee else "").lower()
-            or needle in (c.listing.title if c.listing else "").lower()
-            or needle in str(c.id)
-        ]
-        total = len(rows)
-        rows = rows[offset : offset + limit]
-    elif offset:
-        rows = rows[offset : offset + limit]
-    else:
-        rows = rows[:limit]
+        like = f"%{q.strip()}%"
+        caller = aliased(User)
+        callee = aliased(User)
+        listing = aliased(Listing)
+        stmt = stmt.outerjoin(caller, AppCall.caller_id == caller.id).outerjoin(
+            callee, AppCall.callee_id == callee.id
+        ).outerjoin(listing, AppCall.listing_id == listing.id)
+        count_stmt = (
+            count_stmt.outerjoin(caller, AppCall.caller_id == caller.id)
+            .outerjoin(callee, AppCall.callee_id == callee.id)
+            .outerjoin(listing, AppCall.listing_id == listing.id)
+        )
+        filt = or_(caller.full_name.ilike(like), callee.full_name.ilike(like), listing.title.ilike(like))
+        if q.strip().isdigit():
+            filt = or_(filt, AppCall.id == int(q.strip()))
+        stmt = stmt.where(filt)
+        count_stmt = count_stmt.where(filt)
+    total = int(db.execute(count_stmt).scalar_one())
+    rows = db.execute(stmt.order_by(AppCall.id.desc()).offset(offset).limit(limit)).scalars().unique().all()
     return CallPageOut(items=[to_call_out(db, c, user) for c in rows], total=total, limit=limit, offset=offset)

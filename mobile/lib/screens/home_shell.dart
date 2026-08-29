@@ -1048,8 +1048,8 @@ class _EventsTabState extends State<EventsTab> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final user = context.read<AppState>().user;
-      final sid = user?['settlement_id'] as int?;
+      final state = context.read<AppState>();
+      final sid = state.user?['settlement_id'] as int? ?? state.preferredSettlementId;
       if (sid != null) settlementId = sid;
       _load();
     });
@@ -1100,18 +1100,29 @@ class _EventsTabState extends State<EventsTab> {
 
   @override
   Widget build(BuildContext context) {
-    final scheme = Theme.of(context).colorScheme;
-    final settlements = context.watch<AppState>().settlements;
+    final state = context.watch<AppState>();
+    final settlements = state.settlements;
     final padH = context.isLandscape ? 12.0 : 16.0;
-    return Column(
-      children: [
-        Flexible(
-          fit: FlexFit.loose,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Padding(
+    final bottomPad = context.listBottomPad;
+
+    return stackWithScrollToTop(
+      controller: scroll,
+      heroTag: 'scroll-top-events',
+      child: RefreshIndicator(
+        onRefresh: () => _load(),
+        child: NotificationListener<ScrollNotification>(
+          onNotification: (n) {
+            if (items.isNotEmpty && n.metrics.pixels >= n.metrics.maxScrollExtent - 240) {
+              _load(append: true);
+            }
+            return false;
+          },
+          child: CustomScrollView(
+            controller: scroll,
+            physics: const AlwaysScrollableScrollPhysics(),
+            slivers: [
+              SliverToBoxAdapter(
+                child: Padding(
                   padding: EdgeInsets.fromLTRB(padH, context.isLandscape ? 6 : 12, padH, 8),
                   child: DropdownButtonFormField<int?>(
                     value: settlementId != null && settlements.any((s) => s['id'] == settlementId)
@@ -1139,138 +1150,190 @@ class _EventsTabState extends State<EventsTab> {
                     },
                   ),
                 ),
-                Padding(
+              ),
+              SliverToBoxAdapter(
+                child: ryadomChipRow(
                   padding: EdgeInsets.fromLTRB(padH, 0, padH, 8),
-                  child: SegmentedButton<String>(
-                    showSelectedIcon: false,
-                    segments: const [
-                      ButtonSegment(value: 'upcoming', label: Text('Скоро')),
-                      ButtonSegment(value: 'past', label: Text('Было')),
-                      ButtonSegment(value: 'all', label: Text('Все')),
-                    ],
-                    selected: {
-                      if (upcomingOnly == true) 'upcoming' else if (upcomingOnly == false) 'past' else 'all',
-                    },
-                    onSelectionChanged: (s) {
-                      final v = s.first;
-                      setState(() {
-                        upcomingOnly = v == 'upcoming'
-                            ? true
-                            : v == 'past'
-                                ? false
-                                : null;
-                      });
-                      _load();
+                  children: [
+                    RyadomFilterChip(
+                      label: 'Скоро',
+                      selected: upcomingOnly == true,
+                      onSelected: (_) {
+                        setState(() => upcomingOnly = true);
+                        _load();
+                      },
+                    ),
+                    const SizedBox(width: 8),
+                    RyadomFilterChip(
+                      label: 'Было',
+                      selected: upcomingOnly == false,
+                      onSelected: (_) {
+                        setState(() => upcomingOnly = false);
+                        _load();
+                      },
+                    ),
+                    const SizedBox(width: 8),
+                    RyadomFilterChip(
+                      label: 'Все',
+                      selected: upcomingOnly == null,
+                      onSelected: (_) {
+                        setState(() => upcomingOnly = null);
+                        _load();
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              if (loading && items.isEmpty)
+                const SliverFillRemaining(child: Center(child: CircularProgressIndicator()))
+              else if (error != null && items.isEmpty)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: adaptiveFillMessage(
+                    context: context,
+                    child: errorState(context: context, message: error!, onRetry: () => _load()),
+                  ),
+                )
+              else if (items.isEmpty)
+                SliverFillRemaining(
+                  hasScrollBody: false,
+                  child: adaptiveFillMessage(
+                    context: context,
+                    child: emptyState(
+                      context: context,
+                      title: upcomingOnly == false ? 'Прошедших событий нет' : 'Пока нет событий',
+                      subtitle: 'Афиша района появится здесь',
+                      icon: Icons.event_outlined,
+                      actionLabel: 'Обновить',
+                      onAction: () => _load(),
+                    ),
+                  ),
+                )
+              else
+                SliverPadding(
+                  padding: EdgeInsets.fromLTRB(padH, 4, padH, bottomPad),
+                  sliver: SliverList.separated(
+                    itemCount: items.length + (hasMore ? 1 : 0),
+                    separatorBuilder: (_, __) => const SizedBox(height: 12),
+                    itemBuilder: (_, i) {
+                      if (i >= items.length) {
+                        return Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 12),
+                          child: Center(
+                            child: loadingMore
+                                ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2))
+                                : TextButton(onPressed: () => _load(append: true), child: const Text('Ещё события')),
+                          ),
+                        );
+                      }
+                      return _AfishaCard(item: items[i] as Map<String, dynamic>);
                     },
                   ),
                 ),
-              ],
-            ),
+            ],
           ),
         ),
-        Expanded(
-          child: stackWithScrollToTop(
-            controller: scroll,
-            heroTag: 'scroll-top-events',
-            child: RefreshIndicator(
-              onRefresh: () => _load(),
-              child: loading && items.isEmpty
-                  ? const Center(child: CircularProgressIndicator())
-                  : error != null && items.isEmpty
-                      ? ListView(
-                          controller: scroll,
-                          children: [
-                            adaptiveFillMessage(
-                              context: context,
-                              child: errorState(context: context, message: error!, onRetry: () => _load()),
-                            ),
-                          ],
-                        )
-                      : items.isEmpty
-                          ? ListView(
-                              controller: scroll,
-                              children: [
-                                adaptiveFillMessage(
-                                  context: context,
-                                  child: emptyState(
-                                    context: context,
-                                    title: upcomingOnly == false ? 'Прошедших событий нет' : 'Пока нет событий',
-                                    subtitle: 'Афиша района появится здесь',
-                                    icon: Icons.event_outlined,
-                                    actionLabel: 'Обновить',
-                                    onAction: () => _load(),
-                                  ),
-                                ),
-                              ],
-                            )
-                          : NotificationListener<ScrollNotification>(
-                              onNotification: (n) {
-                                if (n.metrics.pixels >= n.metrics.maxScrollExtent - 240) {
-                                  _load(append: true);
-                                }
-                                return false;
-                              },
-                              child: ListView.separated(
-                              controller: scroll,
-                              padding: EdgeInsets.fromLTRB(16, 4, 16, context.listBottomPad),
-                              itemCount: items.length + (hasMore ? 1 : 0),
-                              separatorBuilder: (_, __) => const SizedBox(height: 12),
-                              itemBuilder: (_, i) {
-                                if (i >= items.length) {
-                                  return Padding(
-                                    padding: const EdgeInsets.symmetric(vertical: 12),
-                                    child: Center(
-                                      child: loadingMore
-                                          ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2))
-                                          : TextButton(onPressed: () => _load(append: true), child: const Text('Ещё события')),
-                                    ),
-                                  );
-                                }
-                                final item = items[i] as Map<String, dynamic>;
-                                return Material(
-                                  color: Theme.of(context).cardTheme.color,
-                                  borderRadius: BorderRadius.circular(18),
-                                  child: InkWell(
-                                    borderRadius: BorderRadius.circular(18),
-                                    onTap: () => Navigator.push(
-                                      context,
-                                      fastRoute(EventDetailScreen(item: item)),
-                                    ),
-                                    child: Container(
-                                      padding: const EdgeInsets.all(16),
-                                      decoration: BoxDecoration(
-                                        borderRadius: BorderRadius.circular(18),
-                                        border: Border.all(color: ryadomCardLine(context)),
-                                      ),
-                                      child: Column(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Text(
-                                            formatApiDateTime(item['starts_at']?.toString()),
-                                            style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700, fontSize: 12),
-                                          ),
-                                          const SizedBox(height: 6),
-                                          Text(
-                                            '${item['title']}',
-                                            style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 17),
-                                          ),
-                                          const SizedBox(height: 6),
-                                          Text(
-                                            '${item['place_text']}${item['settlement_name'] != null ? ' · ${item['settlement_name']}' : ''}',
-                                            style: TextStyle(color: scheme.onSurfaceVariant, height: 1.3),
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                );
-                              },
-                            ),
-                              ),
-            ),
+      ),
+    );
+  }
+}
+
+class _AfishaCard extends StatelessWidget {
+  const _AfishaCard({required this.item});
+  final Map<String, dynamic> item;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    final state = context.watch<AppState>();
+    final cover = item['cover_url']?.toString();
+    final title = '${item['title'] ?? ''}';
+    final place = '${item['place_text'] ?? ''}';
+    final settlement = item['settlement_name']?.toString();
+    final placeLine = [
+      if (place.isNotEmpty) place,
+      if (settlement != null && settlement.isNotEmpty) settlement,
+    ].join(' · ');
+
+    Widget coverBox() {
+      final placeholder = ColoredBox(
+        color: scheme.surfaceContainerHighest,
+        child: Icon(Icons.event_outlined, color: scheme.onSurfaceVariant, size: 28),
+      );
+      return SizedBox(
+        width: 78,
+        height: 104,
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: ColoredBox(
+            color: scheme.surfaceContainerHighest,
+            child: cover != null && cover.isNotEmpty
+                ? Image.network(
+                    state.mediaUrl(cover),
+                    width: 78,
+                    height: 104,
+                    fit: BoxFit.contain,
+                    alignment: Alignment.center,
+                    errorBuilder: (_, __, ___) => placeholder,
+                  )
+                : placeholder,
           ),
         ),
-      ],
+      );
+    }
+
+    return Material(
+      color: Theme.of(context).cardTheme.color,
+      borderRadius: BorderRadius.circular(18),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(18),
+        onTap: () => Navigator.push(context, fastRoute(EventDetailScreen(item: item))),
+        child: Container(
+          padding: const EdgeInsets.fromLTRB(10, 10, 8, 10),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: ryadomCardLine(context)),
+          ),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              coverBox(),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      formatEventWhen(item['starts_at']?.toString(), item['ends_at']?.toString()),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700, fontSize: 12),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      title,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                      style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 16, height: 1.25),
+                    ),
+                    if (placeLine.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        placeLine,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(color: scheme.onSurfaceVariant, height: 1.3, fontSize: 13),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              Icon(Icons.chevron_right, color: scheme.onSurfaceVariant),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -1595,10 +1658,29 @@ class _TransportTabState extends State<_TransportTab> {
                                         );
                                       }
                                       final item = Map<String, dynamic>.from(items[i] as Map);
-                                      final number = item['route_number']?.toString();
                                       final id = item['id'];
                                       final favorited =
                                           id is int && state.isTransportFavorited(id, item: item);
+                                      final next = item['next_departure']?.toString();
+                                      final tripLabels = <String>[];
+                                      final rawTrips = item['trips'];
+                                      if (rawTrips is List) {
+                                        for (final row in rawTrips) {
+                                          if (row is! Map) continue;
+                                          final days = row['days_label']?.toString() ?? '';
+                                          final depart = row['depart']?.toString() ?? '';
+                                          final arrive = row['arrive']?.toString();
+                                          final stamp = (arrive != null && arrive.isNotEmpty) ? '$depart → $arrive' : depart;
+                                          tripLabels.add(days.isEmpty ? stamp : '$days $stamp');
+                                        }
+                                      }
+                                      final times = tripLabels.isNotEmpty
+                                          ? tripLabels
+                                          : ((item['times'] as List?)
+                                                  ?.map((e) => e.toString())
+                                                  .where((e) => e.isNotEmpty)
+                                                  .toList() ??
+                                              []);
                                       return Material(
                                         color: Theme.of(context).cardTheme.color,
                                         borderRadius: BorderRadius.circular(18),
@@ -1624,20 +1706,51 @@ class _TransportTabState extends State<_TransportTab> {
                                                   child: Column(
                                                     crossAxisAlignment: CrossAxisAlignment.start,
                                                     children: [
-                                                      if (number != null && number.isNotEmpty)
-                                                        Text(
-                                                          number,
-                                                          style: TextStyle(
-                                                            color: scheme.primary,
-                                                            fontWeight: FontWeight.w700,
-                                                            fontSize: 12,
-                                                          ),
-                                                        ),
                                                       Text(
                                                         '${item['title']}',
                                                         style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 17),
                                                       ),
-                                                      if (item['description'] != null) ...[
+                                                      if (next != null && next.isNotEmpty) ...[
+                                                        const SizedBox(height: 6),
+                                                        Text(
+                                                          'Ближайший $next',
+                                                          style: TextStyle(
+                                                            color: scheme.primary,
+                                                            fontWeight: FontWeight.w700,
+                                                            fontSize: 13,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                      if (times.isNotEmpty) ...[
+                                                        const SizedBox(height: 8),
+                                                        Wrap(
+                                                          spacing: 6,
+                                                          runSpacing: 6,
+                                                          children: [
+                                                            for (final stamp in times.take(6))
+                                                              Container(
+                                                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                                                decoration: BoxDecoration(
+                                                                  color: scheme.primary.withValues(alpha: 0.12),
+                                                                  borderRadius: BorderRadius.circular(999),
+                                                                ),
+                                                                child: Text(
+                                                                  stamp,
+                                                                  style: TextStyle(
+                                                                    color: scheme.primary,
+                                                                    fontWeight: FontWeight.w800,
+                                                                    fontSize: 12,
+                                                                  ),
+                                                                ),
+                                                              ),
+                                                            if (times.length > 6)
+                                                              Text(
+                                                                '+${times.length - 6}',
+                                                                style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
+                                                              ),
+                                                          ],
+                                                        ),
+                                                      ] else if (item['description'] != null) ...[
                                                         const SizedBox(height: 6),
                                                         Text(
                                                           '${item['description']}',

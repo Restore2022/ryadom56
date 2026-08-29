@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Рядом56">
+  <rect width="512" height="512" rx="114" fill="#163022"/>
+  <path fill="#E8E4D4" d="M256 86c-66 0-120 52-120 120 0 90 120 216 120 216s120-126 120-216c0-68-54-120-120-120zm0 158a40 40 0 1 1 0-80 40 40 0 0 1 0 80z"/>
+  <text x="400" y="448" text-anchor="middle" font-family="Segoe UI, system-ui, sans-serif" font-size="86" font-weight="800" fill="#E8E4D4">56</text>
+</svg>

@@ -173,6 +173,13 @@ class ListingModerationIn(BaseModel):
     moderation_note: str | None = None
 
 
+class ListingAdminStatusIn(BaseModel):
+    status: ListingStatus
+    moderation_note: str | None = None
+    close_reason: str | None = Field(default=None, max_length=40)
+    close_note: str | None = Field(default=None, max_length=500)
+
+
 class ListingCloseIn(BaseModel):
     reason: str = Field(pattern="^(sold|not_relevant|busy|other)$")
     note: str | None = Field(default=None, max_length=500)
@@ -331,11 +338,19 @@ class AuditLogOut(BaseModel):
     id: int
     actor_id: int
     actor_name: str | None = None
+    actor_role: str | None = None
     action: str
     entity_type: str
     entity_id: int | None
     details: str | None
     created_at: datetime
+
+
+class AuditLogPageOut(BaseModel):
+    items: list[AuditLogOut]
+    total: int
+    limit: int
+    offset: int
 
 
 class DirectoryCreate(BaseModel):
@@ -546,15 +561,49 @@ class EventPageOut(BaseModel):
     offset: int
 
 
+class TransportStopPointOut(BaseModel):
+    id: int
+    name: str
+
+
+class TransportStopCreate(BaseModel):
+    name: str = Field(min_length=2, max_length=120)
+    settlement_id: int | None = None
+
+
+class TransportStopUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=120)
+    settlement_id: int | None = None
+
+
+class TransportStopOut(BaseModel):
+    id: int
+    name: str
+    settlement_id: int | None = None
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class TransportTripIn(BaseModel):
+    depart: str
+    arrive: str | None = None
+    days: list[str] = Field(min_length=1, max_length=7)
+
+
+class TransportTripOut(BaseModel):
+    depart: str
+    arrive: str | None = None
+    days: list[str]
+    days_label: str
+
+
 class TransportCreate(BaseModel):
-    title: str = Field(min_length=2, max_length=200)
-    route_number: str | None = Field(default=None, max_length=40)
+    stop_ids: list[int] = Field(min_length=2, max_length=40)
+    trips: list[TransportTripIn] | None = Field(default=None, min_length=1, max_length=80)
+    times: list[str] | None = Field(default=None, min_length=1, max_length=80)
     description: str | None = Field(default=None, max_length=4000)
-    schedule_text: str = Field(min_length=3, max_length=12000)
-    schedule_weekdays: str | None = Field(default=None, max_length=12000)
-    schedule_weekends: str | None = Field(default=None, max_length=12000)
-    stops_text: str | None = Field(default=None, max_length=8000)
-    days_mode: str = Field(default="all", pattern="^(all|weekdays|weekends)$")
     notes: str | None = Field(default=None, max_length=2000)
     fare_text: str | None = Field(default=None, max_length=120)
     phone: str | None = Field(default=None, max_length=32)
@@ -563,14 +612,10 @@ class TransportCreate(BaseModel):
 
 
 class TransportUpdate(BaseModel):
-    title: str | None = Field(default=None, min_length=2, max_length=200)
-    route_number: str | None = Field(default=None, max_length=40)
+    stop_ids: list[int] | None = Field(default=None, min_length=2, max_length=40)
+    trips: list[TransportTripIn] | None = Field(default=None, min_length=1, max_length=80)
+    times: list[str] | None = Field(default=None, min_length=1, max_length=80)
     description: str | None = Field(default=None, max_length=4000)
-    schedule_text: str | None = Field(default=None, min_length=3, max_length=12000)
-    schedule_weekdays: str | None = Field(default=None, max_length=12000)
-    schedule_weekends: str | None = Field(default=None, max_length=12000)
-    stops_text: str | None = Field(default=None, max_length=8000)
-    days_mode: str | None = Field(default=None, pattern="^(all|weekdays|weekends)$")
     notes: str | None = Field(default=None, max_length=2000)
     fare_text: str | None = Field(default=None, max_length=120)
     phone: str | None = Field(default=None, max_length=32)
@@ -588,6 +633,9 @@ class TransportOut(BaseModel):
     schedule_weekends: str | None = None
     stops_text: str | None = None
     stops: list[str] = []
+    stop_points: list[TransportStopPointOut] = []
+    times: list[str] = []
+    trips: list[TransportTripOut] = []
     days_mode: str = "all"
     notes: str | None
     fare_text: str | None = None
@@ -788,12 +836,25 @@ class StatsOut(BaseModel):
     event_favorite_adds_total: int = 0
     by_settlement: list[SettlementStat] = []
     open_directory_reports: int = 0
+    open_contacts: int = 0
+    online_site: int = 0
+    online_app: int = 0
+    online_app_users: int = 0
+    online_app_guests: int = 0
+    users_new_7d: int = 0
+    users_new_today: int = 0
+    users_older: int = 0
+    users_active_30d: int = 0
+    online_calls: int = 0
+    site_today: int = 0
+    app_guests_today: int = 0
 
 
 class AdminAlertsOut(BaseModel):
     pending: int
     pending_over_24h: int
     open_reports: int
+    open_contacts: int = 0
 
 
 class BlacklistCreate(BaseModel):
@@ -811,6 +872,44 @@ class BlacklistOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class SiteContactOut(BaseModel):
+    id: int
+    name: str
+    settlement: str | None = None
+    phone: str | None = None
+    message: str
+    ip: str | None = None
+    status: str
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class SiteContactPageOut(BaseModel):
+    items: list[SiteContactOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class SiteContactPatch(BaseModel):
+    status: str = Field(pattern="^(new|read|done)$")
+
+
+class BackupFileOut(BaseModel):
+    name: str
+    size: int
+    created_at: str
+
+
+class BackupListOut(BaseModel):
+    items: list[BackupFileOut]
+    disk_free_mb: int = 0
+    disk_total_mb: int = 0
+    data_dir_mb: float = 0
 
 
 class ListingPinIn(BaseModel):
@@ -905,6 +1004,7 @@ class ClientErrorOut(BaseModel):
     id: int
     created_at: datetime
     user_id: int | None = None
+    user_name: str | None = None
     message: str
     stack: str | None = None
     screen: str | None = None
@@ -916,3 +1016,10 @@ class ClientErrorOut(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class ClientErrorPageOut(BaseModel):
+    items: list[ClientErrorOut]
+    total: int
+    limit: int
+    offset: int

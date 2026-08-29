@@ -95,9 +95,11 @@ server {{
         proxy_set_header Host $host;
     }}
 
+    include /etc/nginx/snippets/ryadom56-web.conf;
+
     location / {{
-        root {REMOTE_APP}/admin/dist;
-        try_files $uri $uri/ /index.html;
+        root {REMOTE_APP}/web;
+        try_files $uri $uri/ =404;
     }}
 }}
 """

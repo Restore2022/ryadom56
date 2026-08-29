@@ -97,9 +97,11 @@ WantedBy=multi-user.target
         proxy_set_header Host $host;
     }}
 
+    include /etc/nginx/snippets/ryadom56-web.conf;
+
     location / {{
-        root {REMOTE}/admin/dist;
-        try_files $uri $uri/ /index.html;
+        root {REMOTE}/web;
+        try_files $uri $uri/ =404;
     }}
 }}
 """
@@ -136,7 +138,8 @@ WantedBy=multi-user.target
     run(c, f"iptables -C INPUT -p tcp --dport {HTTP_PORT} -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport {HTTP_PORT} -j ACCEPT || true")
     c.close()
     print("DONE")
-    print(f"Admin: http://{HOST}:{HTTP_PORT}/")
+    print(f"Site:  http://{HOST}:{HTTP_PORT}/")
+    print(f"Admin: http://{HOST}:{HTTP_PORT}/console/")
     print(f"API:   http://{HOST}:{HTTP_PORT}/api/health")
 
 

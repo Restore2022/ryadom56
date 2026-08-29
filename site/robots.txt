@@ -1,0 +1,8 @@
+User-agent: *
+Allow: /
+Disallow: /console
+Disallow: /console/
+Disallow: /docs
+Disallow: /openapi.json
+
+Sitemap: https://legac.ru/sitemap.xml

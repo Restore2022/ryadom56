@@ -8,7 +8,8 @@
 | Папка | Что внутри |
 |-------|------------|
 | `backend/` | FastAPI + SQLite |
-| `admin/` | React-админка (Vite) |
+| `admin/` | React-админка (Vite), на проде `https://legac.ru/console/` |
+| `site/` | Публичная визитка `https://legac.ru/` |
 | `mobile/` | Flutter-приложение (Android) |
 
 ## Быстрый старт (локально)
@@ -21,7 +22,7 @@ python -m uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 - Документация API: http://127.0.0.1:8000/docs
-- Админ по умолчанию: `admin@ryadom56.ru` / `admin123`
+- Админ **локально**: `admin@ryadom56.ru` / `admin123`. На проде пароль другой, дефолт не использовать.
 
 ### 2. Админка
 
@@ -32,6 +33,8 @@ npm run dev
 ```
 
 Откроется http://127.0.0.1:5173
+
+На проде админка спрятана: **https://legac.ru/console/** (сборка с относительным `base: './'`).
 
 ### 3. Android (Flutter)
 
@@ -72,6 +75,6 @@ flutter run
 
 ## Важно
 
-- Прод: домен **legac.ru**, API `https://legac.ru/api`.
+- Прод: домен **legac.ru**, визитка `https://legac.ru/`, админка `https://legac.ru/console/`, API `https://legac.ru/api`.
 - Пароль админа смените перед широкой раздачей.
 - `secret_key` в `backend/app/core/config.py` — только для разработки.

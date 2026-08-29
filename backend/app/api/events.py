@@ -1,9 +1,9 @@
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import get_optional_user, require_roles
@@ -11,6 +11,7 @@ from app.core.database import get_db
 from app.models import Event, User, UserRole
 from app.schemas import EventCreate, EventOut, EventPageOut, EventUpdate
 from app.services.audit import log_action
+from app.services.textsearch import contains_query
 
 router = APIRouter(prefix="/events", tags=["events"])
 
@@ -101,19 +102,22 @@ def list_events(
     if settlement_id is not None:
         stmt = stmt.where(Event.settlement_id == settlement_id)
     if upcoming is True:
-        stmt = stmt.where(Event.starts_at >= now)
+        stmt = stmt.where(
+            or_(
+                Event.starts_at >= now,
+                and_(Event.ends_at.is_not(None), Event.ends_at >= now),
+                and_(Event.ends_at.is_(None), Event.starts_at >= now - timedelta(hours=12)),
+            )
+        )
     elif upcoming is False:
         stmt = stmt.where(Event.starts_at < now)
     if q and q.strip():
-        like = f"%{q.strip()}%"
-        stmt = stmt.where(
-            or_(
-                Event.title.ilike(like),
-                Event.description.ilike(like),
-                Event.place_text.ilike(like),
-                Event.address.ilike(like),
-            )
+        cond = contains_query(
+            [Event.title, Event.description, Event.place_text, Event.address],
+            q,
         )
+        if cond is not None:
+            stmt = stmt.where(cond)
     count_stmt = select(func.count()).select_from(stmt.subquery())
     total = int(db.execute(count_stmt).scalar_one())
     stmt = stmt.order_by(Event.starts_at.asc() if upcoming is not False else Event.starts_at.desc())

@@ -24,6 +24,9 @@ class CallHub:
     def is_online(self, user_id: int) -> bool:
         return bool(self._conns.get(int(user_id)))
 
+    def connected_count(self) -> int:
+        return sum(1 for bucket in self._conns.values() if bucket)
+
     async def connect(self, user_id: int, ws: WebSocket) -> None:
         async with self._lock:
             self._conns.setdefault(user_id, set()).add(ws)
