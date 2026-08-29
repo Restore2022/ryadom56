@@ -1,5 +1,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
+import struct
+import zlib
 
 from fastapi import FastAPI
 from datetime import datetime, timezone
@@ -7,6 +9,8 @@ from datetime import datetime, timezone
 from fastapi.encoders import ENCODERS_BY_TYPE
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import Response
 
 from app.api import (
     admin_panel,
@@ -42,6 +46,39 @@ def _json_utc(value: datetime) -> str:
 
 
 ENCODERS_BY_TYPE[datetime] = _json_utc
+
+
+def _placeholder_png() -> bytes:
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        crc = zlib.crc32(tag + data) & 0xFFFFFFFF
+        return struct.pack(">I", len(data)) + tag + data + struct.pack(">I", crc)
+
+    pixel = b"\x00\xc0\xc0\xc0"
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(pixel, 9))
+        + chunk(b"IEND", b"")
+    )
+
+
+_PLACEHOLDER_PNG = _placeholder_png()
+
+
+class SoftUploads(StaticFiles):
+    async def get_response(self, path: str, scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            if not path.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".gif")):
+                raise
+            return Response(
+                content=_PLACEHOLDER_PNG,
+                media_type="image/png",
+                headers={"Cache-Control": "no-store"},
+            )
 
 
 @asynccontextmanager
@@ -86,7 +123,7 @@ app.include_router(admin_panel.router, prefix="/api")
 app.include_router(client_errors.router, prefix="/api")
 app.include_router(contact.router, prefix="/api")
 app.include_router(presence.router, prefix="/api")
-app.mount("/uploads", StaticFiles(directory="data/uploads"), name="uploads")
+app.mount("/uploads", SoftUploads(directory="data/uploads"), name="uploads")
 
 
 @app.get("/api/health")

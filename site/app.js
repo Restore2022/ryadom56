@@ -1120,7 +1120,7 @@ async function boot() {
   await openListingDeep(requestedListingId());
 }
 
-void bootPresence() {
+function bootPresence() {
   const key = "ryadom56.presence";
   let id = "";
   try {

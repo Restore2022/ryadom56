@@ -18,12 +18,24 @@ class ErrorReporter {
     api = client;
     FlutterError.onError = (details) {
       FlutterError.presentError(details);
-      unawaited(report(details.exceptionAsString(), details.stack?.toString(), screen: 'flutter'));
+      final msg = details.exceptionAsString();
+      if (_ignore(msg)) return;
+      unawaited(report(msg, details.stack?.toString(), screen: 'flutter'));
     };
     PlatformDispatcher.instance.onError = (error, stack) {
-      unawaited(report(error.toString(), stack.toString(), screen: 'zone'));
+      final msg = error.toString();
+      if (_ignore(msg)) return true;
+      unawaited(report(msg, stack.toString(), screen: 'zone'));
       return true;
     };
+  }
+
+  static bool _ignore(String message) {
+    final m = message.toLowerCase();
+    if (m.contains('networkimageloadexception')) return true;
+    if (m.contains('http request failed') && m.contains('/uploads/')) return true;
+    if (m.contains('statuscode: 404') && m.contains('/uploads/')) return true;
+    return false;
   }
 
   static Future<void> report(String message, String? stack, {String? screen}) async {
