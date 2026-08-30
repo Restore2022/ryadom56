@@ -55,12 +55,17 @@ def is_open_now(hours: str | None, now: datetime | None = None) -> bool | None:
     match = _RANGE_RE.search(text)
     if not match:
         return None
-    h1 = int(match.group("h1"))
-    m1 = int(match.group("m1") or 0)
-    h2 = int(match.group("h2"))
-    m2 = int(match.group("m2") or 0)
-    start = now.replace(hour=h1, minute=m1, second=0, microsecond=0)
-    end = now.replace(hour=h2, minute=m2, second=0, microsecond=0)
+    try:
+        h1 = int(match.group("h1"))
+        m1 = int(match.group("m1") or 0)
+        h2 = int(match.group("h2"))
+        m2 = int(match.group("m2") or 0)
+        if not (0 <= h1 <= 23 and 0 <= h2 <= 23 and 0 <= m1 <= 59 and 0 <= m2 <= 59):
+            return None
+        start = now.replace(hour=h1, minute=m1, second=0, microsecond=0)
+        end = now.replace(hour=h2, minute=m2, second=0, microsecond=0)
+    except ValueError:
+        return None
     if end <= start:
         # через полночь
         return now >= start or now <= end

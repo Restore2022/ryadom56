@@ -152,8 +152,19 @@ class _LoginScreenState extends State<LoginScreen> {
                   : () {
                       Navigator.push(
                         context,
-                        MaterialPageRoute(
-                          builder: (_) => ForgotPasswordScreen(initialEmail: email.text.trim()),
+                        PageRouteBuilder(
+                          pageBuilder: (_, __, ___) => ForgotPasswordScreen(initialEmail: email.text.trim()),
+                          transitionsBuilder: (_, animation, __, child) {
+                            final curved = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic);
+                            return FadeTransition(
+                              opacity: curved,
+                              child: SlideTransition(
+                                position: Tween<Offset>(begin: const Offset(0, 0.06), end: Offset.zero).animate(curved),
+                                child: child,
+                              ),
+                            );
+                          },
+                          transitionDuration: const Duration(milliseconds: 320),
                         ),
                       );
                     },

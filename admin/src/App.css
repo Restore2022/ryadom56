@@ -1658,6 +1658,20 @@ textarea {
   min-height: 42px;
 }
 
+input[type='date'],
+input[type='time'],
+input[type='datetime-local'] {
+  min-height: 44px;
+  color-scheme: inherit;
+}
+
+.hours-times {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 10px;
+}
+
 .time-chips {
   display: flex;
   flex-wrap: wrap;

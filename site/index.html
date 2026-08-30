@@ -1,8 +1,19 @@
 <!DOCTYPE html>
-<html lang="ru">
+<html lang="ru" data-theme="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <script>
+      (function () {
+        try {
+          var t = localStorage.getItem("ryadom56.theme");
+          if (t !== "light" && t !== "dark") t = "dark";
+          document.documentElement.setAttribute("data-theme", t);
+        } catch (e) {
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
+      })();
+    </script>
     <title>Рядом56 — объявления и справочник Сакмарского района</title>
     <meta
       name="description"
@@ -26,7 +37,7 @@
     <meta name="twitter:title" content="Рядом56 — Сакмарский район" />
     <meta name="twitter:description" content="Объявления и справочник Сакмарского района. Бесплатно для Андроид." />
     <meta name="twitter:image" content="https://legac.ru/og.jpg" />
-    <meta name="theme-color" content="#102016" />
+    <meta name="theme-color" content="#101712" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="apple-touch-icon" href="/icon-512.png" />
@@ -36,8 +47,8 @@
       href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;700&family=Unbounded:wght@700&display=swap"
       rel="stylesheet"
     />
-    <link rel="preload" href="/styles.css?v=25" as="style" />
-    <link rel="stylesheet" href="/styles.css?v=25" />
+    <link rel="preload" href="/styles.css?v=27" as="style" />
+    <link rel="stylesheet" href="/styles.css?v=27" />
     <script type="application/ld+json">
       {
         "@context": "https://schema.org",
@@ -50,7 +61,7 @@
         "downloadUrl": "https://legac.ru/api/app/apk",
         "inLanguage": "ru",
         "description": "Локальные объявления и справочник для Сакмарского района Оренбургской области и Оренбурга.",
-        "author": { "@type": "Organization", "name": "Рядом56", "email": "info@legac.ru", "telephone": "+79083211801", "url": "https://legac.ru/" }
+        "author": { "@type": "Organization", "name": "Рядом56", "email": "info@legac.ru", "telephone": "+79083211801", "url": "https://legac.ru/", "sameAs": ["https://vk.ru/ryadom56", "https://max.ru/join/UMxnPL96flsOB5mRZz7XC5gDVKCcF3vITv3B9bSSLF0"] }
       }
     </script>
   </head>
@@ -75,6 +86,15 @@
           <a href="#faq">Вопросы</a>
           <a href="#contacts">Контакты</a>
         </nav>
+        <button type="button" class="theme-btn" aria-pressed="true" aria-label="Включить светлое оформление" title="Светлая тема">
+          <svg class="theme-icon-moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 14.3A8.5 8.5 0 1 1 9.7 3 7 7 0 0 0 21 14.3z" />
+          </svg>
+          <svg class="theme-icon-sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="4" />
+            <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" />
+          </svg>
+        </button>
         <a class="btn btn-solid top-cta" href="#download">Скачать</a>
         <button class="menu-btn" type="button" aria-expanded="false" aria-controls="mobile-nav" aria-label="Меню">
           <span></span><span></span>
@@ -438,7 +458,7 @@
             </details>
             <details>
               <summary>Как с вами связаться?</summary>
-              <p>Форма внизу страницы, почта <a href="mailto:info@legac.ru">info@legac.ru</a> или телефон <a href="tel:+79083211801">+7 908 321-18-01</a>.</p>
+              <p>Форма внизу страницы, почта <a href="mailto:info@legac.ru">info@legac.ru</a> или телефон <a href="tel:+79083211801">+7 908 321-18-01</a>. Новости сервиса — во <a href="https://vk.ru/ryadom56" target="_blank" rel="noopener noreferrer">ВКонтакте</a> и в <a href="https://max.ru/join/UMxnPL96flsOB5mRZz7XC5gDVKCcF3vITv3B9bSSLF0" target="_blank" rel="noopener noreferrer">MAX</a>.</p>
             </details>
           </div>
         </div>
@@ -503,6 +523,17 @@
               <span>Листок на доску</span>
               <strong>Скачать листок A5</strong>
             </a>
+            <p class="socials-label">Подпишитесь на нас</p>
+            <a class="contact social-card" href="https://vk.ru/ryadom56" target="_blank" rel="noopener noreferrer">
+              <img src="/icon-vk.svg" width="36" height="36" alt="" />
+              <span>ВКонтакте</span>
+              <strong>vk.ru/ryadom56</strong>
+            </a>
+            <a class="contact social-card" href="https://max.ru/join/UMxnPL96flsOB5mRZz7XC5gDVKCcF3vITv3B9bSSLF0" target="_blank" rel="noopener noreferrer">
+              <img src="/icon-max.svg" width="36" height="36" alt="" />
+              <span>MAX</span>
+              <strong>Подписаться в мессенджере</strong>
+            </a>
           </div>
         </div>
       </section>
@@ -514,6 +545,19 @@
           <p class="brand foot-brand">Рядом56</p>
           <p>Локальный сервис для Сакмарского района и Оренбурга.</p>
         </div>
+        <nav class="socials" aria-label="Мы в соцсетях">
+          <p class="socials-lead">Подпишитесь на нас</p>
+          <div class="socials-row">
+            <a class="social" href="https://vk.ru/ryadom56" target="_blank" rel="noopener noreferrer">
+              <img src="/icon-vk.svg" width="28" height="28" alt="" />
+              ВКонтакте
+            </a>
+            <a class="social" href="https://max.ru/join/UMxnPL96flsOB5mRZz7XC5gDVKCcF3vITv3B9bSSLF0" target="_blank" rel="noopener noreferrer">
+              <img src="/icon-max.svg" width="28" height="28" alt="" />
+              MAX
+            </a>
+          </div>
+        </nav>
         <div class="foot-links">
           <a href="/legal/terms">Соглашение</a>
           <a href="/legal/privacy">Конфиденциальность</a>
@@ -548,6 +592,7 @@
     </div>
 
     <p id="toast" class="toast" hidden role="status"></p>
+    <script src="/theme.js?v=1" defer></script>
     <script src="/app.js?v=27" defer></script>
   </body>
 </html>

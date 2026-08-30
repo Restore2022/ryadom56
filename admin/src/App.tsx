@@ -3382,6 +3382,62 @@ function CallsPage() {
   );
 }
 
+const DIR_DAYS = [
+  { id: 'mon', short: 'Пн' },
+  { id: 'tue', short: 'Вт' },
+  { id: 'wed', short: 'Ср' },
+  { id: 'thu', short: 'Чт' },
+  { id: 'fri', short: 'Пт' },
+  { id: 'sat', short: 'Сб' },
+  { id: 'sun', short: 'Вс' },
+] as const;
+const DIR_ALL_DAYS = DIR_DAYS.map((d) => d.id);
+const DIR_WEEKDAYS = DIR_ALL_DAYS.slice(0, 5);
+const DIR_WEEKENDS = DIR_ALL_DAYS.slice(5);
+
+function sameIdList(a: string[], b: string[]) {
+  return a.length === b.length && a.every((id) => b.includes(id));
+}
+
+function padClock(hour: string, minute = '00') {
+  return `${String(Number(hour)).padStart(2, '0')}:${minute}`;
+}
+
+function parseDirHours(text: string) {
+  const raw = (text || '').toLowerCase().replaceAll('ё', 'е');
+  const allDay = /круглосуточ|24\/7|24 часа/.test(raw);
+  const withMin = text.match(/(\d{1,2}):(\d{2})\s*[-–—]\s*(\d{1,2}):(\d{2})/);
+  const bare = text.match(/(\d{1,2})\s*[-–—]\s*(\d{1,2})(?!\d)/);
+  let from = '09:00';
+  let to = '18:00';
+  if (withMin) {
+    from = padClock(withMin[1], withMin[2]);
+    to = padClock(withMin[3], withMin[4]);
+  } else if (bare) {
+    from = padClock(bare[1]);
+    to = padClock(bare[2]);
+  }
+  let days = [...DIR_ALL_DAYS];
+  if (/будн|пн\s*[–-]\s*пт/.test(raw)) days = [...DIR_WEEKDAYS];
+  else if (/выходн|сб\s*[–-]\s*вс/.test(raw)) days = [...DIR_WEEKENDS];
+  return { allDay, from, to, days };
+}
+
+function formatDirHours(allDay: boolean, from: string, to: string, days: string[]) {
+  if (allDay) return 'круглосуточно';
+  if (!from || !to) return '';
+  let label = 'ежедневно';
+  if (sameIdList(days, DIR_WEEKDAYS)) label = 'пн–пт';
+  else if (sameIdList(days, DIR_WEEKENDS)) label = 'сб–вс';
+  else if (!sameIdList(days, DIR_ALL_DAYS)) {
+    label = DIR_DAYS.filter((d) => days.includes(d.id))
+      .map((d) => d.short.toLowerCase())
+      .join(', ');
+  }
+  if (!days.length) return `${from}–${to}`;
+  return `${label} ${from}–${to}`;
+}
+
 type DirectoryForm = {
   title: string;
   category: string;
@@ -3390,7 +3446,10 @@ type DirectoryForm = {
   address: string;
   phone: string;
   website: string;
-  hours: string;
+  hoursAllDay: boolean;
+  hoursFrom: string;
+  hoursTo: string;
+  hoursDays: string[];
   lat: string;
   lon: string;
   is_published: boolean;
@@ -3404,7 +3463,10 @@ const EMPTY_DIR: DirectoryForm = {
   address: '',
   phone: '',
   website: '',
-  hours: '',
+  hoursAllDay: false,
+  hoursFrom: '09:00',
+  hoursTo: '18:00',
+  hoursDays: [...DIR_WEEKDAYS],
   lat: '',
   lon: '',
   is_published: true,
@@ -3419,7 +3481,7 @@ function directoryPayload(form: DirectoryForm) {
     address: form.address || null,
     phone: form.phone || null,
     website: form.website || null,
-    hours: form.hours || null,
+    hours: formatDirHours(form.hoursAllDay, form.hoursFrom, form.hoursTo, form.hoursDays) || null,
     lat: form.lat === '' ? null : Number(form.lat),
     lon: form.lon === '' ? null : Number(form.lon),
     is_published: form.is_published,
@@ -3502,6 +3564,7 @@ function DirectoryPage() {
   }
 
   function startEdit(item: DirectoryItem) {
+    const hours = parseDirHours(item.hours || '');
     setEditingId(item.id);
     setForm({
       title: item.title,
@@ -3511,7 +3574,10 @@ function DirectoryPage() {
       address: item.address || '',
       phone: item.phone || '',
       website: item.website || '',
-      hours: item.hours || '',
+      hoursAllDay: hours.allDay,
+      hoursFrom: hours.from,
+      hoursTo: hours.to,
+      hoursDays: hours.days,
       lat: item.lat != null ? String(item.lat) : '',
       lon: item.lon != null ? String(item.lon) : '',
       is_published: item.is_published,
@@ -3747,14 +3813,86 @@ function DirectoryPage() {
                   Сайт
                   <input value={form.website} onChange={(e) => setForm({ ...form, website: e.target.value })} />
                 </label>
-                <label className="field">
-                  Часы работы
-                  <input
-                    value={form.hours}
-                    onChange={(e) => setForm({ ...form, hours: e.target.value })}
-                    placeholder="пн–пт 9:00–18:00"
-                  />
-                </label>
+                <div className="field full">
+                  <span>Часы работы</span>
+                  <div className="day-presets">
+                    <button
+                      type="button"
+                      className={`day-pick${form.hoursAllDay ? ' is-on' : ''}`}
+                      onClick={() => setForm({ ...form, hoursAllDay: !form.hoursAllDay })}
+                    >
+                      Круглосуточно
+                    </button>
+                    <button
+                      type="button"
+                      className={`day-pick${sameIdList(form.hoursDays, DIR_ALL_DAYS) ? ' is-on' : ''}`}
+                      onClick={() => setForm({ ...form, hoursDays: [...DIR_ALL_DAYS] })}
+                    >
+                      Все дни
+                    </button>
+                    <button
+                      type="button"
+                      className={`day-pick${sameIdList(form.hoursDays, DIR_WEEKDAYS) ? ' is-on' : ''}`}
+                      onClick={() => setForm({ ...form, hoursDays: [...DIR_WEEKDAYS] })}
+                    >
+                      Будни
+                    </button>
+                    <button
+                      type="button"
+                      className={`day-pick${sameIdList(form.hoursDays, DIR_WEEKENDS) ? ' is-on' : ''}`}
+                      onClick={() => setForm({ ...form, hoursDays: [...DIR_WEEKENDS] })}
+                    >
+                      Выходные
+                    </button>
+                  </div>
+                  <div className="day-picks">
+                    {DIR_DAYS.map((day) => (
+                      <button
+                        key={day.id}
+                        type="button"
+                        className={`day-pick${form.hoursDays.includes(day.id) ? ' is-on' : ''}`}
+                        onClick={() =>
+                          setForm({
+                            ...form,
+                            hoursDays: form.hoursDays.includes(day.id)
+                              ? form.hoursDays.filter((id) => id !== day.id)
+                              : [...form.hoursDays, day.id],
+                          })
+                        }
+                      >
+                        {day.short}
+                      </button>
+                    ))}
+                  </div>
+                  {!form.hoursAllDay && (
+                    <>
+                      <div className="hours-times">
+                        <label className="field">
+                          Открывается
+                          <input
+                            type="time"
+                            step={60}
+                            value={form.hoursFrom}
+                            onChange={(e) => setForm({ ...form, hoursFrom: e.target.value })}
+                          />
+                        </label>
+                        <label className="field">
+                          Закрывается
+                          <input
+                            type="time"
+                            step={60}
+                            value={form.hoursTo}
+                            onChange={(e) => setForm({ ...form, hoursTo: e.target.value })}
+                          />
+                        </label>
+                      </div>
+                      <p className="field-hint">
+                        {formatDirHours(false, form.hoursFrom, form.hoursTo, form.hoursDays) || 'Выберите время'}
+                      </p>
+                    </>
+                  )}
+                  {form.hoursAllDay && <p className="field-hint">Работает круглосуточно, без выходных</p>}
+                </div>
                 <label className="field">
                   Опубликовано
                   <select

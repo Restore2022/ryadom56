@@ -15,9 +15,9 @@ if not PASS:
 REMOTE = "/opt/ryadom56"
 REMOTE_APK = f"{REMOTE}/backend/data/releases/ryadom56-latest.apk"
 LOCAL_APK = Path(__file__).resolve().parents[1] / "mobile" / "apk" / "app-release.apk"
-VERSION_NAME = "0.31.0"
-VERSION_CODE = 45
-APK_FILENAME = "ryadom56-0.31.0.apk"
+VERSION_NAME = "0.32.0"
+VERSION_CODE = 46
+APK_FILENAME = "ryadom56-0.32.0.apk"
 
 
 def run(c: paramiko.SSHClient, cmd: str, timeout: int = 120) -> str:
@@ -58,8 +58,7 @@ def main() -> None:
     run(c, f"mv -f {tmp} {REMOTE_APK} && ls -la {REMOTE_APK} && chmod 644 {REMOTE_APK}")
 
     notes = (
-        "\u0410\u0444\u0438\u0448\u0430 \u0431\u0435\u0437 \u043e\u0431\u0440\u0435\u0437\u043a\u0438, \u043d\u043e\u0432\u044b\u0439 \u043f\u0435\u0440\u0432\u044b\u0439 \u0432\u0445\u043e\u0434. "
-        "\u041b\u0435\u043d\u0442\u0430, \u0447\u0430\u0442\u044b, \u0437\u0432\u043e\u043d\u043a\u0438, \u0442\u0440\u0430\u043d\u0441\u043f\u043e\u0440\u0442 \u0438 \u043c\u0435\u0441\u0442\u0430 \u2014 \u043a\u043e\u0440\u043e\u0442\u043a\u043e \u043d\u0430 \u0441\u0442\u0430\u0440\u0442\u0435."
+        "\u0412\u043e\u0441\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u0438\u0435 \u043f\u0430\u0440\u043e\u043b\u044f: \u043f\u043e\u0447\u0442\u0430, \u043a\u043e\u0434 \u0438\u0437 \u043f\u0438\u0441\u044c\u043c\u0430, \u043d\u043e\u0432\u044b\u0439 \u043f\u0430\u0440\u043e\u043b\u044c \u2014 \u0441 \u0430\u043d\u0438\u043c\u0430\u0446\u0438\u0435\u0439."
     )
     py = f"""# coding: utf-8
 from sqlalchemy import select
