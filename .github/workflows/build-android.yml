@@ -38,18 +38,19 @@ jobs:
           from pathlib import Path
           p = Path("android/gradle.properties")
           lines = []
-          for line in p.read_text(encoding="utf-8").splitlines():
-              if line.startswith("org.gradle.jvmargs="):
+          for line in p.read_text(encoding="utf-8-sig").splitlines():
+              key = line.lstrip("\ufeff").strip()
+              if key.startswith("org.gradle.jvmargs="):
                   lines.append(
                       "org.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=768m -Dfile.encoding=UTF-8"
                   )
-              elif line.startswith("org.gradle.daemon="):
+              elif key.startswith("org.gradle.daemon="):
                   lines.append("org.gradle.daemon=true")
-              elif line.startswith("org.gradle.workers.max="):
+              elif key.startswith("org.gradle.workers.max="):
                   lines.append("org.gradle.workers.max=2")
               else:
-                  lines.append(line)
-          p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                  lines.append(key)
+          p.write_bytes(("\n".join(lines) + "\n").encode("utf-8"))
           print(p.read_text(encoding="utf-8"))
           PY
 
