@@ -21,7 +21,7 @@ List<String> newsPhotoUrls(Map<String, dynamic> item) {
     }
     if (urls.isNotEmpty) return urls;
   }
-  const cover = item['cover_url']?.toString();
+  final cover = item['cover_url']?.toString();
   if (cover != null && cover.isNotEmpty) return [cover];
   return [];
 }
