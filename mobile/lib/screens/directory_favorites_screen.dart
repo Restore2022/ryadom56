@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
+import '../responsive.dart';
 import '../state/app_state.dart';
 import '../ui_helpers.dart';
 import 'directory_detail_screen.dart';
@@ -67,7 +68,7 @@ class _DirectoryFavoritesScreenState extends State<DirectoryFavoritesScreen> {
                   : RefreshIndicator(
                       onRefresh: _load,
                       child: ListView.separated(
-                        padding: const EdgeInsets.all(16),
+                        padding: context.scrollPad(top: 16, bottom: 16),
                         itemCount: items.length,
                         separatorBuilder: (_, __) => const SizedBox(height: 10),
                         itemBuilder: (_, i) {

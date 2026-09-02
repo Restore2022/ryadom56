@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
 
 import '../auth_prompt.dart';
@@ -39,6 +40,7 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
   String? error;
   final input = TextEditingController();
   final scroll = ScrollController();
+  final picker = ImagePicker();
   Timer? _poll;
   int _seenInbox = 0;
 
@@ -205,6 +207,74 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
     }
   }
 
+  Future<void> _pickPhoto() async {
+    if (sending) return;
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) {
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: const Icon(Icons.photo_camera_outlined),
+                title: const Text('Камера'),
+                onTap: () => Navigator.pop(ctx, ImageSource.camera),
+              ),
+              ListTile(
+                leading: const Icon(Icons.photo_library_outlined),
+                title: const Text('Галерея'),
+                onTap: () => Navigator.pop(ctx, ImageSource.gallery),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (source == null || !mounted) return;
+    final shot = await picker.pickImage(source: source, imageQuality: 40, maxWidth: 1280);
+    if (shot == null || !mounted) return;
+    setState(() => sending = true);
+    try {
+      final msg = await context.read<AppState>().sendListingPhoto(
+            widget.listingId,
+            shot.path,
+            peerId: widget.peerId,
+          );
+      if (mounted) _upsert(Map<String, dynamic>.from(msg));
+    } catch (e) {
+      if (mounted) showAppSnack(context, AppState.userFriendlyError(e), error: true);
+    } finally {
+      if (mounted) setState(() => sending = false);
+    }
+  }
+
+  void _openPhoto(String url) {
+    Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => Scaffold(
+          backgroundColor: Colors.black,
+          appBar: AppBar(
+            backgroundColor: Colors.black,
+            foregroundColor: Colors.white,
+            title: const Text('Фото'),
+          ),
+          body: Center(
+            child: InteractiveViewer(
+              child: Image.network(
+                url,
+                fit: BoxFit.contain,
+                errorBuilder: (_, __, ___) => const Icon(Icons.broken_image_outlined, color: Colors.white, size: 48),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   String _fmtTime(String? iso) {
     return formatApiDateTime(iso, sep: ' ');
   }
@@ -263,11 +333,14 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
   Widget _textBubble(Map<String, dynamic> msg, ColorScheme scheme) {
     final mine = msg['is_mine'] == true;
     final read = msg['is_read'] == true;
+    final photoUrl = msg['image_url']?.toString();
+    final isPhoto = (msg['kind']?.toString() ?? 'text') == 'photo' && photoUrl != null && photoUrl.isNotEmpty;
+    final media = isPhoto ? context.read<AppState>().mediaUrl(photoUrl) : null;
     return Align(
       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
       child: Container(
         margin: const EdgeInsets.only(bottom: 10),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        padding: isPhoto ? const EdgeInsets.all(6) : const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
         decoration: BoxDecoration(
           color: mine ? scheme.primaryContainer : scheme.surfaceContainerHighest,
@@ -282,32 +355,58 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             if (!mine && msg['sender_name'] != null)
-              Text(
-                '${msg['sender_name']}',
-                style: GoogleFonts.manrope(
-                  fontSize: 11,
-                  fontWeight: FontWeight.w800,
-                  color: scheme.primary,
+              Padding(
+                padding: EdgeInsets.fromLTRB(isPhoto ? 8 : 0, isPhoto ? 4 : 0, 0, 4),
+                child: Text(
+                  '${msg['sender_name']}',
+                  style: GoogleFonts.manrope(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w800,
+                    color: scheme.primary,
+                  ),
                 ),
               ),
-            Text('${msg['body']}', style: const TextStyle(height: 1.35)),
-            const SizedBox(height: 4),
-            Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Text(
-                  _fmtTime(msg['created_at']?.toString()),
-                  style: TextStyle(fontSize: 10, color: scheme.onSurfaceVariant),
-                ),
-                if (mine) ...[
-                  const SizedBox(width: 4),
-                  Icon(
-                    read ? Icons.done_all : Icons.done,
-                    size: 14,
-                    color: read ? scheme.primary : scheme.onSurfaceVariant,
+            if (isPhoto && media != null)
+              GestureDetector(
+                onTap: () => _openPhoto(media),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.network(
+                    media,
+                    width: MediaQuery.of(context).size.width * 0.62,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) => Container(
+                      width: 160,
+                      height: 120,
+                      color: scheme.surfaceContainerHighest,
+                      alignment: Alignment.center,
+                      child: const Icon(Icons.broken_image_outlined),
+                    ),
                   ),
+                ),
+              )
+            else
+              Text('${msg['body']}', style: const TextStyle(height: 1.35)),
+            const SizedBox(height: 4),
+            Padding(
+              padding: EdgeInsets.symmetric(horizontal: isPhoto ? 8 : 0),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    _fmtTime(msg['created_at']?.toString()),
+                    style: TextStyle(fontSize: 10, color: scheme.onSurfaceVariant),
+                  ),
+                  if (mine) ...[
+                    const SizedBox(width: 4),
+                    Icon(
+                      read ? Icons.done_all : Icons.done,
+                      size: 14,
+                      color: read ? scheme.primary : scheme.onSurfaceVariant,
+                    ),
+                  ],
                 ],
-              ],
+              ),
             ),
           ],
         ),
@@ -386,6 +485,11 @@ class _ListingChatScreenState extends State<ListingChatScreen> {
                 padding: const EdgeInsets.fromLTRB(12, 8, 12, 12),
                 child: Row(
                   children: [
+                    IconButton(
+                      tooltip: 'Фото',
+                      onPressed: sending ? null : _pickPhoto,
+                      icon: const Icon(Icons.photo_camera_outlined),
+                    ),
                     Expanded(
                       child: TextField(
                         controller: input,

@@ -30,7 +30,7 @@ class PushService {
 
   static const _channelId = 'ryadom56_alerts';
   static const _channelName = 'Рядом56';
-  static const _channelDesc = 'Сообщения, объявления и срочные оповещения района';
+  static const _channelDesc = 'Сообщения, объявления и срочные оповещения';
   static const _callChannelId = 'ryadom56_calls';
   static const _callChannelName = 'Звонки Рядом56';
 

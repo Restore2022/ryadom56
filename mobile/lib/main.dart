@@ -1,4 +1,7 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -37,6 +40,13 @@ bool _isStaleApiBase(String apiBase) {
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+  SystemChrome.setSystemUIOverlayStyle(const SystemUiOverlayStyle(
+    statusBarColor: Colors.transparent,
+    systemNavigationBarColor: Colors.transparent,
+    systemNavigationBarDividerColor: Colors.transparent,
+    systemNavigationBarContrastEnforced: false,
+  ));
   await PushService.instance.init();
   final prefs = await SharedPreferences.getInstance();
   const fromBuild = String.fromEnvironment(
@@ -128,7 +138,7 @@ class _RyadomAppState extends State<RyadomApp> {
       );
       return;
     }
-    if ((type == 'listing_approved' || type == 'listing_rejected') && listingId != null) {
+    if ((type == 'listing_approved' || type == 'listing_rejected' || type == 'listing_relevance') && listingId != null) {
       await nav.push(
         MaterialPageRoute(builder: (_) => ListingDetailScreen(listingId: listingId)),
       );
@@ -157,8 +167,19 @@ class _RyadomAppState extends State<RyadomApp> {
             builder: (context, child) {
               final mq = MediaQuery.of(context);
               final scale = mq.textScaler.scale(1).clamp(0.9, 1.25);
+              var padding = mq.padding;
+              if (mq.viewInsets.bottom < 40) {
+                padding = padding.copyWith(
+                  left: math.max(padding.left, mq.viewPadding.left),
+                  right: math.max(padding.right, mq.viewPadding.right),
+                  bottom: math.max(padding.bottom, mq.viewPadding.bottom),
+                );
+              }
               return MediaQuery(
-                data: mq.copyWith(textScaler: TextScaler.linear(scale)),
+                data: mq.copyWith(
+                  textScaler: TextScaler.linear(scale),
+                  padding: padding,
+                ),
                 child: CallOverlayHost(child: child ?? const SizedBox.shrink()),
               );
             },
@@ -197,7 +218,7 @@ class RootGate extends StatelessWidget {
       );
     }
     if (!state.onboardingDone) return const OnboardingScreen();
-    if (state.needsPinSetup) return const PinSetupScreen(allowSkip: false);
+    if (state.needsPinSetup) return const PinSetupScreen(allowSkip: true);
     if (state.needsPinUnlock) return const PinUnlockScreen();
     return const HomeShell();
   }

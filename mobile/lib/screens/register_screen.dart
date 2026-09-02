@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
 import '../api.dart';
+import '../responsive.dart';
+import '../settlement_picker.dart';
 import '../state/app_state.dart';
 import '../ui_helpers.dart';
 import 'home_shell.dart';
@@ -82,7 +84,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       if (!mounted) return;
       Navigator.pushAndRemoveUntil(
         context,
-        MaterialPageRoute(builder: (_) => const PinSetupScreen(allowSkip: false)),
+        MaterialPageRoute(builder: (_) => const PinSetupScreen(allowSkip: true)),
         (route) => false,
       );
     } catch (e) {
@@ -132,7 +134,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Регистрация')),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: context.scrollPad(top: 16, bottom: 16),
         children: [
           TextField(controller: name, decoration: const InputDecoration(labelText: 'Имя', border: OutlineInputBorder())),
           const SizedBox(height: 12),
@@ -153,15 +155,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
           const SizedBox(height: 12),
           TextField(controller: phone, decoration: const InputDecoration(labelText: 'Телефон (необязательно)', border: OutlineInputBorder())),
           const SizedBox(height: 12),
-          DropdownButtonFormField<int>(
+          SettlementPicker(
             value: settlementId,
-            decoration: const InputDecoration(labelText: 'Населённый пункт', border: OutlineInputBorder()),
-            items: settlements
-                .map((s) => DropdownMenuItem<int>(
-                      value: s['id'] as int,
-                      child: Text(s['display_name'] as String, overflow: TextOverflow.ellipsis),
-                    ))
-                .toList(),
+            settlements: settlements,
             onChanged: (v) => setState(() => settlementId = v),
           ),
           _legalCheckbox(

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
+import '../responsive.dart';
 import '../scroll_to_top.dart';
 import '../state/app_state.dart';
 import '../time_format.dart';
@@ -106,7 +107,7 @@ class _DistrictHubScreenState extends State<DistrictHubScreen> {
               ? const Center(child: CircularProgressIndicator())
               : ListView(
                   controller: scroll,
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 24),
+                  padding: context.scrollPad(top: 12, bottom: 20),
                   children: [
                   if (error != null)
                     Padding(

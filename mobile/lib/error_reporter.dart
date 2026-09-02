@@ -35,6 +35,8 @@ class ErrorReporter {
     if (m.contains('networkimageloadexception')) return true;
     if (m.contains('http request failed') && m.contains('/uploads/')) return true;
     if (m.contains('statuscode: 404') && m.contains('/uploads/')) return true;
+    if (m.contains('called in wrong state: stable')) return true;
+    if (m.contains('webrtc_set_remote_description_error')) return true;
     return false;
   }
 

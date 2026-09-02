@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../api.dart';
+import '../responsive.dart';
 import '../state/app_state.dart';
 import '../time_format.dart';
 import '../ui_helpers.dart';
@@ -98,13 +99,13 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                   ? emptyState(
                       context: context,
                       title: 'Пока нет уведомлений',
-                      subtitle: 'Здесь появятся ответы по объявлениям и жалобам',
+                      subtitle: 'Здесь появятся ответы по объявлениям',
                       icon: Icons.notifications_none,
                     )
                   : RefreshIndicator(
                       onRefresh: _load,
                       child: ListView.separated(
-                        padding: const EdgeInsets.all(16),
+                        padding: context.scrollPad(top: 16, bottom: 16),
                         itemCount: items.length,
                         separatorBuilder: (_, __) => const SizedBox(height: 10),
                         itemBuilder: (_, i) {

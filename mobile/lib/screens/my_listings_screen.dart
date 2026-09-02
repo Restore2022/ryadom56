@@ -1,7 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
+import '../listing_row.dart';
+import '../responsive.dart';
 import '../state/app_state.dart';
 import '../time_format.dart';
 import '../ui_helpers.dart';
@@ -209,7 +210,6 @@ class _MyListingsScreenState extends State<MyListingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final state = context.watch<AppState>();
     final scheme = Theme.of(context).colorScheme;
     final active = (stats?['active'] as num?)?.toInt() ?? 0;
     final maxActive = (stats?['max_active'] as num?)?.toInt() ?? 5;
@@ -275,13 +275,11 @@ class _MyListingsScreenState extends State<MyListingsScreen> {
                               : RefreshIndicator(
                                   onRefresh: _load,
                                   child: ListView.separated(
-                                    padding: const EdgeInsets.all(16),
+                                    padding: context.scrollPad(top: 8, bottom: 20),
                                     itemCount: list.length,
                                     separatorBuilder: (_, __) => const SizedBox(height: 10),
                                     itemBuilder: (context, i) {
                                       final item = list[i] as Map<String, dynamic>;
-                                      final images = (item['images'] as List?) ?? [];
-                                      final thumb = images.isNotEmpty ? (images.first as Map)['url'] as String? : null;
                                       final status = '${item['status']}';
                                       final canClose = status == 'approved' || status == 'pending';
                                       final canRepublish =
@@ -290,118 +288,59 @@ class _MyListingsScreenState extends State<MyListingsScreen> {
                                           (status == 'archived' && item['close_reason'] == 'expired');
                                       final canDelete =
                                           status == 'draft' || status == 'rejected' || status == 'archived';
-                                      return Material(
-                                        color: Theme.of(context).cardTheme.color,
-                                        borderRadius: BorderRadius.circular(16),
-                                        child: InkWell(
-                                          borderRadius: BorderRadius.circular(16),
-                                          onTap: () async {
-                                            await Navigator.push(
-                                              context,
-                                              fastRoute(ListingDetailScreen(listingId: item['id'] as int, preview: item)),
-                                            );
-                                            await _load();
+                                      String? footer;
+                                      if (status == 'pending') footer = 'Ждёт проверки';
+                                      if (status == 'rejected' && item['moderation_note'] != null) {
+                                        footer = '${item['moderation_note']}';
+                                      }
+                                      if (item['expires_at'] != null &&
+                                          (status == 'approved' || item['close_reason'] == 'expired')) {
+                                        footer = _expiryLine(item);
+                                      }
+                                      return ListingRow(
+                                        item: item,
+                                        badge: statusLabels[status],
+                                        badgeColor: status == 'rejected'
+                                            ? scheme.error
+                                            : status == 'approved'
+                                                ? scheme.primary
+                                                : scheme.onSurfaceVariant,
+                                        footer: footer,
+                                        onTap: () async {
+                                          await Navigator.push(
+                                            context,
+                                            fastRoute(ListingDetailScreen(listingId: item['id'] as int, preview: item)),
+                                          );
+                                          await _load();
+                                        },
+                                        trailing: PopupMenuButton<String>(
+                                          tooltip: 'Действия',
+                                          onSelected: (v) {
+                                            switch (v) {
+                                              case 'edit':
+                                                _edit(item);
+                                              case 'republish':
+                                                _republish(item);
+                                              case 'extend':
+                                                _extend(item);
+                                              case 'close':
+                                                _close(item);
+                                              case 'delete':
+                                                _delete(item);
+                                            }
                                           },
-                                          child: Padding(
-                                            padding: const EdgeInsets.all(12),
-                                            child: Row(
-                                              crossAxisAlignment: CrossAxisAlignment.start,
-                                              children: [
-                                                ClipRRect(
-                                                  borderRadius: BorderRadius.circular(12),
-                                                  child: thumb == null
-                                                      ? Container(
-                                                          width: 72,
-                                                          height: 72,
-                                                          color: scheme.surfaceContainerHighest,
-                                                          child: const Icon(Icons.image_outlined),
-                                                        )
-                                                      : Image.network(
-                                                          state.mediaUrl(thumb),
-                                                          width: 72,
-                                                          height: 72,
-                                                          fit: BoxFit.cover,
-                                                          errorBuilder: (_, __, ___) => Container(
-                                                            width: 72,
-                                                            height: 72,
-                                                            color: scheme.surfaceContainerHighest,
-                                                            child: const Icon(Icons.broken_image_outlined),
-                                                          ),
-                                                        ),
-                                                ),
-                                                const SizedBox(width: 12),
-                                                Expanded(
-                                                  child: Column(
-                                                    crossAxisAlignment: CrossAxisAlignment.start,
-                                                    children: [
-                                                      Text(
-                                                        item['title'] as String,
-                                                        maxLines: 2,
-                                                        overflow: TextOverflow.ellipsis,
-                                                        style: GoogleFonts.manrope(fontWeight: FontWeight.w700),
-                                                      ),
-                                                      const SizedBox(height: 4),
-                                                      Text(
-                                                        statusLabels[status] ?? status,
-                                                        style: TextStyle(
-                                                          color: status == 'rejected'
-                                                              ? scheme.error
-                                                              : status == 'approved'
-                                                                  ? scheme.primary
-                                                                  : scheme.onSurfaceVariant,
-                                                          fontSize: 12,
-                                                          fontWeight: FontWeight.w700,
-                                                        ),
-                                                      ),
-                                                      if (status == 'pending') ...[
-                                                        const SizedBox(height: 4),
-                                                        Text(
-                                                          'Ожидает проверки модератором',
-                                                          style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
-                                                        ),
-                                                      ],
-                                                      if (status == 'rejected' && item['moderation_note'] != null) ...[
-                                                        const SizedBox(height: 4),
-                                                        Text(
-                                                          'Причина: ${item['moderation_note']}',
-                                                          style: TextStyle(color: scheme.error, fontSize: 12, height: 1.3),
-                                                        ),
-                                                      ],
-                                                      if (item['expires_at'] != null &&
-                                                          (status == 'approved' || item['close_reason'] == 'expired')) ...[
-                                                        const SizedBox(height: 4),
-                                                        Text(
-                                                          _expiryLine(item),
-                                                          style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12),
-                                                        ),
-                                                      ],
-                                                      const SizedBox(height: 8),
-                                                      Wrap(
-                                                        spacing: 4,
-                                                        children: [
-                                                          TextButton(onPressed: () => _edit(item), child: const Text('Изменить')),
-                                                          if (canRepublish)
-                                                            TextButton(
-                                                              onPressed: () => _republish(item),
-                                                              child: Text(status == 'draft' ? 'Отправить' : 'Снова'),
-                                                            ),
-                                                          if (canExtend)
-                                                            TextButton(onPressed: () => _extend(item), child: const Text('Продлить')),
-                                                          if (canClose)
-                                                            TextButton(onPressed: () => _close(item), child: const Text('Снять')),
-                                                          if (canDelete)
-                                                            TextButton(
-                                                              onPressed: () => _delete(item),
-                                                              child: Text('Удалить', style: TextStyle(color: scheme.error)),
-                                                            ),
-                                                        ],
-                                                      ),
-                                                    ],
-                                                  ),
-                                                ),
-                                              ],
-                                            ),
-                                          ),
+                                          itemBuilder: (_) => [
+                                            const PopupMenuItem(value: 'edit', child: Text('Изменить')),
+                                            if (canRepublish)
+                                              PopupMenuItem(
+                                                value: 'republish',
+                                                child: Text(status == 'draft' ? 'Отправить' : 'Снова опубликовать'),
+                                              ),
+                                            if (canExtend) const PopupMenuItem(value: 'extend', child: Text('Продлить')),
+                                            if (canClose) const PopupMenuItem(value: 'close', child: Text('Снять')),
+                                            if (canDelete)
+                                              const PopupMenuItem(value: 'delete', child: Text('Удалить')),
+                                          ],
                                         ),
                                       );
                                     },

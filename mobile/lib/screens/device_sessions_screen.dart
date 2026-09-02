@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../responsive.dart';
 import '../state/app_state.dart';
 import '../time_format.dart';
 import '../ui_helpers.dart';
@@ -137,7 +138,7 @@ class _DeviceSessionsScreenState extends State<DeviceSessionsScreen> {
           : error != null
               ? errorState(context: context, message: error!, onRetry: _load)
               : ListView(
-                  padding: const EdgeInsets.all(16),
+                  padding: context.scrollPad(top: 16, bottom: 16),
                   children: [
                     Text(
                       'Здесь телефоны, с которых выполнен вход. Можно выйти на всех сразу.',

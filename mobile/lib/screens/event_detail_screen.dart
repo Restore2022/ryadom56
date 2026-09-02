@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../event_actions.dart';
+import '../responsive.dart';
 import '../state/app_state.dart';
 import '../time_format.dart';
 import '../ui_helpers.dart';
@@ -108,7 +109,7 @@ class _EventDetailScreenState extends State<EventDetailScreen> {
         ],
       ),
       body: ListView(
-        padding: EdgeInsets.fromLTRB(16, 8, 16, 28 + MediaQuery.paddingOf(context).bottom),
+        padding: context.scrollPad(top: 8, bottom: 20),
         children: [
           if (cover != null && cover.isNotEmpty) ...[
             ClipRRect(

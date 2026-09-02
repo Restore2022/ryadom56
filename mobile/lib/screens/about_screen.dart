@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../responsive.dart';
 import '../update_service.dart';
 import 'home_shell.dart';
 import 'legal_doc_screen.dart';
@@ -60,7 +61,7 @@ class _AboutScreenState extends State<AboutScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('О проекте')),
       body: ListView(
-        padding: const EdgeInsets.all(20),
+        padding: context.scrollPad(left: 20, top: 20, right: 20, bottom: 20),
         children: [
           Text(
             'Рядом56',
@@ -73,9 +74,9 @@ class _AboutScreenState extends State<AboutScreen> {
           ),
           const SizedBox(height: 12),
           Text(
-            'Локальные объявления и справочник для жителей Сакмарского района. '
+            'Локальные объявления и справочник для жителей Оренбургской области. '
             'Здесь можно найти товары рядом, услуги, работу, аренду и полезные '
-            'контакты школ, больниц, магазинов и других организаций района.',
+            'контакты школ, больниц, магазинов и других организаций.',
             style: GoogleFonts.manrope(fontSize: 16, height: 1.5),
           ),
           const SizedBox(height: 20),

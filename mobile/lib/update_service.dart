@@ -1,15 +1,13 @@
-import 'dart:io';
-
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
-import 'package:open_filex/open_filex.dart';
 import 'package:package_info_plus/package_info_plus.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'api.dart';
 import 'state/app_state.dart';
+
+const kPublicSite = 'https://legac.ru';
 
 class AppUpdateInfo {
   AppUpdateInfo({
@@ -40,6 +38,24 @@ class AppUpdateInfo {
   }
 }
 
+bool installedFromStore(String? installer) {
+  final s = (installer ?? '').toLowerCase();
+  if (s.isEmpty) return false;
+  if (s.contains('packageinstaller') || s == 'com.android.shell') return false;
+  const stores = [
+    'com.android.vending',
+    'ru.vk.store',
+    'rustore',
+    'com.huawei.appmarket',
+    'com.amazon.venezia',
+    'samsungapps',
+    'com.xiaomi.mipicks',
+    'com.oppo.market',
+    'com.vivo.appstore',
+  ];
+  return stores.any(s.contains);
+}
+
 class UpdateService {
   UpdateService(this.api);
 
@@ -62,6 +78,11 @@ class UpdateService {
     return remote.build > local;
   }
 
+  Future<bool> fromStore() async {
+    final info = await PackageInfo.fromPlatform();
+    return installedFromStore(info.installerStore);
+  }
+
   Future<bool> wasSkipped(int build) async {
     final prefs = await SharedPreferences.getInstance();
     return prefs.getInt(_skipKey) == build;
@@ -77,70 +98,11 @@ class UpdateService {
     await prefs.remove(_skipKey);
   }
 
-  Uri apkUri(AppUpdateInfo remote) {
-    final raw = remote.downloadUrl ?? '/app/apk';
-    if (raw.startsWith('http://') || raw.startsWith('https://')) {
-      return Uri.parse(raw);
-    }
-    final base = Uri.parse(api.baseUrl);
-    // download_url from API is `/api/app/apk`; baseUrl is `…/api`
-    if (raw.startsWith('/api/')) {
-      final root = api.baseUrl.replaceFirst(RegExp(r'/api/?$'), '');
-      return Uri.parse('$root$raw');
-    }
-    final path = raw.startsWith('/') ? raw : '/$raw';
-    final joined = base.path.endsWith('/') ? '${base.path}${path.substring(1)}' : '${base.path}$path';
-    return base.replace(path: joined);
-  }
-
-  Future<File> downloadApk(
-    AppUpdateInfo remote, {
-    void Function(double progress)? onProgress,
-  }) async {
-    final uri = apkUri(remote);
-    final client = http.Client();
-    try {
-      final req = http.Request('GET', uri);
-      final res = await client.send(req);
-      if (res.statusCode != 200) {
-        throw ApiException('Не удалось скачать обновление (${res.statusCode})', statusCode: res.statusCode);
-      }
-      final total = res.contentLength ?? 0;
-      var received = 0;
-      final dir = await getTemporaryDirectory();
-      // Один и тот же файл обновления — меньше шансов, что установщик
-      // предложит «второе» приложение рядом со старым.
-      final file = File('${dir.path}/ryadom56-update.apk');
-      if (await file.exists()) {
-        await file.delete();
-      }
-      // подчистить старые копии
-      await for (final entity in dir.list()) {
-        if (entity is File && entity.path.contains('ryadom56') && entity.path.endsWith('.apk')) {
-          try {
-            await entity.delete();
-          } catch (_) {}
-        }
-      }
-      final sink = file.openWrite();
-      await for (final chunk in res.stream) {
-        received += chunk.length;
-        sink.add(chunk);
-        if (total > 0 && onProgress != null) {
-          onProgress(received / total);
-        }
-      }
-      await sink.close();
-      return file;
-    } finally {
-      client.close();
-    }
-  }
-
-  Future<void> installApk(File file) async {
-    final result = await OpenFilex.open(file.path, type: 'application/vnd.android.package-archive');
-    if (result.type != ResultType.done) {
-      throw Exception(result.message.isNotEmpty ? result.message : 'Не удалось открыть установщик');
+  Future<void> openDownloadSite() async {
+    final uri = Uri.parse(kPublicSite);
+    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
+    if (!ok) {
+      throw ApiException('Не удалось открыть сайт');
     }
   }
 }
@@ -152,6 +114,14 @@ Future<bool> checkForAppUpdate(
 }) async {
   final api = context.read<AppState>().api;
   final service = UpdateService(api);
+  if (await service.fromStore()) {
+    if (manual && context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Обновления приходят из магазина приложений')),
+      );
+    }
+    return false;
+  }
   final remote = await service.fetch();
   if (!context.mounted) return false;
   if (remote == null) {
@@ -197,51 +167,22 @@ class _UpdateDialog extends StatefulWidget {
 }
 
 class _UpdateDialogState extends State<_UpdateDialog> {
-  bool downloading = false;
-  double progress = 0;
+  bool busy = false;
   String? error;
 
-  Future<void> _start() async {
-    if (!widget.remote.hasApk) {
-      setState(() => error = 'Файл обновления ещё не загружен на сервер. Попробуйте позже.');
-      return;
-    }
+  Future<void> _openSite() async {
     setState(() {
-      downloading = true;
-      progress = 0;
+      busy = true;
       error = null;
     });
     try {
-      final file = await widget.service.downloadApk(
-        widget.remote,
-        onProgress: (p) {
-          if (mounted) setState(() => progress = p);
-        },
-      );
       await widget.service.clearSkip();
-      if (!mounted) return;
-      await widget.service.installApk(file);
-      if (!mounted) return;
-      Navigator.pop(context);
-      await showDialog<void>(
-        context: context,
-        builder: (ctx) => AlertDialog(
-          title: const Text('Установите обновление'),
-          content: const Text(
-            'Откроется установщик Android — подтвердите установку поверх текущей версии.\n\n'
-            'Это заменит то же приложение «Рядом56», новый значок не появится.\n\n'
-            'Если вдруг останутся два значка — удалите старый '
-            '(тот, который не открывается или со старым номером версии).',
-          ),
-          actions: [
-            FilledButton(onPressed: () => Navigator.pop(ctx), child: const Text('Понятно')),
-          ],
-        ),
-      );
+      await widget.service.openDownloadSite();
+      if (mounted) Navigator.pop(context);
     } catch (e) {
       if (mounted) {
         setState(() {
-          downloading = false;
+          busy = false;
           error = AppState.userFriendlyError(e);
         });
       }
@@ -252,26 +193,20 @@ class _UpdateDialogState extends State<_UpdateDialog> {
   Widget build(BuildContext context) {
     final remote = widget.remote;
     return AlertDialog(
-      title: Text(remote.force ? 'Требуется обновление' : 'Доступно обновление'),
+      title: Text(remote.force ? 'Нужно обновление' : 'Есть обновление'),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text('Версия ${remote.version} (сборка ${remote.build})'),
+          Text('Версия ${remote.version}'),
           const SizedBox(height: 8),
           Text(
-            'Обновление ставится поверх текущего приложения — данные и вход сохраняются.',
+            'Откроется сайт — скачайте файл и установите поверх текущего. Вход сохранится.',
             style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, height: 1.35, fontSize: 13),
           ),
           if (remote.notes != null && remote.notes!.trim().isNotEmpty) ...[
             const SizedBox(height: 10),
             Text(remote.notes!, style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, height: 1.35)),
-          ],
-          if (downloading) ...[
-            const SizedBox(height: 16),
-            LinearProgressIndicator(value: progress > 0 ? progress : null),
-            const SizedBox(height: 8),
-            Text(progress > 0 ? 'Скачивание ${(progress * 100).round()}%' : 'Скачивание…'),
           ],
           if (error != null) ...[
             const SizedBox(height: 12),
@@ -280,7 +215,7 @@ class _UpdateDialogState extends State<_UpdateDialog> {
         ],
       ),
       actions: [
-        if (!remote.force && !downloading)
+        if (!remote.force && !busy)
           TextButton(
             onPressed: () async {
               await widget.service.skip(remote.build);
@@ -289,8 +224,8 @@ class _UpdateDialogState extends State<_UpdateDialog> {
             child: const Text('Позже'),
           ),
         FilledButton(
-          onPressed: downloading ? null : _start,
-          child: Text(downloading ? 'Ждите…' : 'Обновить'),
+          onPressed: busy ? null : _openSite,
+          child: Text(busy ? 'Открываю…' : 'На сайт'),
         ),
       ],
     );

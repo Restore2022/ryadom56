@@ -10,6 +10,7 @@ import '../biometric_service.dart';
 import '../event_actions.dart';
 import '../listing_templates.dart';
 import '../location_service.dart';
+import '../settlement_picker.dart';
 import '../responsive.dart';
 import '../scroll_to_top.dart';
 import '../state/app_state.dart';
@@ -26,13 +27,11 @@ import 'edit_profile_screen.dart';
 import 'device_sessions_screen.dart';
 import 'event_detail_screen.dart';
 import 'favorites_screen.dart';
-import 'legal_doc_screen.dart';
 import 'listing_detail_screen.dart';
 import 'my_listings_screen.dart';
-import 'my_reports_screen.dart';
-import 'news_list_screen.dart';
 import 'notifications_screen.dart';
 import 'pin_setup_screen.dart';
+import 'search_all_screen.dart';
 import 'transport_detail_screen.dart';
 import 'view_history_screen.dart';
 
@@ -79,7 +78,7 @@ Future<bool> enableNearMe(BuildContext context, {required bool directory}) async
       );
       await state.setDirectoryNear();
     } else {
-      await state.setNearOrigin();
+      await state.setNearOrigin(settlementId: sid);
     }
     return true;
   }
@@ -100,12 +99,7 @@ void openAfisha(BuildContext context) {
 }
 
 const categoryLabels = {
-  'goods': 'Товары',
-  'services': 'Услуги',
-  'jobs': 'Работа',
-  'rent': 'Аренда',
-  'free': 'Отдам',
-  'lost_found': 'Потеряшки',
+  ...listingCategoryLabels,
   'school': 'Школа',
   'hospital': 'Больница',
   'shop': 'Магазин',
@@ -330,6 +324,13 @@ class _HomeShellState extends State<HomeShell> {
         toolbarHeight: landscape && !context.isTablet ? 48 : kToolbarHeight,
         actions: [
           IconButton(
+            tooltip: 'Поиск',
+            onPressed: () {
+              Navigator.push(context, fastRoute(const SearchAllScreen()));
+            },
+            icon: const Icon(Icons.search),
+          ),
+          IconButton(
             tooltip: 'Уведомления',
             onPressed: () async {
               final ok = await ensureLoggedIn(context, message: 'Войдите, чтобы видеть уведомления');
@@ -392,7 +393,6 @@ class _ListingsTab extends StatefulWidget {
 }
 
 class _ListingsTabState extends State<_ListingsTab> {
-  final search = TextEditingController();
   final scroll = ScrollController();
   List<Map<String, dynamic>> activeAlerts = [];
   final Set<int> dismissedAlertIds = {};
@@ -400,16 +400,11 @@ class _ListingsTabState extends State<_ListingsTab> {
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final q = context.read<AppState>().filterQuery;
-      if (q.isNotEmpty) search.text = q;
-      _loadAlert();
-    });
+    WidgetsBinding.instance.addPostFrameCallback((_) => _loadAlert());
   }
 
   @override
   void dispose() {
-    search.dispose();
     scroll.dispose();
     super.dispose();
   }
@@ -557,12 +552,13 @@ class _ListingsTabState extends State<_ListingsTab> {
               child: Padding(
                 padding: EdgeInsets.fromLTRB(padH, 8, padH, 6),
                 child: TextField(
-                  controller: search,
-                  textInputAction: TextInputAction.search,
-                  onSubmitted: (v) => state.applyListingFilters(query: v),
+                  readOnly: true,
+                  onTap: () {
+                    Navigator.push(context, fastRoute(const SearchAllScreen()));
+                  },
                   decoration: InputDecoration(
                     isDense: context.isLandscape,
-                    hintText: 'Поиск по объявлениям',
+                    hintText: 'велосипед, аптека, работа',
                     prefixIcon: const Icon(Icons.search),
                     suffixIcon: IconButton(
                       icon: const Icon(Icons.tune),
@@ -598,7 +594,7 @@ class _ListingsTabState extends State<_ListingsTab> {
                       onSelected: (_) => state.applyListingFilters(hasPhotos: !state.filterHasPhotos),
                     ),
                   ),
-                  ...['goods', 'services', 'jobs', 'rent', 'free', 'lost_found'].map(
+                  ...listingCategoryOrder.map(
                     (c) => Padding(
                       padding: const EdgeInsets.only(right: 8),
                       child: RyadomFilterChip(
@@ -632,8 +628,13 @@ class _ListingsTabState extends State<_ListingsTab> {
                         items: sortLabels.entries
                             .map((e) => DropdownMenuItem(value: e.key, child: Text(e.value)))
                             .toList(),
-                        onChanged: (v) {
-                          if (v != null) state.applyListingFilters(sortBy: v);
+                        onChanged: (v) async {
+                          if (v == null) return;
+                          if (v == 'near') {
+                            await enableNearMe(context, directory: false);
+                            return;
+                          }
+                          await state.applyListingFilters(sortBy: v);
                         },
                       ),
                     ),
@@ -740,7 +741,7 @@ class _ListingsTabState extends State<_ListingsTab> {
         return StatefulBuilder(
           builder: (ctx, setModal) {
             return Padding(
-              padding: EdgeInsets.fromLTRB(20, 8, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom),
+              padding: EdgeInsets.fromLTRB(20, 8, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom + ctx.systemBottomInset),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -752,21 +753,16 @@ class _ListingsTabState extends State<_ListingsTab> {
                     decoration: const InputDecoration(labelText: 'Категория'),
                     items: [
                       const DropdownMenuItem(value: null, child: Text('Все категории')),
-                      ...['goods', 'services', 'jobs', 'rent', 'free', 'lost_found']
+                      ...listingCategoryOrder
                           .map((c) => DropdownMenuItem(value: c, child: Text(categoryLabels[c]!))),
                     ],
                     onChanged: (v) => setModal(() => category = v),
                   ),
                   const SizedBox(height: 12),
-                  DropdownButtonFormField<int?>(
+                  SettlementPicker(
                     value: settlementId,
-                    decoration: const InputDecoration(labelText: 'Населённый пункт'),
-                    items: [
-                      const DropdownMenuItem(value: null, child: Text('Весь район')),
-                      ...state.settlements.map(
-                        (s) => DropdownMenuItem(value: s['id'] as int, child: Text(s['display_name'] as String)),
-                      ),
-                    ],
+                    settlements: state.settlements,
+                    allowAll: true,
                     onChanged: (v) => setModal(() => settlementId = v),
                   ),
                   const SizedBox(height: 12),
@@ -818,19 +814,21 @@ class _ListingsTabState extends State<_ListingsTab> {
                       await state.setListingFilters(
                         category: category,
                         settlementId: settlementId,
-                        sortBy: sort,
-                        query: search.text.trim(),
+                        sortBy: sort == 'near' ? (state.sort == 'near' ? 'near' : 'newest') : sort,
+                        query: '',
                         hasPhotos: hasPhotos,
                         priceMin: parsePrice(priceMinCtrl.text),
                         priceMax: parsePrice(priceMaxCtrl.text),
                       );
+                      if (sort == 'near' && context.mounted) {
+                        await enableNearMe(context, directory: false);
+                      }
                     },
                     child: const Text('Применить'),
                   ),
                   TextButton(
                     onPressed: () async {
                       Navigator.pop(ctx);
-                      search.clear();
                       priceMinCtrl.clear();
                       priceMaxCtrl.clear();
                       await state.setListingFilters(
@@ -892,10 +890,10 @@ class _ListingCard extends StatelessWidget {
                   ? scheme.primary
                   : item['is_urgent'] == true
                       ? scheme.error.withValues(alpha: 0.55)
-                      : item['category'] == 'free'
+                      : item['category'] == 'free' || item['category'] == 'wanted'
                           ? scheme.tertiary.withValues(alpha: 0.55)
                           : ryadomCardLine(context),
-              width: (item['is_pinned'] == true || item['is_urgent'] == true || item['category'] == 'free')
+              width: (item['is_pinned'] == true || item['is_urgent'] == true || item['category'] == 'free' || item['category'] == 'wanted')
                   ? 1.6
                   : 1,
             ),
@@ -971,9 +969,18 @@ class _ListingCard extends StatelessWidget {
                             ),
                             child: Text('Бесплатно', style: TextStyle(color: scheme.tertiary, fontWeight: FontWeight.w800, fontSize: 11)),
                           ),
-                        if (item['price'] != null)
+                        if (item['category'] == 'wanted')
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: scheme.secondary.withValues(alpha: 0.18),
+                              borderRadius: BorderRadius.circular(999),
+                            ),
+                            child: Text('Куплю', style: TextStyle(color: scheme.secondary, fontWeight: FontWeight.w800, fontSize: 11)),
+                          ),
+                        if (listingPriceLabel(item).isNotEmpty)
                           Text(
-                            '${item['price']} ₽',
+                            listingPriceLabel(item),
                             style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 16),
                           ),
                       ],
@@ -1124,26 +1131,12 @@ class _EventsTabState extends State<EventsTab> {
               SliverToBoxAdapter(
                 child: Padding(
                   padding: EdgeInsets.fromLTRB(padH, context.isLandscape ? 6 : 12, padH, 8),
-                  child: DropdownButtonFormField<int?>(
-                    value: settlementId != null && settlements.any((s) => s['id'] == settlementId)
-                        ? settlementId
-                        : null,
-                    isExpanded: true,
-                    decoration: InputDecoration(
-                      isDense: context.isLandscape,
-                      labelText: 'Населённый пункт',
-                      prefixIcon: const Icon(Icons.place_outlined),
-                      border: const OutlineInputBorder(),
-                    ),
-                    items: [
-                      const DropdownMenuItem<int?>(value: null, child: Text('Весь район')),
-                      ...settlements.map(
-                        (s) => DropdownMenuItem<int?>(
-                          value: s['id'] as int,
-                          child: Text(s['display_name'] as String, overflow: TextOverflow.ellipsis),
-                        ),
-                      ),
-                    ],
+                  child: SettlementPicker(
+                    value: settlementId != null && settlements.any((s) => s['id'] == settlementId) ? settlementId : null,
+                    settlements: settlements,
+                    allowAll: true,
+                    allLabel: 'Все события',
+                    dense: context.isLandscape,
                     onChanged: (v) {
                       setState(() => settlementId = v);
                       _load();
@@ -1202,7 +1195,7 @@ class _EventsTabState extends State<EventsTab> {
                     child: emptyState(
                       context: context,
                       title: upcomingOnly == false ? 'Прошедших событий нет' : 'Пока нет событий',
-                      subtitle: 'Афиша района появится здесь',
+                      subtitle: 'Афиша появится здесь',
                       icon: Icons.event_outlined,
                       actionLabel: 'Обновить',
                       onAction: () => _load(),
@@ -1495,26 +1488,10 @@ class _TransportTabState extends State<_TransportTab> {
                   ),
                 Padding(
                   padding: EdgeInsets.fromLTRB(padH, context.isLandscape ? 6 : 12, padH, 8),
-                  child: DropdownButtonFormField<int>(
-                    value: settlementId != null && settlements.any((s) => s['id'] == settlementId)
-                        ? settlementId
-                        : null,
-                    isExpanded: true,
-                    decoration: InputDecoration(
-                      isDense: context.isLandscape,
-                      labelText: 'Населённый пункт',
-                      hintText: 'Выберите населённый пункт',
-                      prefixIcon: const Icon(Icons.place_outlined),
-                      border: const OutlineInputBorder(),
-                    ),
-                    items: settlements
-                        .map(
-                          (s) => DropdownMenuItem<int>(
-                            value: s['id'] as int,
-                            child: Text(s['display_name'] as String, overflow: TextOverflow.ellipsis),
-                          ),
-                        )
-                        .toList(),
+                  child: SettlementPicker(
+                    value: settlementId != null && settlements.any((s) => s['id'] == settlementId) ? settlementId : null,
+                    settlements: settlements,
+                    dense: context.isLandscape,
                     onChanged: (v) {
                       setState(() => settlementId = v);
                       _load();
@@ -2200,7 +2177,7 @@ class _DirectoryTabState extends State<_DirectoryTab> {
         return StatefulBuilder(
           builder: (ctx, setModal) {
             return Padding(
-              padding: EdgeInsets.fromLTRB(20, 8, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom),
+              padding: EdgeInsets.fromLTRB(20, 8, 20, 20 + MediaQuery.of(ctx).viewInsets.bottom + ctx.systemBottomInset),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2217,15 +2194,11 @@ class _DirectoryTabState extends State<_DirectoryTab> {
                     onChanged: (v) => setModal(() => category = v),
                   ),
                   const SizedBox(height: 12),
-                  DropdownButtonFormField<int?>(
+                  SettlementPicker(
                     value: settlementId,
-                    decoration: const InputDecoration(labelText: 'Населённый пункт'),
-                    items: [
-                      const DropdownMenuItem(value: null, child: Text('Весь район')),
-                      ...state.settlements.map(
-                        (s) => DropdownMenuItem(value: s['id'] as int, child: Text(s['display_name'] as String)),
-                      ),
-                    ],
+                    settlements: state.settlements,
+                    allowAll: true,
+                    allLabel: 'Все места',
                     onChanged: (v) => setModal(() => settlementId = v),
                   ),
                   const SizedBox(height: 18),
@@ -2258,6 +2231,75 @@ class _DirectoryTabState extends State<_DirectoryTab> {
   }
 }
 
+void _openProfileSheet(BuildContext context, {required String title, required List<Widget> tiles}) {
+  showModalBottomSheet<void>(
+    context: context,
+    showDragHandle: true,
+    builder: (ctx) {
+      return SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+                child: Text(title, style: GoogleFonts.unbounded(fontSize: 18, fontWeight: FontWeight.w600)),
+              ),
+              ...tiles,
+            ],
+          ),
+        ),
+      );
+    },
+  );
+}
+
+class _ProfileGridBtn extends StatelessWidget {
+  const _ProfileGridBtn({required this.icon, required this.label, required this.onTap});
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Material(
+      color: Theme.of(context).cardTheme.color,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 14),
+          child: Row(
+            children: [
+              Icon(icon, color: scheme.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(label, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(fontWeight: FontWeight.w700)),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+Widget _profileGrid(List<Widget> items) {
+  return GridView.count(
+    crossAxisCount: 2,
+    shrinkWrap: true,
+    physics: const NeverScrollableScrollPhysics(),
+    mainAxisSpacing: 8,
+    crossAxisSpacing: 8,
+    childAspectRatio: 2.55,
+    children: items,
+  );
+}
+
 class ProfileScreen extends StatelessWidget {
   const ProfileScreen({super.key});
 
@@ -2272,9 +2314,9 @@ class ProfileScreen extends StatelessWidget {
         padding: EdgeInsets.fromLTRB(pad, pad, pad, context.listBottomPad),
         children: [
           Container(
-            padding: const EdgeInsets.all(20),
+            padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(22),
+              borderRadius: BorderRadius.circular(20),
               gradient: LinearGradient(
                 colors: [scheme.primary.withValues(alpha: 0.9), scheme.primary.withValues(alpha: 0.55)],
                 begin: Alignment.topLeft,
@@ -2284,111 +2326,47 @@ class ProfileScreen extends StatelessWidget {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text('Рядом56', style: GoogleFonts.unbounded(color: Colors.white, fontSize: 14)),
-                const SizedBox(height: 8),
-                Text('Гостевой режим', style: GoogleFonts.unbounded(color: Colors.white, fontSize: 26)),
-                const SizedBox(height: 6),
+                Text('Гость', style: GoogleFonts.unbounded(color: Colors.white, fontSize: 22)),
+                const SizedBox(height: 4),
                 const Text(
-                  'Смотрите ленту и справочник. Чтобы звонить и подавать объявления — войдите.',
+                  'Ленту можно смотреть так. Чтобы писать и звонить — войдите.',
                   style: TextStyle(color: Colors.white70),
                 ),
               ],
             ),
           ),
-          const SizedBox(height: 16),
+          const SizedBox(height: 12),
           FilledButton(
-            onPressed: () async {
-              await Navigator.pushNamed(context, '/login');
-            },
+            onPressed: () => Navigator.pushNamed(context, '/login'),
             child: const Text('Войти'),
           ),
           const SizedBox(height: 8),
           OutlinedButton(
-            onPressed: () async {
-              await Navigator.pushNamed(context, '/register');
-            },
+            onPressed: () => Navigator.pushNamed(context, '/register'),
             child: const Text('Создать аккаунт'),
           ),
-          const SizedBox(height: 16),
-          ListTile(
-            leading: const Icon(Icons.favorite_border),
-            title: const Text('Избранное'),
-            subtitle: const Text('Сохраняйте объявления — войдите, чтобы не потерять'),
-            trailing: const Icon(Icons.chevron_right),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            onTap: () => Navigator.push(context, fastRoute(const FavoritesScreen())),
-          ),
-          ListTile(
-            leading: const Icon(Icons.chat_bubble_outline),
-            title: const Text('Чаты'),
-            subtitle: const Text('Пишите авторам без телефона с порога'),
-            trailing: const Icon(Icons.chevron_right),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            onTap: () => Navigator.push(
-              context,
-              MaterialPageRoute(
-                builder: (_) => Scaffold(
-                  appBar: AppBar(title: const Text('Чаты')),
-                  body: const ChatsTab(),
-                ),
-              ),
+          const SizedBox(height: 12),
+          _profileGrid([
+            _ProfileGridBtn(icon: Icons.event_outlined, label: 'Афиша', onTap: () => openAfisha(context)),
+            _ProfileGridBtn(
+              icon: Icons.location_city_outlined,
+              label: 'Район',
+              onTap: () => Navigator.push(context, fastRoute(const DistrictHubScreen())),
             ),
-          ),
-          ListTile(
-            leading: const Icon(Icons.event_outlined),
-            title: const Text('Афиша'),
-            subtitle: const Text('События района'),
-            trailing: const Icon(Icons.chevron_right),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            onTap: () => openAfisha(context),
-          ),
-          ListTile(
-            leading: const Icon(Icons.location_city_outlined),
-            title: const Text('Район'),
-            subtitle: const Text('Срочное, новости и события'),
-            trailing: const Icon(Icons.chevron_right),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            onTap: () => Navigator.push(context, fastRoute(const DistrictHubScreen())),
-          ),
-          ListTile(
-            leading: const Icon(Icons.newspaper_outlined),
-            title: const Text('Новости района'),
-            trailing: const Icon(Icons.chevron_right),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            onTap: () => Navigator.push(
-              context,
-              fastRoute(NewsListScreen(settlementId: state.filterSettlementId)),
+            _ProfileGridBtn(
+              icon: Icons.favorite_border,
+              label: 'Избранное',
+              onTap: () => Navigator.push(context, fastRoute(const FavoritesScreen())),
             ),
-          ),
-          ListTile(
-            leading: const Icon(Icons.info_outline),
-            title: const Text('О проекте'),
-            trailing: const Icon(Icons.chevron_right),
-            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-            onTap: () => Navigator.push(context, fastRoute(const AboutScreen())),
-          ),
-          ListTile(
-            leading: const Icon(Icons.description_outlined),
-            title: const Text('Пользовательское соглашение'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.push(context, fastRoute(const LegalDocScreen(slug: 'terms', title: 'Пользовательское соглашение'))),
-          ),
-          ListTile(
-            leading: const Icon(Icons.privacy_tip_outlined),
-            title: const Text('Политика конфиденциальности'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.push(context, fastRoute(const LegalDocScreen(slug: 'privacy', title: 'Политика конфиденциальности'))),
-          ),
-          ListTile(
-            leading: const Icon(Icons.rule_outlined),
-            title: const Text('Правила объявлений'),
-            trailing: const Icon(Icons.chevron_right),
-            onTap: () => Navigator.push(
-              context,
-              fastRoute(const LegalDocScreen(slug: 'listing_rules', title: 'Правила размещения объявлений')),
+            _ProfileGridBtn(
+              icon: Icons.info_outline,
+              label: 'О проекте',
+              onTap: () => Navigator.push(context, fastRoute(const AboutScreen())),
             ),
-          ),
+          ]),
           SwitchListTile(
+            dense: true,
+            visualDensity: VisualDensity.compact,
             value: state.darkMode,
             onChanged: state.setDarkMode,
             title: const Text('Тёмная тема'),
@@ -2401,9 +2379,9 @@ class ProfileScreen extends StatelessWidget {
       padding: EdgeInsets.fromLTRB(pad, pad, pad, context.listBottomPad),
       children: [
         Container(
-          padding: const EdgeInsets.all(20),
+          padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(22),
+            borderRadius: BorderRadius.circular(20),
             gradient: LinearGradient(
               colors: [scheme.primary.withValues(alpha: 0.9), scheme.primary.withValues(alpha: 0.55)],
               begin: Alignment.topLeft,
@@ -2411,85 +2389,146 @@ class ProfileScreen extends StatelessWidget {
             ),
           ),
           child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               _ProfileAvatar(user: user),
-              const SizedBox(width: 14),
+              const SizedBox(width: 12),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('Рядом56', style: GoogleFonts.unbounded(color: Colors.white, fontSize: 14)),
-                    const SizedBox(height: 8),
-                    Text(user['full_name'] as String, style: GoogleFonts.unbounded(color: Colors.white, fontSize: 24)),
-                    const SizedBox(height: 6),
-                    Text(user['email'] as String, style: const TextStyle(color: Colors.white70)),
-                    if (user['phone'] != null) Text(user['phone'] as String, style: const TextStyle(color: Colors.white70)),
+                    Text(user['full_name'] as String, style: GoogleFonts.unbounded(color: Colors.white, fontSize: 20)),
+                    const SizedBox(height: 2),
+                    Text(user['email'] as String, style: const TextStyle(color: Colors.white70, fontSize: 13)),
                   ],
                 ),
               ),
             ],
           ),
         ),
-        const SizedBox(height: 16),
+        const SizedBox(height: 12),
+        _profileGrid([
+          _ProfileGridBtn(
+            icon: Icons.inventory_2_outlined,
+            label: 'Мои объявления',
+            onTap: () => Navigator.push(context, fastRoute(const MyListingsScreen())),
+          ),
+          _ProfileGridBtn(
+            icon: Icons.favorite_outline,
+            label: 'Избранное',
+            onTap: () => _openProfileSheet(
+              context,
+              title: 'Избранное',
+              tiles: [
+                ListTile(
+                  leading: const Icon(Icons.inventory_2_outlined),
+                  title: const Text('Объявления'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(context, fastRoute(const FavoritesScreen()));
+                  },
+                ),
+                ListTile(
+                  leading: const Icon(Icons.storefront_outlined),
+                  title: const Text('Места'),
+                  onTap: () {
+                    Navigator.pop(context);
+                    Navigator.push(context, fastRoute(const DirectoryFavoritesScreen()));
+                  },
+                ),
+              ],
+            ),
+          ),
+          _ProfileGridBtn(icon: Icons.event_outlined, label: 'Афиша', onTap: () => openAfisha(context)),
+          _ProfileGridBtn(
+            icon: Icons.location_city_outlined,
+            label: 'Район',
+            onTap: () => Navigator.push(context, fastRoute(const DistrictHubScreen())),
+          ),
+        ]),
+        const SizedBox(height: 4),
         ListTile(
-          leading: const Icon(Icons.event_outlined),
-          title: const Text('Афиша'),
-          subtitle: const Text('События района'),
-          trailing: const Icon(Icons.chevron_right),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          onTap: () => openAfisha(context),
-        ),
-        ListTile(
-          leading: const Icon(Icons.inventory_2_outlined),
-          title: const Text('Мои объявления'),
-          subtitle: const Text('Статус, изменить, снять'),
-          trailing: const Icon(Icons.chevron_right),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          onTap: () => Navigator.push(context, fastRoute(const MyListingsScreen())),
-        ),
-        ListTile(
-          leading: const Icon(Icons.flag_outlined),
-          title: const Text('Жалобы на мои объявления'),
-          subtitle: const Text('Статус и ответ модератора'),
-          trailing: const Icon(Icons.chevron_right),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          onTap: () => Navigator.push(context, fastRoute(const MyReportsScreen())),
-        ),
-        ListTile(
-          leading: const Icon(Icons.favorite_outline),
-          title: const Text('Избранное'),
-          subtitle: const Text('Сохранённые объявления'),
-          trailing: const Icon(Icons.chevron_right),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          onTap: () => Navigator.push(context, fastRoute(const FavoritesScreen())),
-        ),
-        ListTile(
-          leading: const Icon(Icons.bookmark_outline),
-          title: const Text('Избранные организации'),
-          subtitle: const Text('Справочник'),
-          trailing: const Icon(Icons.chevron_right),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          onTap: () => Navigator.push(context, fastRoute(const DirectoryFavoritesScreen())),
-        ),
-        ListTile(
+          dense: true,
+          visualDensity: VisualDensity.compact,
           leading: const Icon(Icons.history),
           title: const Text('История просмотров'),
-          subtitle: const Text('Недавно открытые объявления'),
           trailing: const Icon(Icons.chevron_right),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           onTap: () => Navigator.push(context, fastRoute(const ViewHistoryScreen())),
         ),
         ListTile(
+          dense: true,
+          visualDensity: VisualDensity.compact,
           leading: const Icon(Icons.manage_accounts_outlined),
-          title: const Text('Редактировать профиль'),
-          subtitle: const Text('Имя, телефон, фото, пароль'),
+          title: const Text('Аккаунт'),
+          subtitle: const Text('Профиль, PIN, устройства'),
           trailing: const Icon(Icons.chevron_right),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          onTap: () => Navigator.push(context, fastRoute(const EditProfileScreen())),
+          onTap: () => _openProfileSheet(
+            context,
+            title: 'Аккаунт',
+            tiles: [
+              ListTile(
+                leading: const Icon(Icons.person_outline),
+                title: const Text('Редактировать профиль'),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(context, fastRoute(const EditProfileScreen()));
+                },
+              ),
+              if (!state.hasPin)
+                ListTile(
+                  leading: const Icon(Icons.pin_outlined),
+                  title: const Text('Придумать PIN'),
+                  subtitle: const Text('Чтобы чужие не открыли аккаунт на этом телефоне'),
+                  onTap: () async {
+                    Navigator.pop(context);
+                    await Navigator.push(
+                      context,
+                      fastRoute(const PinSetupScreen(allowSkip: true)),
+                    );
+                  },
+                ),
+              if (state.hasPin)
+                ListTile(
+                  leading: const Icon(Icons.pin_outlined),
+                  title: const Text('Сменить PIN'),
+                  onTap: () async {
+                    Navigator.pop(context);
+                    final ok = await Navigator.push<bool>(
+                      context,
+                      fastRoute(const PinSetupScreen(mode: PinSetupMode.change)),
+                    );
+                    if (ok == true && context.mounted) showAppSnack(context, 'PIN обновлён');
+                  },
+                ),
+              if (state.hasPin)
+                ListTile(
+                leading: const Icon(Icons.lock_reset_outlined),
+                title: const Text('Сбросить PIN'),
+                onTap: () async {
+                  Navigator.pop(context);
+                  final confirmed = await confirmAccountPassword(context, title: 'Сброс PIN');
+                  if (!confirmed || !context.mounted) return;
+                  final ok = await Navigator.push<bool>(
+                    context,
+                    fastRoute(const PinSetupScreen(mode: PinSetupMode.reset)),
+                  );
+                  if (ok == true && context.mounted) showAppSnack(context, 'PIN обновлён');
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.phonelink_erase_outlined),
+                title: const Text('Сессии устройств'),
+                onTap: () {
+                  Navigator.pop(context);
+                  Navigator.push(context, fastRoute(const DeviceSessionsScreen()));
+                },
+              ),
+            ],
+          ),
         ),
         if (state.biometricsAvailable)
           SwitchListTile(
+            dense: true,
+            visualDensity: VisualDensity.compact,
             value: state.biometricsEnabled,
             title: Text('Вход по ${state.biometricsLabel}'),
             subtitle: const Text('PIN останется запасным'),
@@ -2506,78 +2545,22 @@ class ProfileScreen extends StatelessWidget {
             },
           ),
         ListTile(
-          leading: const Icon(Icons.pin_outlined),
-          title: const Text('Сменить PIN'),
-          subtitle: const Text('Нужен текущий код'),
-          trailing: const Icon(Icons.chevron_right),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          onTap: () async {
-            final ok = await Navigator.push<bool>(
-              context,
-              fastRoute(const PinSetupScreen(mode: PinSetupMode.change)),
-            );
-            if (ok == true && context.mounted) showAppSnack(context, 'PIN обновлён');
-          },
-        ),
-        ListTile(
-          leading: const Icon(Icons.lock_reset_outlined),
-          title: const Text('Сбросить PIN'),
-          subtitle: const Text('Через пароль аккаунта'),
-          trailing: const Icon(Icons.chevron_right),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          onTap: () async {
-            final confirmed = await confirmAccountPassword(context, title: 'Сброс PIN');
-            if (!confirmed || !context.mounted) return;
-            final ok = await Navigator.push<bool>(
-              context,
-              fastRoute(const PinSetupScreen(mode: PinSetupMode.reset)),
-            );
-            if (ok == true && context.mounted) showAppSnack(context, 'PIN обновлён');
-          },
-        ),
-        ListTile(
-          leading: const Icon(Icons.phonelink_erase_outlined),
-          title: const Text('Сессии устройств'),
-          subtitle: const Text('Выйти на всех телефонах'),
-          trailing: const Icon(Icons.chevron_right),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          onTap: () => Navigator.push(context, fastRoute(const DeviceSessionsScreen())),
-        ),
-        ListTile(
-          leading: const Icon(Icons.location_city_outlined),
-          title: const Text('Район'),
-          subtitle: const Text('Срочное, новости и события'),
-          trailing: const Icon(Icons.chevron_right),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          onTap: () => Navigator.push(context, fastRoute(const DistrictHubScreen())),
-        ),
-        ListTile(
-          leading: const Icon(Icons.newspaper_outlined),
-          title: const Text('Новости района'),
-          trailing: const Icon(Icons.chevron_right),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          onTap: () => Navigator.push(
-            context,
-            fastRoute(NewsListScreen(settlementId: state.filterSettlementId)),
-          ),
-        ),
-        ListTile(
+          dense: true,
+          visualDensity: VisualDensity.compact,
           leading: const Icon(Icons.info_outline),
           title: const Text('О проекте'),
-          subtitle: const Text('Рядом56, поддержка и документы'),
           trailing: const Icon(Icons.chevron_right),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
           onTap: () => Navigator.push(context, fastRoute(const AboutScreen())),
         ),
-        const SizedBox(height: 8),
         SwitchListTile(
+          dense: true,
+          visualDensity: VisualDensity.compact,
           value: state.darkMode,
           onChanged: state.setDarkMode,
           title: const Text('Тёмная тема'),
-          subtitle: const Text('Удобно вечером и ночью'),
           secondary: Icon(state.darkMode ? Icons.dark_mode : Icons.light_mode),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 4),
         OutlinedButton(
           onPressed: () async {
             final ok = await showDialog<bool>(

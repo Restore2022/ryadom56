@@ -69,7 +69,7 @@ class _LoginScreenState extends State<LoginScreen> {
       if (!state.hasPin) {
         Navigator.pushAndRemoveUntil(
           context,
-          MaterialPageRoute(builder: (_) => const PinSetupScreen(allowSkip: false)),
+          MaterialPageRoute(builder: (_) => const PinSetupScreen(allowSkip: true)),
           (_) => false,
         );
         return;
@@ -98,7 +98,7 @@ class _LoginScreenState extends State<LoginScreen> {
             Text('Рядом56', style: GoogleFonts.unbounded(fontSize: 34, fontWeight: FontWeight.w700, color: scheme.primary)),
             const SizedBox(height: 8),
             Text(
-              'Объявления и справочник\nСакмарского района',
+              'Объявления и справочник\nОренбургской области',
               style: GoogleFonts.manrope(fontSize: 18, height: 1.35, color: scheme.onSurfaceVariant),
             ),
             const SizedBox(height: 36),

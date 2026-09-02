@@ -116,6 +116,7 @@ class _PinSetupScreenState extends State<PinSetupScreen> with SingleTickerProvid
       await PinStorage.setPin(_first);
       if (!mounted) return;
       final state = context.read<AppState>();
+      await state.clearPinDeferred();
       final token = await state.api.token;
       await PinStorage.saveSessionToken(token);
       if (!mounted) return;
@@ -162,6 +163,8 @@ class _PinSetupScreenState extends State<PinSetupScreen> with SingleTickerProvid
 
   Future<void> _skip() async {
     if (!widget.allowSkip || _busy) return;
+    await context.read<AppState>().deferPinSetup();
+    if (!mounted) return;
     Navigator.pushNamedAndRemoveUntil(context, '/home', (route) => false);
   }
 
@@ -255,7 +258,7 @@ class _PinSetupScreenState extends State<PinSetupScreen> with SingleTickerProvid
                 _PinPad(onDigit: _onDigit, onBackspace: _onBackspace, enabled: !_busy),
                 if (widget.allowSkip) ...[
                   const SizedBox(height: 8),
-                  TextButton(onPressed: _busy ? null : _skip, child: const Text('Не сейчас')),
+                  TextButton(onPressed: _busy ? null : _skip, child: const Text('Не сейчас — поставлю в профиле')),
                 ],
                 const SizedBox(height: 8),
               ],

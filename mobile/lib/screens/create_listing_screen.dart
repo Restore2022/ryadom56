@@ -7,6 +7,8 @@ import 'package:provider/provider.dart';
 
 import '../listing_draft.dart';
 import '../listing_templates.dart';
+import '../responsive.dart';
+import '../settlement_picker.dart';
 import '../state/app_state.dart';
 
 class CreateListingScreen extends StatefulWidget {
@@ -27,6 +29,7 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
   final price = TextEditingController();
   final phone = TextEditingController();
   String category = 'goods';
+  String? templateId;
   int? settlementId;
   bool isUrgent = false;
   int lifetimeDays = 30;
@@ -35,6 +38,7 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
   bool savedOnExit = false;
   bool restoredLocal = false;
   Timer? _localSaveTimer;
+  int step = 0;
   final List<XFile> photos = [];
   final List<Map<String, dynamic>> existingImages = [];
   final picker = ImagePicker();
@@ -42,6 +46,16 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
   static const maxPhotos = 5;
 
   int get totalPhotoCount => existingImages.length + photos.length;
+
+  bool get _hidePhoneField {
+    final p = (context.read<AppState>().user?['phone'] as String?)?.trim() ?? '';
+    return p.isNotEmpty;
+  }
+
+  String? get _profilePhone {
+    final p = (context.read<AppState>().user?['phone'] as String?)?.trim() ?? '';
+    return p.isEmpty ? null : p;
+  }
 
   @override
   void initState() {
@@ -143,6 +157,7 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
         description.text.trim().isEmpty || listingTemplates.any((x) => x.exampleDescription == description.text.trim());
     setState(() {
       category = t.category;
+      templateId = t.id;
       if (t.category == 'free') price.clear();
       if (titleLooksEmpty) title.text = t.exampleTitle;
       if (descLooksEmpty) description.text = t.exampleDescription;
@@ -237,19 +252,91 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final settlements = context.watch<AppState>().settlements;
-    final state = context.watch<AppState>();
+    const titles = ['Фото', 'Что продаёте', 'Цена и село'];
     return PopScope(
-      canPop: true,
+      canPop: step == 0,
       onPopInvokedWithResult: (didPop, _) async {
-        if (!didPop || savedOnExit || busy) return;
-        await _autosaveDraft();
+        if (didPop) {
+          if (!savedOnExit && !busy) await _autosaveDraft();
+          return;
+        }
+        if (step > 0) setState(() { error = null; step -= 1; });
       },
       child: Scaffold(
-      appBar: AppBar(title: Text(widget.isEdit ? 'Редактировать' : 'Новое объявление')),
-      body: ListView(
-        padding: const EdgeInsets.all(16),
-        children: [
+        appBar: AppBar(
+          title: Text(widget.isEdit ? 'Редактировать' : 'Новое объявление'),
+          bottom: PreferredSize(
+            preferredSize: const Size.fromHeight(36),
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+              child: Row(
+                children: [
+                  Text('Шаг ${step + 1} из 3 · ${titles[step]}', style: Theme.of(context).textTheme.labelLarge),
+                  const Spacer(),
+                  SizedBox(
+                    width: 88,
+                    child: LinearProgressIndicator(value: (step + 1) / 3, minHeight: 6),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+        body: ListView(
+          padding: context.scrollPad(top: 16, bottom: 16),
+          children: [
+            if (step == 0) ..._photoStep(),
+            if (step == 1) ..._whatStep(),
+            if (step == 2) ..._placeStep(),
+            if (error != null) ...[
+              const SizedBox(height: 8),
+              Text(error!, style: const TextStyle(color: Colors.red)),
+            ],
+            const SizedBox(height: 16),
+            FilledButton(
+              onPressed: busy ? null : _onPrimary,
+              child: Text(
+                busy
+                    ? (widget.isEdit ? 'Сохранение…' : 'Публикация…')
+                    : (step < 2 ? 'Далее' : (widget.isEdit ? 'Отправить на модерацию' : 'Отправить на модерацию')),
+              ),
+            ),
+            if (step == 2) ...[
+              const SizedBox(height: 8),
+              OutlinedButton(
+                onPressed: busy ? null : () => _submit(asDraft: true),
+                child: const Text('Сохранить черновик'),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _onPrimary() {
+    if (step == 0) {
+      setState(() { error = null; step = 1; });
+      return;
+    }
+    if (step == 1) {
+      if (title.text.trim().length < 2) {
+        setState(() => error = 'Укажите заголовок');
+        return;
+      }
+      if (description.text.trim().length < 3) {
+        setState(() => error = 'Описание слишком короткое');
+        return;
+      }
+      setState(() { error = null; step = 2; });
+      return;
+    }
+    _submit(asDraft: false);
+  }
+
+  List<Widget> _photoStep() {
+    final state = context.watch<AppState>();
+    return [
           Text(
             'Фото ($totalPhotoCount/$maxPhotos)',
             style: Theme.of(context).textTheme.titleSmall,
@@ -257,8 +344,8 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
           const SizedBox(height: 4),
           Text(
             widget.isEdit
-                ? 'Можно удалить, поменять порядок и добавить новые. До 5 фото, лучше днём при хорошем свете.'
-                : 'До 5 фото — камера или галерея. Лучше снимать днём при хорошем свете.',
+                ? 'Можно без фото, но снимки лучше продают. Удалить, поменять порядок и добавить — до 5.'
+                : 'Можно без фото и сразу далее. До 5 снимков — камера или галерея, лучше днём.',
             style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 12),
           ),
           const SizedBox(height: 8),
@@ -383,7 +470,11 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
               ],
             ),
           ),
-          const SizedBox(height: 16),
+    ];
+  }
+
+  List<Widget> _whatStep() {
+    return [
           Text('Шаблоны', style: Theme.of(context).textTheme.titleSmall),
           const SizedBox(height: 4),
           Text(
@@ -398,7 +489,7 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
               for (final t in listingTemplates)
                 ChoiceChip(
                   label: Text(t.chipLabel),
-                  selected: category == t.category,
+                  selected: templateId == t.id,
                   onSelected: (_) => _applyTemplate(t),
                 ),
             ],
@@ -408,7 +499,7 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
             controller: title,
             decoration: InputDecoration(
               labelText: 'Заголовок',
-              hintText: templateFor(category)?.titleHint ?? 'Кратко, что предлагаете',
+              hintText: (templateById(templateId) ?? templateFor(category))?.titleHint ?? 'Кратко, что предлагаете',
               border: const OutlineInputBorder(),
             ),
           ),
@@ -419,7 +510,7 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
             maxLines: 8,
             decoration: InputDecoration(
               labelText: 'Описание',
-              hintText: templateFor(category)?.descriptionHint ?? 'Состояние, размер, где забрать',
+              hintText: (templateById(templateId) ?? templateFor(category))?.descriptionHint ?? 'Состояние, размер, где забрать',
               border: const OutlineInputBorder(),
             ),
           ),
@@ -427,29 +518,28 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
           DropdownButtonFormField<String>(
             value: category,
             decoration: const InputDecoration(labelText: 'Категория', border: OutlineInputBorder()),
-            items: const [
-              DropdownMenuItem(value: 'goods', child: Text('Товары')),
-              DropdownMenuItem(value: 'services', child: Text('Услуги')),
-              DropdownMenuItem(value: 'jobs', child: Text('Работа')),
-              DropdownMenuItem(value: 'rent', child: Text('Аренда')),
-              DropdownMenuItem(value: 'free', child: Text('Отдам даром')),
-              DropdownMenuItem(value: 'lost_found', child: Text('Потеряшки')),
+            items: [
+              for (final c in listingCategoryOrder)
+                DropdownMenuItem(value: c, child: Text(listingCategoryLabels[c]!)),
             ],
             onChanged: (v) {
               setState(() {
                 category = v ?? 'goods';
+                templateId = null;
                 if (category == 'free') price.clear();
               });
               _scheduleLocalSave();
             },
           ),
-          const SizedBox(height: 12),
-          DropdownButtonFormField<int>(
+    ];
+  }
+
+  List<Widget> _placeStep() {
+    final settlements = context.watch<AppState>().settlements;
+    return [
+          SettlementPicker(
             value: settlementId,
-            decoration: const InputDecoration(labelText: 'Населённый пункт', border: OutlineInputBorder()),
-            items: settlements
-                .map((s) => DropdownMenuItem<int>(value: s['id'] as int, child: Text(s['display_name'] as String)))
-                .toList(),
+            settlements: settlements,
             onChanged: (v) {
               setState(() => settlementId = v);
               _scheduleLocalSave();
@@ -460,19 +550,24 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
             TextField(
               controller: price,
               keyboardType: TextInputType.number,
-              decoration: const InputDecoration(labelText: 'Цена (необязательно)', border: OutlineInputBorder()),
+              decoration: InputDecoration(
+                labelText: category == 'wanted' ? 'До какой цены (необязательно)' : 'Цена (необязательно)',
+                border: const OutlineInputBorder(),
+              ),
             ),
           ],
-          const SizedBox(height: 12),
-          TextField(
-            controller: phone,
-            keyboardType: TextInputType.phone,
-            decoration: const InputDecoration(
-              labelText: 'Телефон для связи',
-              hintText: '+79001234567',
-              border: OutlineInputBorder(),
+          if (!_hidePhoneField) ...[
+            const SizedBox(height: 12),
+            TextField(
+              controller: phone,
+              keyboardType: TextInputType.phone,
+              decoration: const InputDecoration(
+                labelText: 'Телефон для связи',
+                hintText: '+79001234567',
+                border: OutlineInputBorder(),
+              ),
             ),
-          ),
+          ],
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             value: isUrgent,
@@ -509,28 +604,7 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
               style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant, fontSize: 13),
             ),
           ],
-          if (error != null) ...[
-            const SizedBox(height: 8),
-            Text(error!, style: const TextStyle(color: Colors.red)),
-          ],
-          const SizedBox(height: 16),
-          FilledButton(
-            onPressed: busy ? null : () => _submit(asDraft: false),
-            child: Text(
-              busy
-                  ? (widget.isEdit ? 'Сохранение…' : 'Публикация…')
-                  : (widget.isEdit ? 'Отправить на модерацию' : 'Отправить на модерацию'),
-            ),
-          ),
-          const SizedBox(height: 8),
-          OutlinedButton(
-            onPressed: busy ? null : () => _submit(asDraft: true),
-            child: const Text('Сохранить черновик'),
-          ),
-        ],
-      ),
-    ),
-    );
+    ];
   }
 
   bool get _hasContent {
@@ -583,7 +657,7 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
       setState(() => error = 'Выберите населённый пункт');
       return;
     }
-    final phoneRaw = phone.text.trim();
+    final phoneRaw = _hidePhoneField ? (_profilePhone ?? '') : phone.text.trim();
     if (phoneRaw.isNotEmpty) {
       final digits = phoneRaw.replaceAll(RegExp(r'\D'), '');
       if (digits.length < 10) {

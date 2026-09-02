@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'responsive.dart';
 import 'state/app_state.dart';
 
 /// Returns true if the user is logged in after optional login/register prompt.
@@ -16,7 +17,7 @@ Future<bool> ensureLoggedIn(
     showDragHandle: true,
     builder: (ctx) {
       return Padding(
-        padding: const EdgeInsets.fromLTRB(20, 8, 20, 24),
+        padding: EdgeInsets.fromLTRB(20, 8, 20, 20 + ctx.systemBottomInset),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,

@@ -73,6 +73,7 @@ class CallService extends ChangeNotifier {
   int inboxSeq = 0;
   Map<String, dynamic>? inboxEvent;
   bool _closing = false;
+  Future<void> _signalTail = Future.value();
 
   bool get inCall => phase != CallPhase.idle;
 
@@ -197,12 +198,7 @@ class CallService extends ChangeNotifier {
       await _api?.request('/calls/${call!.id}/accept', method: 'POST', auth: true);
       await _ensurePeer(offer: false);
       if (_pendingOffer != null) {
-        await _pc!.setRemoteDescription(RTCSessionDescription(_pendingOffer!['sdp'], _pendingOffer!['type']));
-        _hasRemote = true;
-        final answer = await _pc!.createAnswer();
-        await _pc!.setLocalDescription(answer);
-        _send({'type': 'answer', 'call_id': call!.id, 'sdp': answer.sdp, 'sdp_type': answer.type});
-        await _drainIce();
+        await _applyIncomingOffer(_pendingOffer!);
         _pendingOffer = null;
       }
     } on ApiException catch (e) {
@@ -330,6 +326,10 @@ class CallService extends ChangeNotifier {
   void _startResendOffer() {
     _resendOffer?.cancel();
     _resendOffer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      if (_hasRemote) {
+        _resendOffer?.cancel();
+        return;
+      }
       if (phase != CallPhase.outgoing && phase != CallPhase.connecting) {
         _resendOffer?.cancel();
         return;
@@ -449,6 +449,12 @@ class CallService extends ChangeNotifier {
   }
 
   Future<void> _onSignal(Map<String, dynamic> msg) async {
+    try {
+      await _onSignalInner(msg);
+    } catch (_) {}
+  }
+
+  Future<void> _onSignalInner(Map<String, dynamic> msg) async {
     final type = msg['type']?.toString();
     if (type == 'chat' || type == 'chat_read') {
       _dispatchInbox(msg);
@@ -488,21 +494,13 @@ class CallService extends ChangeNotifier {
     if (type == 'offer') {
       _pendingOffer = {'sdp': msg['sdp'], 'type': msg['sdp_type'] ?? 'offer'};
       if (_pc != null && (phase == CallPhase.connecting || phase == CallPhase.active)) {
-        await _pc!.setRemoteDescription(RTCSessionDescription(_pendingOffer!['sdp'], _pendingOffer!['type']));
-        _hasRemote = true;
-        final answer = await _pc!.createAnswer();
-        await _pc!.setLocalDescription(answer);
-        _send({'type': 'answer', 'call_id': call!.id, 'sdp': answer.sdp, 'sdp_type': answer.type});
-        await _drainIce();
+        await _applyIncomingOffer(_pendingOffer!);
         _pendingOffer = null;
       }
       return;
     }
     if (type == 'answer') {
-      if (_pc == null) return;
-      await _pc!.setRemoteDescription(RTCSessionDescription(msg['sdp']?.toString(), msg['sdp_type']?.toString() ?? 'answer'));
-      _hasRemote = true;
-      await _drainIce();
+      await _applyRemoteAnswer(msg['sdp']?.toString(), msg['sdp_type']?.toString());
       return;
     }
     if (type == 'ice') {
@@ -517,6 +515,51 @@ class CallService extends ChangeNotifier {
       }
       await _addIce(cand);
     }
+  }
+
+  Future<void> _applyIncomingOffer(Map<String, dynamic> offer) async {
+    final pc = _pc;
+    if (pc == null) return;
+    final sdp = offer['sdp']?.toString();
+    final typ = offer['type']?.toString() ?? 'offer';
+    if (sdp == null || sdp.isEmpty) return;
+    if (_hasRemote) {
+      await _resendLocalAnswer();
+      return;
+    }
+    if (pc.signalingState != RTCSignalingState.RTCSignalingStateStable) return;
+    try {
+      await pc.setRemoteDescription(RTCSessionDescription(sdp, typ));
+      _hasRemote = true;
+      final answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      if (call != null) {
+        _send({'type': 'answer', 'call_id': call!.id, 'sdp': answer.sdp, 'sdp_type': answer.type});
+      }
+      await _drainIce();
+    } catch (_) {}
+  }
+
+  Future<void> _applyRemoteAnswer(String? sdp, String? type) async {
+    final pc = _pc;
+    if (pc == null || sdp == null || sdp.isEmpty) return;
+    if (_hasRemote || pc.signalingState != RTCSignalingState.RTCSignalingStateHaveLocalOffer) {
+      return;
+    }
+    try {
+      await pc.setRemoteDescription(RTCSessionDescription(sdp, type ?? 'answer'));
+      _hasRemote = true;
+      _resendOffer?.cancel();
+      await _drainIce();
+    } catch (_) {}
+  }
+
+  Future<void> _resendLocalAnswer() async {
+    try {
+      final local = await _pc?.getLocalDescription();
+      if (local == null || call == null || local.type != 'answer') return;
+      _send({'type': 'answer', 'call_id': call!.id, 'sdp': local.sdp, 'sdp_type': local.type});
+    } catch (_) {}
   }
 
   Future<void> _drainIce() async {
@@ -576,7 +619,7 @@ class CallService extends ChangeNotifier {
           try {
             final msg = jsonDecode(event as String);
             if (msg is Map<String, dynamic>) {
-              _onSignal(msg);
+              _signalTail = _signalTail.then((_) => _onSignal(msg)).catchError((_) {});
             }
           } catch (_) {}
         },

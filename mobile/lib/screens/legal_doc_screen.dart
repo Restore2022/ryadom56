@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
+import '../responsive.dart';
 import '../state/app_state.dart';
 
 class LegalDocScreen extends StatefulWidget {
@@ -55,7 +56,7 @@ class _LegalDocScreenState extends State<LegalDocScreen> {
           : error != null
               ? Center(child: Padding(padding: const EdgeInsets.all(24), child: Text(error!)))
               : ListView(
-                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+                  padding: context.scrollPad(left: 20, top: 12, right: 20, bottom: 20),
                   children: [
                     Text(
                       title,

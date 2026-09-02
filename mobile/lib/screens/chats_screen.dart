@@ -269,6 +269,13 @@ class _ChatsTabState extends State<ChatsTab> {
                                                 color: unread > 0 ? scheme.primary : scheme.onSurfaceVariant,
                                               ),
                                               const SizedBox(width: 4),
+                                            ] else if (lastKind == 'photo') ...[
+                                              Icon(
+                                                Icons.photo_outlined,
+                                                size: 14,
+                                                color: unread > 0 ? scheme.primary : scheme.onSurfaceVariant,
+                                              ),
+                                              const SizedBox(width: 4),
                                             ],
                                             Expanded(
                                               child: Text(

@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../auth_prompt.dart';
+import '../responsive.dart';
 import '../state/app_state.dart';
 import '../ui_helpers.dart';
 import 'home_shell.dart';
@@ -77,7 +78,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
       appBar: AppBar(title: const Text('Избранное')),
       body: state.user == null
           ? ListView(
-              padding: const EdgeInsets.all(16),
+              padding: context.scrollPad(top: 16, bottom: 16),
               children: [
                 const GuestCtaBanner(
                   title: 'Избранное — после входа',
@@ -119,7 +120,7 @@ class _FavoritesScreenState extends State<FavoritesScreen> {
                   : RefreshIndicator(
                       onRefresh: _load,
                       child: ListView.separated(
-                        padding: const EdgeInsets.all(16),
+                        padding: context.scrollPad(top: 16, bottom: 16),
                         itemCount: items.length,
                         separatorBuilder: (_, __) => const SizedBox(height: 10),
                         itemBuilder: (context, i) {

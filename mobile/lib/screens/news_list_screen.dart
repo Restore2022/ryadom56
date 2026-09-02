@@ -2,10 +2,104 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
+import '../responsive.dart';
 import '../scroll_to_top.dart';
+import '../settlement_picker.dart';
 import '../state/app_state.dart';
 import '../time_format.dart';
 import '../ui_helpers.dart';
+
+List<String> newsPhotoUrls(Map<String, dynamic> item) {
+  final photos = item['photos'];
+  if (photos is List && photos.isNotEmpty) {
+    final urls = <String>[];
+    for (final p in photos) {
+      if (p is Map && p['url'] != null) {
+        final u = p['url'].toString();
+        if (u.isNotEmpty) urls.add(u);
+      }
+    }
+    if (urls.isNotEmpty) return urls;
+  }
+  const cover = item['cover_url']?.toString();
+  if (cover != null && cover.isNotEmpty) return [cover];
+  return [];
+}
+
+String? newsSourceLabel(Map<String, dynamic> item) {
+  switch (item['source']?.toString()) {
+    case 'vk':
+      return 'Администрация Сакмарского района';
+    case 'vk_oblast':
+      return 'Новости Оренбургской области';
+    default:
+      return null;
+  }
+}
+
+void openNewsDetail(BuildContext context, Map<String, dynamic> item) {
+  final scheme = Theme.of(context).colorScheme;
+  final state = context.read<AppState>();
+  final published = formatApiDate(item['published_at']?.toString() ?? item['created_at']?.toString());
+  final photos = newsPhotoUrls(item);
+  showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    builder: (ctx) {
+      return DraggableScrollableSheet(
+        expand: false,
+        initialChildSize: 0.72,
+        minChildSize: 0.4,
+        maxChildSize: 0.95,
+        builder: (_, scroll) {
+          return ListView(
+            controller: scroll,
+            padding: ctx.scrollPad(left: 20, top: 4, right: 20, bottom: 20),
+            children: [
+              if (photos.isNotEmpty) _NewsPhotoGallery(urls: photos, mediaUrl: state.mediaUrl),
+              if (photos.isNotEmpty) const SizedBox(height: 14),
+              Text(
+                '${item['title']}',
+                style: GoogleFonts.manrope(fontSize: 22, fontWeight: FontWeight.w800, height: 1.25),
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [
+                  if (item['is_pinned'] == true)
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: scheme.primary.withValues(alpha: 0.16),
+                        borderRadius: BorderRadius.circular(999),
+                      ),
+                      child: Text('Закреплено', style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w800, fontSize: 11)),
+                    ),
+                  if (newsSourceLabel(item) != null)
+                    Text(newsSourceLabel(item)!, style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700, fontSize: 12)),
+                  if (published.isNotEmpty)
+                    Text(published, style: TextStyle(color: scheme.onSurfaceVariant, fontWeight: FontWeight.w600)),
+                  if (item['settlement_name'] != null)
+                    Text(
+                      '· ${item['settlement_name']}',
+                      style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700),
+                    ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Text(
+                '${item['body']}',
+                style: const TextStyle(height: 1.45, fontSize: 15),
+              ),
+            ],
+          );
+        },
+      );
+    },
+  );
+}
 
 class NewsListScreen extends StatefulWidget {
   const NewsListScreen({super.key, this.settlementId});
@@ -78,109 +172,25 @@ class _NewsListScreenState extends State<NewsListScreen> {
 
   String _fmtDate(String? iso) => formatApiDate(iso);
 
-  void _openDetail(Map<String, dynamic> item) {
-    final scheme = Theme.of(context).colorScheme;
-    final state = context.read<AppState>();
-    final published = _fmtDate(item['published_at']?.toString() ?? item['created_at']?.toString());
-    final cover = item['cover_url']?.toString();
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (ctx) {
-        return DraggableScrollableSheet(
-          expand: false,
-          initialChildSize: 0.72,
-          minChildSize: 0.4,
-          maxChildSize: 0.95,
-          builder: (_, scroll) {
-            return ListView(
-              controller: scroll,
-              padding: const EdgeInsets.fromLTRB(20, 4, 20, 28),
-              children: [
-                if (cover != null && cover.isNotEmpty)
-                  ClipRRect(
-                    borderRadius: BorderRadius.circular(14),
-                    child: AspectRatio(
-                      aspectRatio: 16 / 9,
-                      child: Image.network(
-                        state.mediaUrl(cover),
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) => Container(
-                          color: scheme.surfaceContainerHighest,
-                          child: const Icon(Icons.image_outlined),
-                        ),
-                      ),
-                    ),
-                  ),
-                if (cover != null && cover.isNotEmpty) const SizedBox(height: 14),
-                Text(
-                  '${item['title']}',
-                  style: GoogleFonts.manrope(fontSize: 22, fontWeight: FontWeight.w800, height: 1.25),
-                ),
-                const SizedBox(height: 10),
-                Wrap(
-                  spacing: 8,
-                  runSpacing: 6,
-                  children: [
-                    if (item['is_pinned'] == true)
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: scheme.primary.withValues(alpha: 0.16),
-                          borderRadius: BorderRadius.circular(999),
-                        ),
-                        child: Text('Закреплено', style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w800, fontSize: 11)),
-                      ),
-                    if (published.isNotEmpty)
-                      Text(published, style: TextStyle(color: scheme.onSurfaceVariant, fontWeight: FontWeight.w600)),
-                    if (item['settlement_name'] != null)
-                      Text(
-                        '· ${item['settlement_name']}',
-                        style: TextStyle(color: scheme.primary, fontWeight: FontWeight.w700),
-                      ),
-                  ],
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  '${item['body']}',
-                  style: const TextStyle(height: 1.45, fontSize: 15),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
+  List<String> _photoUrls(Map<String, dynamic> item) => newsPhotoUrls(item);
+
+  void _openDetail(Map<String, dynamic> item) => openNewsDetail(context, item);
 
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final state = context.watch<AppState>();
     return Scaffold(
-      appBar: AppBar(title: const Text('Новости района')),
+      appBar: AppBar(title: const Text('Новости')),
       body: Column(
         children: [
           Padding(
             padding: const EdgeInsets.fromLTRB(16, 12, 16, 8),
-            child: DropdownButtonFormField<int?>(
+            child:             SettlementPicker(
               value: settlementId != null && state.settlements.any((s) => s['id'] == settlementId) ? settlementId : null,
-              isExpanded: true,
-              decoration: const InputDecoration(
-                labelText: 'Населённый пункт',
-                prefixIcon: Icon(Icons.place_outlined),
-                border: OutlineInputBorder(),
-              ),
-              items: [
-                const DropdownMenuItem<int?>(value: null, child: Text('Весь район')),
-                ...state.settlements.map(
-                  (s) => DropdownMenuItem<int?>(
-                    value: s['id'] as int,
-                    child: Text(s['display_name'] as String, overflow: TextOverflow.ellipsis),
-                  ),
-                ),
-              ],
+              settlements: state.settlements,
+              allowAll: true,
+              allLabel: 'Все новости',
               onChanged: (v) {
                 setState(() => settlementId = v);
                 _load();
@@ -233,7 +243,7 @@ class _NewsListScreenState extends State<NewsListScreen> {
                                     child: emptyState(
                                       context: context,
                                       title: 'Пока нет новостей',
-                                      subtitle: 'Новости района появятся здесь',
+                                      subtitle: 'Новости появятся здесь',
                                       icon: Icons.newspaper_outlined,
                                       actionLabel: 'Обновить',
                                       onAction: () => _load(),
@@ -250,7 +260,7 @@ class _NewsListScreenState extends State<NewsListScreen> {
                                 },
                                 child: ListView.separated(
                                 controller: scroll,
-                                padding: const EdgeInsets.fromLTRB(16, 4, 16, 24),
+                                padding: context.scrollPad(top: 4, bottom: 20),
                                 itemCount: items.length + (hasMore ? 1 : 0),
                               separatorBuilder: (_, __) => const SizedBox(height: 12),
                               itemBuilder: (_, i) {
@@ -269,7 +279,8 @@ class _NewsListScreenState extends State<NewsListScreen> {
                                   item['published_at']?.toString() ?? item['created_at']?.toString(),
                                 );
                                 final body = item['body']?.toString() ?? '';
-                                final cover = item['cover_url']?.toString();
+                                final photos = _photoUrls(item);
+                                final cover = photos.isNotEmpty ? photos.first : null;
                                 return Material(
                                   color: Theme.of(context).cardTheme.color,
                                   borderRadius: BorderRadius.circular(18),
@@ -292,17 +303,37 @@ class _NewsListScreenState extends State<NewsListScreen> {
                                           if (cover != null && cover.isNotEmpty) ...[
                                             ClipRRect(
                                               borderRadius: BorderRadius.circular(12),
-                                              child: Image.network(
-                                                state.mediaUrl(cover),
-                                                width: 72,
-                                                height: 72,
-                                                fit: BoxFit.cover,
-                                                errorBuilder: (_, __, ___) => Container(
-                                                  width: 72,
-                                                  height: 72,
-                                                  color: scheme.surfaceContainerHighest,
-                                                  child: const Icon(Icons.image_outlined),
-                                                ),
+                                              child: Stack(
+                                                children: [
+                                                  Image.network(
+                                                    state.mediaUrl(cover),
+                                                    width: 72,
+                                                    height: 72,
+                                                    fit: BoxFit.cover,
+                                                    errorBuilder: (_, __, ___) => Container(
+                                                      width: 72,
+                                                      height: 72,
+                                                      color: scheme.surfaceContainerHighest,
+                                                      child: const Icon(Icons.image_outlined),
+                                                    ),
+                                                  ),
+                                                  if (photos.length > 1)
+                                                    Positioned(
+                                                      right: 4,
+                                                      bottom: 4,
+                                                      child: Container(
+                                                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                                                        decoration: BoxDecoration(
+                                                          color: Colors.black54,
+                                                          borderRadius: BorderRadius.circular(8),
+                                                        ),
+                                                        child: Text(
+                                                          '${photos.length}',
+                                                          style: const TextStyle(color: Colors.white, fontSize: 10, fontWeight: FontWeight.w700),
+                                                        ),
+                                                      ),
+                                                    ),
+                                                ],
                                               ),
                                             ),
                                             const SizedBox(width: 12),
@@ -349,6 +380,12 @@ class _NewsListScreenState extends State<NewsListScreen> {
                                                     '${item['settlement_name']}',
                                                     style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
                                                   ),
+                                                ] else if (newsSourceLabel(item) != null) ...[
+                                                  const SizedBox(height: 4),
+                                                  Text(
+                                                    newsSourceLabel(item)!,
+                                                    style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13),
+                                                  ),
                                                 ],
                                                 if (body.isNotEmpty) ...[
                                                   const SizedBox(height: 8),
@@ -375,6 +412,56 @@ class _NewsListScreenState extends State<NewsListScreen> {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _NewsPhotoGallery extends StatefulWidget {
+  const _NewsPhotoGallery({required this.urls, required this.mediaUrl});
+
+  final List<String> urls;
+  final String Function(String?) mediaUrl;
+
+  @override
+  State<_NewsPhotoGallery> createState() => _NewsPhotoGalleryState();
+}
+
+class _NewsPhotoGalleryState extends State<_NewsPhotoGallery> {
+  int index = 0;
+
+  @override
+  Widget build(BuildContext context) {
+    final scheme = Theme.of(context).colorScheme;
+    return Column(
+      children: [
+        ClipRRect(
+          borderRadius: BorderRadius.circular(14),
+          child: AspectRatio(
+            aspectRatio: 16 / 9,
+            child: PageView.builder(
+              itemCount: widget.urls.length,
+              onPageChanged: (i) => setState(() => index = i),
+              itemBuilder: (_, i) {
+                return Image.network(
+                  widget.mediaUrl(widget.urls[i]),
+                  fit: BoxFit.cover,
+                  errorBuilder: (_, __, ___) => Container(
+                    color: scheme.surfaceContainerHighest,
+                    child: const Icon(Icons.image_outlined),
+                  ),
+                );
+              },
+            ),
+          ),
+        ),
+        if (widget.urls.length > 1) ...[
+          const SizedBox(height: 8),
+          Text(
+            '${index + 1} / ${widget.urls.length}',
+            style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 12, fontWeight: FontWeight.w600),
+          ),
+        ],
+      ],
     );
   }
 }

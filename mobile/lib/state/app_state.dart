@@ -33,6 +33,7 @@ class AppState extends ChangeNotifier {
   bool darkMode = false;
   bool hasPin = false;
   bool pinUnlocked = false;
+  bool pinDeferred = false;
   bool biometricsEnabled = false;
   bool biometricsAvailable = false;
   String biometricsLabel = 'биометрии';
@@ -197,13 +198,14 @@ class AppState extends ChangeNotifier {
 
   static const _filtersKey = 'listing_filters';
   static const _onboardingKey = 'onboarding_v2';
+  static const _pinDeferredKey = 'pin_deferred';
   static const _settlementPrefKey = 'preferred_settlement_id';
   static const _newsCachePrefix = 'cache_news_json';
   static const _transportCachePrefix = 'cache_transport_';
   static const _presenceClientKey = 'presence_client_id';
 
-  /// Вошедший пользователь обязан задать PIN (защита от посторонних на телефоне).
-  bool get needsPinSetup => user != null && !hasPin;
+  /// PIN после входа можно пропустить и поставить позже в профиле.
+  bool get needsPinSetup => user != null && !hasPin && !pinDeferred;
 
   /// Блокируем приложение PIN, если сессия есть, а код ещё не введён.
   bool get needsPinUnlock => hasPin && !pinUnlocked && user != null;
@@ -222,8 +224,10 @@ class AppState extends ChangeNotifier {
       final prefs = await SharedPreferences.getInstance();
       darkMode = prefs.getBool('dark_mode') ?? false;
       onboardingDone = prefs.getBool(_onboardingKey) ?? false;
+      pinDeferred = prefs.getBool(_pinDeferredKey) ?? false;
       preferredSettlementId = prefs.getInt(_settlementPrefKey);
       hasPin = await PinStorage.hasPin();
+      if (hasPin) pinDeferred = false;
       _hasPinSession = (await PinStorage.readSessionToken()) != null;
       await refreshBiometricsState();
       await _loadSavedFilters(prefs);
@@ -495,7 +499,8 @@ class AppState extends ChangeNotifier {
       }
     } catch (e) {
       if (!append) {
-        listingsOffline = true;
+        final code = e is ApiException ? e.statusCode : null;
+        listingsOffline = code == null || code >= 500 || code == 408 || code == 504;
         error = userFriendlyError(e);
       }
     } finally {
@@ -806,11 +811,12 @@ class AppState extends ChangeNotifier {
     await loadListings();
   }
 
-  Future<void> setNearOrigin({double? lat, double? lon, bool enabled = true}) async {
+  Future<void> setNearOrigin({double? lat, double? lon, int? settlementId, bool enabled = true}) async {
     if (enabled) {
       sort = 'near';
       nearLat = lat;
       nearLon = lon;
+      if (settlementId != null) filterSettlementId = settlementId;
     } else if (sort == 'near') {
       sort = 'newest';
       nearLat = null;
@@ -902,8 +908,26 @@ class AppState extends ChangeNotifier {
     onboardingDone = true;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_onboardingKey, true);
-    if (settlementId != null) await setPreferredSettlement(settlementId);
+    if (settlementId != null) {
+      await setPreferredSettlement(settlementId);
+      await applyListingFilters(settlementId: settlementId);
+    } else {
+      notifyListeners();
+    }
+  }
+
+  Future<void> deferPinSetup() async {
+    pinDeferred = true;
+    pinUnlocked = true;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_pinDeferredKey, true);
     notifyListeners();
+  }
+
+  Future<void> clearPinDeferred() async {
+    pinDeferred = false;
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove(_pinDeferredKey);
   }
 
   Future<Map<String, dynamic>> getPublicProfile(int userId) async {
@@ -930,6 +954,29 @@ class AppState extends ChangeNotifier {
     ) as Map<String, dynamic>;
   }
 
+  Future<Map<String, dynamic>> sendListingPhoto(int listingId, String filePath, {int? peerId}) async {
+    return await api.uploadListingChatPhoto(listingId, filePath, peerId: peerId);
+  }
+
+  Future<Map<String, dynamic>> confirmListingRelevant(int listingId) async {
+    final updated = await api.request(
+      '/listings/$listingId/still-relevant',
+      method: 'POST',
+      auth: true,
+    ) as Map<String, dynamic>;
+    await loadListings();
+    notifyListeners();
+    return updated;
+  }
+
+  Future<Map<String, dynamic>> searchAll(String query, {int? settlementId}) async {
+    final q = query.trim();
+    final params = <String, String>{'q': q};
+    if (settlementId != null) params['settlement_id'] = '$settlementId';
+    final qs = params.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&');
+    return await api.request('/search?$qs', auth: true) as Map<String, dynamic>;
+  }
+
   Future<List<dynamic>> loadConversations() async {
     final rows = await api.request('/listings/conversations', auth: true) as List<dynamic>;
     var unread = 0;
@@ -953,10 +1000,6 @@ class AppState extends ChangeNotifier {
     try {
       await loadConversations();
     } catch (_) {}
-  }
-
-  Future<List<dynamic>> loadReportsAgainstMe() async {
-    return await api.request('/listings/reports/against-me', auth: true) as List<dynamic>;
   }
 
   String _newsCacheStorageKey(int? settlementId) => '${_newsCachePrefix}_$settlementId';
@@ -1308,6 +1351,7 @@ class AppState extends ChangeNotifier {
       'author_id': item['author_id'],
       'is_urgent': item['is_urgent'] == true,
       'is_pinned': item['is_pinned'] == true,
+      'viewed_at': DateTime.now().toUtc().toIso8601String(),
     });
     if (viewHistory.length > 30) {
       viewHistory = viewHistory.take(30).toList();

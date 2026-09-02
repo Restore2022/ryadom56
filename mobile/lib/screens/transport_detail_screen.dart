@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../auth_prompt.dart';
+import '../responsive.dart';
 import '../state/app_state.dart';
 import '../time_format.dart';
 import '../ui_helpers.dart';
@@ -140,7 +141,7 @@ class _TransportDetailScreenState extends State<TransportDetailScreen> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+        padding: context.scrollPad(top: 8, bottom: 20),
         children: [
           Text(
             '${item['title']}',

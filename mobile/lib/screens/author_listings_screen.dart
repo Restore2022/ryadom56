@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
 import '../auth_prompt.dart';
+import '../responsive.dart';
 import '../state/app_state.dart';
 import '../time_format.dart';
 import '../ui_helpers.dart';
@@ -161,7 +162,7 @@ class _AuthorListingsScreenState extends State<AuthorListingsScreen> {
               : RefreshIndicator(
                   onRefresh: _load,
                   child: ListView(
-                    padding: const EdgeInsets.all(16),
+                    padding: context.scrollPad(top: 16, bottom: 16),
                     children: [
                       if (p != null)
                         Container(

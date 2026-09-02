@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../auth_prompt.dart';
+import '../responsive.dart';
 import '../state/app_state.dart';
 import 'home_shell.dart';
 
@@ -200,7 +201,7 @@ class _DirectoryDetailScreenState extends State<DirectoryDetailScreen> {
         ],
       ),
       body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+        padding: context.scrollPad(top: 8, bottom: 20),
         children: [
           Container(
             padding: const EdgeInsets.all(20),

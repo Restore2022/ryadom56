@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import '../responsive.dart';
+import '../settlement_picker.dart';
 import '../state/app_state.dart';
 
 class EditProfileScreen extends StatefulWidget {
@@ -47,7 +49,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
     return Scaffold(
       appBar: AppBar(title: const Text('Редактировать профиль')),
       body: ListView(
-        padding: const EdgeInsets.all(16),
+        padding: context.scrollPad(top: 16, bottom: 16),
         children: [
           TextField(
             controller: name,
@@ -59,15 +61,9 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
             decoration: const InputDecoration(labelText: 'Телефон', border: OutlineInputBorder()),
           ),
           const SizedBox(height: 12),
-          DropdownButtonFormField<int>(
+          SettlementPicker(
             value: settlementId,
-            decoration: const InputDecoration(labelText: 'Населённый пункт', border: OutlineInputBorder()),
-            items: settlements
-                .map((s) => DropdownMenuItem<int>(
-                      value: s['id'] as int,
-                      child: Text(s['display_name'] as String),
-                    ))
-                .toList(),
+            settlements: settlements,
             onChanged: (v) => setState(() => settlementId = v),
           ),
           const SizedBox(height: 24),

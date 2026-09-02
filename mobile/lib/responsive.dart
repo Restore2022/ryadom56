@@ -1,3 +1,5 @@
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 
 /// Адаптация под телефоны (портрет/альбом) и планшеты.
@@ -22,12 +24,39 @@ extension RyadomResponsive on BuildContext {
     return EdgeInsets.fromLTRB(h, v, h, v);
   }
 
-  /// Запас под последней карточкой. Scaffold уже поднимает body над NavigationBar —
-  /// большой отступ (100+) давал пустоту; оставляем только «воздух».
+  /// Системная панель снизу: три кнопки Android или полоска жестов.
+  /// Берётся с устройства, меняется при повороте. При открытой клавиатуре 0 —
+  /// Scaffold уже поднял экран.
+  double get systemBottomInset {
+    final mq = MediaQuery.of(this);
+    if (mq.viewInsets.bottom > 40) return 0;
+    return math.max(mq.padding.bottom, mq.viewPadding.bottom);
+  }
+
+  /// Отступ списка на полном экране (без нижней панели приложения).
+  /// Слева/справа — вырез и кнопки в альбоме.
+  EdgeInsets scrollPad({
+    double left = 16,
+    double top = 8,
+    double right = 16,
+    double bottom = 20,
+  }) {
+    final p = MediaQuery.paddingOf(this);
+    return EdgeInsets.fromLTRB(
+      left + p.left,
+      top,
+      right + p.right,
+      bottom + systemBottomInset,
+    );
+  }
+
+  /// Запас под последней карточкой во вкладках.
+  /// Портрет: NavigationBar сам сидит над системными кнопками.
+  /// Альбом / планшет: боковое меню, снизу нужен системный зазор.
   double get listBottomPad {
-    final safe = MediaQuery.paddingOf(this).bottom;
-    if (useNavigationRail) return 20 + safe * 0.25;
-    return 20 + safe * 0.25;
+    const extra = 20.0;
+    if (useNavigationRail) return extra + systemBottomInset;
+    return extra;
   }
 
   /// Ограничение ширины контента на больших экранах.

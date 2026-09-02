@@ -1,10 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
+import 'package:share_plus/share_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../auth_prompt.dart';
 import '../call_screens.dart';
+import '../listing_templates.dart';
+import '../responsive.dart';
 import '../state/app_state.dart';
 import '../time_format.dart';
 import '../ui_helpers.dart';
@@ -46,7 +49,7 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
   int photoIndex = 0;
   bool favBusy = false;
   bool reportBusy = false;
-  bool phoneRevealed = false;
+  bool relevantBusy = false;
 
   @override
   void initState() {
@@ -75,23 +78,6 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
         });
       }
     }
-  }
-
-  Future<void> _message(String? phone, {required bool whatsapp}) async {
-    final cleaned = (phone ?? '').replaceAll(RegExp(r'\D'), '');
-    if (cleaned.length < 10) {
-      if (mounted) showAppSnack(context, 'Номер телефона не указан', error: true);
-      return;
-    }
-    final loggedIn = await ensureLoggedIn(context, message: 'Войдите, чтобы написать автору');
-    if (!loggedIn || !mounted) return;
-    var digits = cleaned;
-    if (digits.startsWith('8') && digits.length == 11) digits = '7${digits.substring(1)}';
-    final uri = whatsapp
-        ? Uri.parse('https://wa.me/$digits')
-        : Uri(scheme: 'sms', path: '+$digits');
-    final ok = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!ok && mounted) showAppSnack(context, 'Не удалось открыть приложение', error: true);
   }
 
   Future<void> _call(String? phone) async {
@@ -295,6 +281,44 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
     }
   }
 
+  Future<void> _share() async {
+    final data = item;
+    if (data == null) return;
+    final id = data['id'] ?? widget.listingId;
+    final title = data['title']?.toString() ?? 'Объявление';
+    final village = data['settlement_name']?.toString() ?? '';
+    final price = listingPriceLabel(data);
+    final text = [
+      title,
+      if (price.isNotEmpty) price,
+      if (village.isNotEmpty) village,
+      'https://legac.ru/l/$id',
+    ].join('\n');
+    await SharePlus.instance.share(ShareParams(text: text));
+  }
+
+  Future<void> _confirmRelevant() async {
+    if (relevantBusy) return;
+    setState(() => relevantBusy = true);
+    try {
+      final updated = await context.read<AppState>().confirmListingRelevant(widget.listingId);
+      if (mounted) {
+        setState(() => item = updated);
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Оставили в ленте')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(AppState.userFriendlyError(e))),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => relevantBusy = false);
+    }
+  }
+
   Future<void> _edit() async {
     if (item == null) return;
     final ok = await Navigator.push<bool>(
@@ -408,6 +432,12 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
       appBar: AppBar(
         title: const Text('Объявление'),
         actions: [
+          if (data != null)
+            IconButton(
+              tooltip: 'Поделиться ссылкой',
+              onPressed: _share,
+              icon: const Icon(Icons.share_outlined),
+            ),
           if (data != null && !isOwner)
             IconButton(
               tooltip: favorited ? 'Убрать из избранного' : 'В избранное',
@@ -439,7 +469,7 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                   onRetry: _load,
                 )
               : ListView(
-                  padding: const EdgeInsets.fromLTRB(16, 8, 16, 32),
+                  padding: context.scrollPad(top: 8, bottom: 20),
                   children: [
                     if (images.isNotEmpty) ...[
                       ClipRRect(
@@ -474,6 +504,51 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                       ],
                       const SizedBox(height: 12),
                     ],
+                    if (isOwner && data['ask_if_relevant'] == true) ...[
+                      Container(
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          color: scheme.primaryContainer.withValues(alpha: 0.55),
+                          borderRadius: BorderRadius.circular(18),
+                          border: Border.all(color: scheme.primary.withValues(alpha: 0.35)),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Ещё актуально?',
+                              style: GoogleFonts.manrope(fontWeight: FontWeight.w800, fontSize: 16),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'Объявление висит уже две недели. Если продали — снимите, чтобы не висело зря.',
+                              style: TextStyle(color: scheme.onSurfaceVariant, height: 1.35),
+                            ),
+                            const SizedBox(height: 12),
+                            Row(
+                              children: [
+                                Expanded(
+                                  child: FilledButton(
+                                    onPressed: relevantBusy ? null : _confirmRelevant,
+                                    child: Text(relevantBusy ? 'Секунду…' : 'Ещё актуально'),
+                                  ),
+                                ),
+                                if (canClose) ...[
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: OutlinedButton(
+                                      onPressed: _close,
+                                      child: const Text('Снять'),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                    ],
                     Container(
                       padding: const EdgeInsets.all(20),
                       decoration: BoxDecoration(
@@ -498,10 +573,10 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                             data['title']?.toString() ?? 'Объявление',
                             style: GoogleFonts.unbounded(fontSize: 24, fontWeight: FontWeight.w600, height: 1.2),
                           ),
-                          if (data['price'] != null) ...[
+                          if (listingPriceLabel(data).isNotEmpty) ...[
                             const SizedBox(height: 12),
                             Text(
-                              '${_fmtPrice(data['price'])} ₽',
+                              listingPriceLabel(data),
                               style: GoogleFonts.manrope(
                                 fontSize: 28,
                                 fontWeight: FontWeight.w800,
@@ -535,8 +610,11 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                               value: '${data['author_name'] ?? '—'} · другие объявления',
                             ),
                           ),
-                          if (canSeePhone && hasPhone && (isOwner || isStaff || phoneRevealed))
-                            _InfoRow(icon: Icons.phone_outlined, label: 'Телефон', value: contactPhone!),
+                          if (canSeePhone && hasPhone)
+                            InkWell(
+                              onTap: () => _call(contactPhone),
+                              child: _InfoRow(icon: Icons.phone_outlined, label: 'Телефон', value: contactPhone!),
+                            ),
                           _InfoRow(
                             icon: Icons.schedule_outlined,
                             label: 'Опубликовано',
@@ -576,7 +654,7 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                       FilledButton.icon(
                         onPressed: openChat,
                         icon: const Icon(Icons.chat_bubble_outline),
-                        label: const Text('Написать в приложении'),
+                        label: const Text('Написать'),
                       ),
                       if (!isGuest) ...[
                         const SizedBox(height: 8),
@@ -591,60 +669,18 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                             );
                           },
                           icon: const Icon(Icons.phone_in_talk_outlined),
-                          label: const Text('Звонок в приложении'),
+                          label: const Text('Позвонить'),
                         ),
                       ],
                     ],
                     if (phoneHidden && !isOwner && !isStaff && !isGuest) ...[
                       const SizedBox(height: 8),
                       Text(
-                        'Телефон откроется, когда автор ответит вам в чате.',
+                        'Номер откроется, когда автор ответит в чате.',
                         style: TextStyle(color: scheme.onSurfaceVariant, fontSize: 13, height: 1.35),
                       ),
                     ],
-                    if (canSeePhone && hasPhone && !isOwner) ...[
-                      const SizedBox(height: 8),
-                      OutlinedButton.icon(
-                        onPressed: () async {
-                          if (!phoneRevealed && !phoneHidden) {
-                            final loggedIn = await ensureLoggedIn(context, message: 'Войдите, чтобы увидеть телефон');
-                            if (!loggedIn || !mounted) return;
-                            setState(() => phoneRevealed = true);
-                          } else if (phoneHidden && !phoneRevealed) {
-                            if (mounted) {
-                              showAppSnack(context, 'Телефон откроется, когда автор ответит в чате', error: true);
-                            }
-                            return;
-                          }
-                          await _call(contactPhone);
-                        },
-                        icon: const Icon(Icons.phone_outlined),
-                        label: Text(phoneRevealed && !phoneHidden ? 'Позвонить' : 'Показать телефон'),
-                      ),
-                      if (phoneRevealed && !phoneHidden) ...[
-                        const SizedBox(height: 8),
-                        Row(
-                          children: [
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: () => _message(contactPhone, whatsapp: false),
-                                icon: const Icon(Icons.sms_outlined),
-                                label: const Text('SMS'),
-                              ),
-                            ),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: OutlinedButton.icon(
-                                onPressed: () => _message(contactPhone, whatsapp: true),
-                                icon: const Icon(Icons.chat_outlined),
-                                label: const Text('WhatsApp'),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ],
-                    ],
-                    if ((isOwner || isStaff) && hasPhone) ...[
+                    if (isOwner && hasPhone) ...[
                       const SizedBox(height: 8),
                       FilledButton.icon(
                         onPressed: () => _call(contactPhone!),
@@ -655,6 +691,12 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                     if (!isOwner) ...[
                       const SizedBox(height: 12),
                       OutlinedButton.icon(
+                        onPressed: _share,
+                        icon: const Icon(Icons.share_outlined),
+                        label: const Text('Поделиться ссылкой'),
+                      ),
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
                         onPressed: reportBusy ? null : _chooseReport,
                         icon: const Icon(Icons.flag_outlined),
                         label: Text(reportBusy ? 'Отправка…' : 'Пожаловаться'),
@@ -662,6 +704,12 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
                     ],
                     if (isOwner) ...[
                       const SizedBox(height: 12),
+                      OutlinedButton.icon(
+                        onPressed: _share,
+                        icon: const Icon(Icons.share_outlined),
+                        label: const Text('Поделиться ссылкой'),
+                      ),
+                      const SizedBox(height: 8),
                       OutlinedButton.icon(
                         onPressed: _edit,
                         icon: const Icon(Icons.edit_outlined),
@@ -694,14 +742,6 @@ class _ListingDetailScreenState extends State<ListingDetailScreen> {
     if (days < 0) return 'Истёк $date';
     if (days == 0) return 'Снимается сегодня ($date)';
     return 'До $date · ещё $days дн.';
-  }
-
-  String _fmtPrice(dynamic price) {
-    if (price is num) {
-      if (price == price.roundToDouble()) return price.toInt().toString();
-      return price.toStringAsFixed(2);
-    }
-    return '$price';
   }
 }
 
