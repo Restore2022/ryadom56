@@ -33,6 +33,7 @@ from app.schemas import (
 from app.services.mail import MailNotConfigured, MailSendError, mail_configured, send_email
 from app.services.rate_limit import limiter
 from app.services.sessions import bind_device_to_session, issue_user_token, revoke_all_sessions, revoke_session
+from app.services.notify import drop_guest_push_device
 from app.services.trust import maybe_autoban_from_user_reports
 
 logger = logging.getLogger(__name__)
@@ -116,7 +117,7 @@ def register(payload: RegisterIn, request: Request, db: Session = Depends(get_db
         raise HTTPException(status_code=400, detail="Email уже зарегистрирован")
     settlement = db.execute(select(Settlement).where(Settlement.id == payload.settlement_id)).scalar_one_or_none()
     if not settlement:
-        raise HTTPException(status_code=400, detail="Населённый пункт не найден")
+        raise HTTPException(status_code=400, detail="Нет такого посёлка, села или города")
 
     user = User(
         email=payload.email.lower(),
@@ -398,7 +399,7 @@ def update_me(
     if "settlement_id" in data and data["settlement_id"] is not None:
         settlement = db.execute(select(Settlement).where(Settlement.id == data["settlement_id"])).scalar_one_or_none()
         if not settlement:
-            raise HTTPException(status_code=400, detail="Населённый пункт не найден")
+            raise HTTPException(status_code=400, detail="Нет такого посёлка, села или города")
     if "full_name" in data and data["full_name"]:
         db_user.full_name = data["full_name"].strip()
     if "phone" in data:
@@ -505,6 +506,7 @@ def report_device(
         select(User).options(selectinload(User.settlement)).where(User.id == user.id)
     ).scalar_one()
     touch_user(db_user, request, payload)
+    drop_guest_push_device(db, (payload.device_id or "").strip() or None)
     bind_device_to_session(
         db,
         db_user,

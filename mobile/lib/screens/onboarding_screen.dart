@@ -99,7 +99,7 @@ class _OnboardingScreenState extends State<OnboardingScreen> with SingleTickerPr
                             Icon(Icons.place_outlined, size: 56, color: scheme.primary),
                             const SizedBox(height: 20),
                             Text(
-                              'Ваше село',
+                              'Ваш посёлок, село или город',
                               textAlign: TextAlign.center,
                               style: GoogleFonts.unbounded(fontSize: 26, fontWeight: FontWeight.w600, height: 1.2),
                             ),

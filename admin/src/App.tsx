@@ -1318,7 +1318,7 @@ function Dashboard({ role }: { role: User['role'] }) {
           </p>
         </div>
         <div className="panel" style={{ gridColumn: '1 / -1' }}>
-          <h2>По сёлам: объявления / открытия справочника</h2>
+          <h2>По посёлкам, сёлам и городам: объявления / открытия справочника</h2>
           <p className="muted" style={{ marginTop: 0 }}>
             <Link to="/reports?tab=directory">Жалобы на контакты справочника (открытые): {stats.open_directory_reports ?? 0}</Link>
           </p>
@@ -1331,7 +1331,7 @@ function Dashboard({ role }: { role: User['role'] }) {
                 </strong>
               </li>
             ))}
-            {!stats.by_settlement?.length && <li className="muted">Пока нет данных по сёлам</li>}
+            {!stats.by_settlement?.length && <li className="muted">Пока нет данных по местам</li>}
           </ul>
         </div>
         {isAdmin && (
@@ -1824,7 +1824,7 @@ function ModerationPage() {
           value={settlementId === '' ? '' : String(settlementId)}
           onChange={(e) => setSettlementId(e.target.value ? Number(e.target.value) : '')}
         >
-          <option value="">Все населённые пункты</option>
+          <option value="">Все посёлки, сёла и города</option>
           {settlements.map((s) => (
             <option key={s.id} value={s.id}>
               {s.display_name}
@@ -1923,7 +1923,7 @@ function ModerationPage() {
               </th>
               <th>Объявление</th>
               <th>Категория</th>
-              <th>Автор / село</th>
+              <th>Автор / место</th>
               <th>Ожидание</th>
               <th>Статус</th>
               <th></th>
@@ -2329,7 +2329,7 @@ function ListingsPage() {
       return;
     }
     if (form.settlement_id === '') {
-      setError('Укажите населённый пункт');
+      setError('Укажите посёлок, село или город');
       return;
     }
     const priceRaw = form.price.trim().replace(',', '.');
@@ -2546,7 +2546,7 @@ function ListingsPage() {
           value={settlementId === '' ? '' : String(settlementId)}
           onChange={(e) => setSettlementId(e.target.value ? Number(e.target.value) : '')}
         >
-          <option value="">Все населённые пункты</option>
+          <option value="">Все посёлки, сёла и города</option>
           {settlements.map((s) => (
             <option key={s.id} value={s.id}>
               {s.display_name}
@@ -2579,7 +2579,7 @@ function ListingsPage() {
             <tr>
               <th>Объявление</th>
               <th>Категория</th>
-              <th>Автор / село</th>
+              <th>Автор / место</th>
               <th>Статус</th>
               <th>Обновлено</th>
               <th></th>
@@ -2692,7 +2692,7 @@ function ListingsPage() {
                   </select>
                 </label>
                 <label className="field">
-                  Населённый пункт
+                  Посёлок, село или город
                   <select
                     required
                     value={form.settlement_id}
@@ -4153,7 +4153,7 @@ function DirectoryPage() {
             setSettlementFilter(e.target.value ? Number(e.target.value) : '');
           }}
         >
-          <option value="">Все населённые пункты</option>
+          <option value="">Все посёлки, сёла и города</option>
           {settlements.map((s) => (
             <option key={s.id} value={s.id}>
               {s.display_name}
@@ -4172,7 +4172,7 @@ function DirectoryPage() {
             <tr>
               <th>Место</th>
               <th>Категория</th>
-              <th>Село</th>
+              <th>Посёлок, село, город</th>
               <th>Телефон</th>
               <th>Адрес / часы</th>
               <th>Статус</th>
@@ -4259,7 +4259,7 @@ function DirectoryPage() {
                   </select>
                 </label>
                 <label className="field">
-                  Населённый пункт
+                  Посёлок, село или город
                   <select
                     value={form.settlement_id}
                     onChange={(e) => setForm({ ...form, settlement_id: e.target.value ? Number(e.target.value) : '' })}
@@ -4719,7 +4719,7 @@ function ContactsPage() {
           <option value="">Все</option>
         </select>
         <input
-          placeholder="Имя, село, телефон, текст…"
+          placeholder="Имя, место, телефон, текст…"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
@@ -4734,7 +4734,7 @@ function ContactsPage() {
             <tr>
               <th>Когда</th>
               <th>Кто</th>
-              <th>Село</th>
+              <th>Посёлок, село, город</th>
               <th>Текст</th>
               <th>Статус</th>
               <th></th>
@@ -4789,7 +4789,7 @@ function ContactsPage() {
           <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 'min(560px, 100%)' }}>
             <h2>Обращение № {selected.id}</h2>
             <p className="muted" style={{ marginTop: 0 }}>
-              {formatAuditWhen(selected.created_at)} · {selected.settlement || 'село не указано'}
+              {formatAuditWhen(selected.created_at)} · {selected.settlement || 'место не указано'}
               {selected.ip ? ` · IP ${selected.ip}` : ''}
             </p>
             <p>
@@ -5086,7 +5086,7 @@ function UsersPage() {
       return;
     }
     if (!form.settlement_id) {
-      setError('Выберите населённый пункт');
+      setError('Выберите посёлок, село или город');
       return;
     }
     if (creating && form.password.length < 6) {
@@ -5243,7 +5243,7 @@ function UsersPage() {
           <thead>
             <tr>
               <th>Человек</th>
-              <th>Село</th>
+              <th>Посёлок, село, город</th>
               <th>Роль</th>
               <th>Статус</th>
               <th>Устройство</th>
@@ -5332,7 +5332,7 @@ function UsersPage() {
                   <input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
                 </label>
                 <label className="field">
-                  Населённый пункт
+                  Посёлок, село или город
                   <select
                     value={form.settlement_id}
                     onChange={(e) => setForm({ ...form, settlement_id: Number(e.target.value) })}
@@ -5856,7 +5856,7 @@ function EventsPage() {
                   />
                 </label>
                 <label className="field">
-                  Населённый пункт
+                  Посёлок, село или город
                   <select
                     value={form.settlement_id === '' ? '' : String(form.settlement_id)}
                     onChange={(e) =>
@@ -6311,7 +6311,7 @@ function TransportPage() {
           setAppliedQ(query);
         }}
       >
-        <input placeholder="Остановка, село…" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <input placeholder="Остановка, место…" value={query} onChange={(e) => setQuery(e.target.value)} />
         <select
           value={publishedFilter}
           onChange={(e) => {
@@ -6330,7 +6330,7 @@ function TransportPage() {
             setSettlementFilter(e.target.value ? Number(e.target.value) : '');
           }}
         >
-          <option value="">Все населённые пункты</option>
+          <option value="">Все посёлки, сёла и города</option>
           {settlements.map((s) => (
             <option key={s.id} value={s.id}>
               {s.display_name}
@@ -6350,7 +6350,7 @@ function TransportPage() {
               <th>Маршрут</th>
               <th>Остановки</th>
               <th>Рейсы</th>
-              <th>Село</th>
+              <th>Посёлок, село, город</th>
               <th>Статус</th>
               <th></th>
             </tr>
@@ -6575,7 +6575,7 @@ function TransportPage() {
                   </div>
                 </div>
                 <label className="field">
-                  Населённый пункт
+                  Посёлок, село или город
                   <select
                     value={form.settlement_id === '' ? '' : String(form.settlement_id)}
                     onChange={(e) =>
@@ -7002,7 +7002,7 @@ function NewsPage() {
           <thead>
             <tr>
               <th>Новость</th>
-              <th>Село</th>
+              <th>Посёлок, село, город</th>
               <th>Дата</th>
               <th>Статус</th>
               <th></th>
@@ -7060,7 +7060,7 @@ function NewsPage() {
                   <input required value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
                 </label>
                 <label className="field">
-                  Населённый пункт
+                  Посёлок, село или город
                   <select
                     value={form.settlement_id === '' ? '' : String(form.settlement_id)}
                     onChange={(e) =>
@@ -7762,7 +7762,7 @@ function AlertsPage() {
           <p>
             {tab === 'history'
               ? 'Выключенные, прошедшие и ещё не начавшиеся баннеры'
-              : 'Сейчас показываются в приложении. Можно всей области или выбранным городам и сёлам'}
+              : 'Сейчас показываются в приложении. Можно всей области или выбранным городам, сёлам и посёлкам'}
           </p>
         </div>
         <button className="btn" type="button" onClick={openCreate}>
@@ -7975,7 +7975,7 @@ function AlertsPage() {
                     style={{ marginTop: 10 }}
                     value={placeQuery}
                     onChange={(e) => setPlaceQuery(e.target.value)}
-                    placeholder="Найти село или город"
+                    placeholder="Найти посёлок, село или город"
                   />
                   {placeQuery.trim().length >= 2 && (
                     <div className="table-wrap" style={{ marginTop: 8, maxHeight: 180, overflow: 'auto' }}>

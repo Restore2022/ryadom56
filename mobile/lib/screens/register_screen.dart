@@ -59,7 +59,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
       return;
     }
     if (settlementId == null) {
-      setState(() => error = 'Выберите населённый пункт');
+      setState(() => error = kPlacePickPlease);
       return;
     }
     if (!terms || !privacy || !listingRules) {

@@ -101,7 +101,7 @@ class _EditProfileScreenState extends State<EditProfileScreen> {
                       return;
                     }
                     if (settlementId == null) {
-                      setState(() => error = 'Выберите населённый пункт');
+                      setState(() => error = kPlacePickPlease);
                       return;
                     }
                     final newPass = password.text.trim();

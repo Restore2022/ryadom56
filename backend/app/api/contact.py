@@ -91,13 +91,13 @@ def site_contact(payload: SiteContactIn, request: Request, db: Session = Depends
     db.commit()
     db.refresh(row)
 
-    place = payload.settlement or "село не указано"
+    place = payload.settlement or "место не указано"
     phone = payload.phone or "не указан"
     subject = f"Сайт: {payload.name} · {place} · #{row.id}"
     text = (
         f"Письмо с формы на legac.ru #{row.id}\n\n"
         f"Имя: {payload.name}\n"
-        f"Село: {place}\n"
+        f"Место: {place}\n"
         f"Телефон: {phone}\n"
         f"IP: {ip}\n\n"
         f"Вопрос:\n{payload.message}\n"

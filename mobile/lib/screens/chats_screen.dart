@@ -127,7 +127,7 @@ class _ChatsTabState extends State<ChatsTab> {
                 emptyState(
                   context: context,
                   title: 'Пока гость',
-                  subtitle: 'Создайте аккаунт за минуту — имя, почта и село',
+                  subtitle: 'Создайте аккаунт за минуту — имя, почта и место',
                   icon: Icons.chat_bubble_outline,
                 ),
               ],

@@ -660,7 +660,7 @@ def create_user(
         raise HTTPException(status_code=400, detail="Email уже зарегистрирован")
     settlement = db.execute(select(Settlement).where(Settlement.id == payload.settlement_id)).scalar_one_or_none()
     if not settlement:
-        raise HTTPException(status_code=400, detail="Населённый пункт не найден")
+        raise HTTPException(status_code=400, detail="Нет такого посёлка, села или города")
     badge = (payload.badge or "").strip() or None
     if badge and badge not in ("new", "trusted", "caution", "verified", "feed"):
         raise HTTPException(status_code=400, detail="Неизвестная метка пользователя")
@@ -761,7 +761,7 @@ def update_user(
     if "settlement_id" in data and data["settlement_id"] is not None:
         settlement = db.execute(select(Settlement).where(Settlement.id == data["settlement_id"])).scalar_one_or_none()
         if not settlement:
-            raise HTTPException(status_code=400, detail="Населённый пункт не найден")
+            raise HTTPException(status_code=400, detail="Нет такого посёлка, села или города")
     before = f"role={target.role.value}, active={target.is_active}"
     was_active = target.is_active
     for key, value in data.items():

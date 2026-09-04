@@ -7,9 +7,11 @@ import '../ride_card.dart';
 import '../scroll_to_top.dart';
 import '../state/app_state.dart';
 import '../ui_helpers.dart';
+import '../settlement_picker.dart';
 import 'create_ride_screen.dart';
 import 'home_shell.dart';
 import 'ride_detail_screen.dart';
+import 'search_all_screen.dart';
 
 class RidesPane extends StatefulWidget {
   const RidesPane({super.key, required this.settlementId});
@@ -126,6 +128,45 @@ class _RidesPaneState extends State<RidesPane> {
     if (created == true && mounted) _load();
   }
 
+  Future<void> _openPlus() async {
+    final action = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            ListTile(
+              leading: const Icon(Icons.search),
+              title: const Text('Найти попутку'),
+              subtitle: const Text('По посёлку, селу или городу'),
+              onTap: () => Navigator.pop(ctx, 'search'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.directions_car_outlined),
+              title: const Text('Еду'),
+              subtitle: const Text('Есть места, могу подвезти'),
+              onTap: () => Navigator.pop(ctx, 'drive'),
+            ),
+            ListTile(
+              leading: const Icon(Icons.hail_outlined),
+              title: const Text('Ищу'),
+              subtitle: const Text('Нужна попутка'),
+              onTap: () => Navigator.pop(ctx, 'need'),
+            ),
+            SizedBox(height: ctx.systemBottomInset),
+          ],
+        ),
+      ),
+    );
+    if (!mounted || action == null) return;
+    if (action == 'search') {
+      await Navigator.push(context, fastRoute(const SearchAllScreen()));
+      return;
+    }
+    await _openCreate(action);
+  }
+
   @override
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
@@ -134,29 +175,38 @@ class _RidesPaneState extends State<RidesPane> {
     return Column(
       children: [
         Padding(
-          padding: EdgeInsets.fromLTRB(padH, 0, padH, 8),
+          padding: EdgeInsets.fromLTRB(padH, 0, padH, 6),
           child: Row(
             children: [
               Expanded(
                 child: FilledButton.icon(
+                  style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
                   onPressed: () => _openCreate('drive'),
-                  icon: const Icon(Icons.directions_car_outlined),
+                  icon: const Icon(Icons.directions_car_outlined, size: 20),
                   label: const Text('Еду'),
                 ),
               ),
               const SizedBox(width: 8),
               Expanded(
                 child: FilledButton.tonalIcon(
+                  style: FilledButton.styleFrom(visualDensity: VisualDensity.compact),
                   onPressed: () => _openCreate('need'),
-                  icon: const Icon(Icons.hail_outlined),
+                  icon: const Icon(Icons.hail_outlined, size: 20),
                   label: const Text('Ищу'),
                 ),
+              ),
+              const SizedBox(width: 8),
+              IconButton.filled(
+                visualDensity: VisualDensity.compact,
+                tooltip: 'Найти или добавить',
+                onPressed: _openPlus,
+                icon: const Icon(Icons.add),
               ),
             ],
           ),
         ),
         ryadomChipRow(
-          padding: EdgeInsets.fromLTRB(padH, 0, padH, 8),
+          padding: EdgeInsets.fromLTRB(padH, 0, padH, 4),
           children: [
             for (final entry in const [
               ('all', 'Все'),
@@ -192,8 +242,8 @@ class _RidesPaneState extends State<RidesPane> {
           child: widget.settlementId == null && !_mine
               ? emptyState(
                   context: context,
-                  title: 'Выберите село',
-                  subtitle: 'Попутки показываются для выбранного села или города',
+                  title: kPlacePickPlease,
+                  subtitle: 'Попутки — для выбранного посёлка, села или города',
                   icon: Icons.directions_car_outlined,
                 )
               : stackWithScrollToTop(

@@ -252,7 +252,7 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
 
   @override
   Widget build(BuildContext context) {
-    const titles = ['Фото', 'Что продаёте', 'Цена и село'];
+    const titles = ['Фото', 'Что продаёте', 'Цена и место'];
     return PopScope(
       canPop: step == 0,
       onPopInvokedWithResult: (didPop, _) async {
@@ -654,7 +654,7 @@ class _CreateListingScreenState extends State<CreateListingScreen> {
       return;
     }
     if (settlementId == null) {
-      setState(() => error = 'Выберите населённый пункт');
+      setState(() => error = kPlacePickPlease);
       return;
     }
     final phoneRaw = _hidePhoneField ? (_profilePhone ?? '') : phone.text.trim();

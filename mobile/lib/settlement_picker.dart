@@ -2,13 +2,19 @@ import 'package:flutter/material.dart';
 
 import 'responsive.dart';
 
+const kPlaceLabel = 'Посёлок, село или город';
+const kPlaceFindHint = 'Найти посёлок, село или город';
+const kPlacePickPlease = 'Выберите посёлок, село или город';
+const kPlaceNotInList = 'Такого места в списке нет';
+const kPlaceTypeHint = 'Начните вводить название';
+
 class SettlementPicker extends StatelessWidget {
   const SettlementPicker({
     super.key,
     required this.value,
     required this.settlements,
     required this.onChanged,
-    this.label = 'Населённый пункт',
+    this.label = kPlaceLabel,
     this.allowAll = false,
     this.allLabel = 'Все объявления',
     this.dense = false,
@@ -45,26 +51,22 @@ class SettlementPicker extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final name = _nameOf(value);
-    return InkWell(
-      borderRadius: BorderRadius.circular(12),
+    return TextFormField(
+      key: ValueKey<String>('place-${value ?? 'none'}-$name-$dense'),
+      initialValue: name,
+      readOnly: true,
+      enableInteractiveSelection: false,
       onTap: () => _open(context),
-      child: InputDecorator(
-        isEmpty: name.isEmpty,
-        decoration: InputDecoration(
-          isDense: dense,
-          labelText: label,
-          prefixIcon: const Icon(Icons.place_outlined),
-          suffixIcon: const Icon(Icons.search),
-          border: const OutlineInputBorder(),
-        ),
-        child: Text(
-          name.isEmpty ? 'Найти село' : name,
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          style: name.isEmpty
-              ? TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant)
-              : null,
-        ),
+      maxLines: 1,
+      style: const TextStyle(overflow: TextOverflow.ellipsis),
+      decoration: InputDecoration(
+        isDense: dense,
+        labelText: label,
+        hintText: kPlaceFindHint,
+        hintMaxLines: 1,
+        prefixIcon: const Icon(Icons.place_outlined),
+        suffixIcon: const Icon(Icons.search),
+        border: const OutlineInputBorder(),
       ),
     );
   }
@@ -86,11 +88,14 @@ Future<SettlementPick?> showSettlementSearch(
     context: context,
     isScrollControlled: true,
     showDragHandle: true,
-    builder: (ctx) => _SettlementSearchSheet(
-      settlements: settlements,
-      selectedId: selectedId,
-      allowAll: allowAll,
-      allLabel: allLabel,
+    builder: (ctx) => Padding(
+      padding: EdgeInsets.only(bottom: MediaQuery.viewInsetsOf(ctx).bottom),
+      child: _SettlementSearchSheet(
+        settlements: settlements,
+        selectedId: selectedId,
+        allowAll: allowAll,
+        allLabel: allLabel,
+      ),
     ),
   );
 }
@@ -138,11 +143,16 @@ class _SettlementSearchSheetState extends State<_SettlementSearchSheet> {
   Widget build(BuildContext context) {
     final scheme = Theme.of(context).colorScheme;
     final rows = _rows;
-    final h = MediaQuery.sizeOf(context).height * 0.72;
+    final available = MediaQuery.sizeOf(context).height - MediaQuery.viewInsetsOf(context).bottom;
+    final h = (available * 0.72).clamp(280.0, 640.0);
     return SizedBox(
       height: h,
       child: Column(
         children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
+            child: Text(kPlaceLabel, style: Theme.of(context).textTheme.titleMedium),
+          ),
           Padding(
             padding: const EdgeInsets.fromLTRB(20, 0, 20, 8),
             child: TextField(
@@ -150,7 +160,7 @@ class _SettlementSearchSheetState extends State<_SettlementSearchSheet> {
               autofocus: true,
               onChanged: (_) => setState(() {}),
               decoration: const InputDecoration(
-                hintText: 'Начните вводить село',
+                hintText: kPlaceTypeHint,
                 prefixIcon: Icon(Icons.search),
                 border: OutlineInputBorder(),
               ),
@@ -160,7 +170,9 @@ class _SettlementSearchSheetState extends State<_SettlementSearchSheet> {
             child: ListView(
               padding: EdgeInsets.only(bottom: context.systemBottomInset),
               children: [
-                if (widget.allowAll && (query.text.trim().isEmpty || widget.allLabel.toLowerCase().contains(query.text.trim().toLowerCase())))
+                if (widget.allowAll &&
+                    (query.text.trim().isEmpty ||
+                        widget.allLabel.toLowerCase().contains(query.text.trim().toLowerCase())))
                   ListTile(
                     leading: Icon(
                       widget.selectedId == null ? Icons.check_circle : Icons.public_outlined,
@@ -173,7 +185,7 @@ class _SettlementSearchSheetState extends State<_SettlementSearchSheet> {
                   Padding(
                     padding: const EdgeInsets.all(24),
                     child: Text(
-                      'Такого села в списке нет',
+                      kPlaceNotInList,
                       textAlign: TextAlign.center,
                       style: TextStyle(color: scheme.onSurfaceVariant),
                     ),

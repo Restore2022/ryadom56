@@ -90,7 +90,7 @@ class _CreateRideScreenState extends State<CreateRideScreen> {
       return;
     }
     if (fromId == toId) {
-      setState(() => error = 'Откуда и куда — разные сёла');
+      setState(() => error = 'Откуда и куда — разные места');
       return;
     }
     setState(() {

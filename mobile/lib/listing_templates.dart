@@ -84,7 +84,7 @@ const listingTemplates = [
     category: 'services',
     chipLabel: 'Услуги',
     titleHint: 'Какую услугу предлагаете',
-    descriptionHint: 'Что входит, по каким сёлам выезжаете, как считается цена',
+    descriptionHint: 'Что входит, по каким посёлкам, сёлам и городам выезжаете, как считается цена',
     exampleTitle: 'Соберу теплицу, выезд по области',
     exampleDescription:
         'Соберу теплицу или парник, инструмент свой. Выезд по Оренбургской области. Напишите в чат — скажу, сколько выйдет.',
@@ -95,7 +95,7 @@ const listingTemplates = [
     id: 'job_seek',
     category: 'jobs',
     chipLabel: 'Ищу работу',
-    titleHint: 'Кем хотите работать и в каком селе',
+    titleHint: 'Кем хотите работать и где',
     descriptionHint: 'Опыт, график, когда можете выйти',
     exampleTitle: 'Ищу работу продавцом в Сакмаре',
     exampleDescription:

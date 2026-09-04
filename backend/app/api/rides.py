@@ -154,7 +154,7 @@ def count_open_rides(db: Session, user_id: int, exclude_id: int | None = None) -
 def require_settlement(db: Session, settlement_id: int) -> Settlement:
     row = db.get(Settlement, settlement_id)
     if row is None or not row.is_active:
-        raise HTTPException(status_code=400, detail="Населённый пункт не найден")
+        raise HTTPException(status_code=400, detail="Нет такого посёлка, села или города")
     return row
 
 
@@ -459,7 +459,7 @@ def create_ride(
     if not limiter.allow(f"ride-create:{user.id}:{ip}", limit=12, window_sec=3600):
         raise HTTPException(status_code=429, detail="Слишком много попуток за час. Попробуйте позже")
     if payload.from_settlement_id == payload.to_settlement_id:
-        raise HTTPException(status_code=400, detail="Откуда и куда — разные сёла")
+        raise HTTPException(status_code=400, detail="Откуда и куда — разные места")
     require_settlement(db, payload.from_settlement_id)
     require_settlement(db, payload.to_settlement_id)
     if count_open_rides(db, user.id) >= MAX_OPEN_RIDES:

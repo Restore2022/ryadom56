@@ -95,6 +95,7 @@ def to_listing_message_out(
         is_mine=m.sender_id == user_id,
         kind=(m.kind or "text"),
         call_id=m.call_id,
+        image_url=image_url(m.image_path) if getattr(m, "image_path", None) else None,
     )
 
 
@@ -246,6 +247,7 @@ def to_out(
         distance_km=distance_km,
         lifetime_days=int(getattr(item, "lifetime_days", None) or 30),
         expires_at=getattr(item, "expires_at", None),
+        ask_if_relevant=listing_asks_if_relevant(item, viewer),
     )
 
 
@@ -276,6 +278,52 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 
+RELEVANCE_DAYS = 14
+
+
+def as_utc(dt: datetime | None) -> datetime | None:
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def touch_relevant(item: Listing) -> None:
+    item.last_relevant_at = utcnow()
+    item.relevance_reminded_at = None
+
+
+def listing_asks_if_relevant(item: Listing, viewer: User | None) -> bool:
+    if not viewer or viewer.id != item.author_id:
+        return False
+    if item.status != ListingStatus.approved:
+        return False
+    base = as_utc(getattr(item, "last_relevant_at", None)) or as_utc(item.created_at)
+    if base is None:
+        return False
+    return utcnow() - base >= timedelta(days=RELEVANCE_DAYS)
+
+
+def message_preview(m: ListingMessage) -> str:
+    if (m.kind or "text") == "photo":
+        return "Фото"
+    return (m.body or "").strip()
+
+
+def image_ext(data: bytes, content_type: str) -> str:
+    ext = ALLOWED_TYPES.get((content_type or "").lower())
+    if data[:3] == b"\xff\xd8\xff":
+        return ".jpg"
+    if data[:8] == b"\x89PNG\r\n\x1a\n":
+        return ".png"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return ".webp"
+    if not ext:
+        raise HTTPException(status_code=400, detail="Допустимы JPG, PNG, WEBP")
+    return ext
+
+
 def set_expiry_from(item: Listing, start: datetime, days: int | None = None) -> None:
     life = normalize_lifetime(days if days is not None else getattr(item, "lifetime_days", 30))
     item.lifetime_days = life
@@ -298,7 +346,34 @@ def archive_expired_listings(db: Session) -> None:
         item.close_reason = "expired"
         item.close_note = CLOSE_REASON_LABELS["expired"]
         item.is_pinned = False
-    db.commit()
+    if rows:
+        db.commit()
+    remind_stale_listings(db)
+
+
+def remind_stale_listings(db: Session) -> None:
+    now = utcnow()
+    rows = db.execute(select(Listing).where(Listing.status == ListingStatus.approved)).scalars().all()
+    changed = False
+    for item in rows:
+        base = as_utc(getattr(item, "last_relevant_at", None)) or as_utc(item.created_at)
+        if base is None or now - base < timedelta(days=RELEVANCE_DAYS):
+            continue
+        reminded = as_utc(getattr(item, "relevance_reminded_at", None))
+        if reminded is not None and reminded >= base:
+            continue
+        notify_user(
+            db,
+            user_id=item.author_id,
+            type="listing_relevance",
+            title="Объявление ещё актуально?",
+            body=f"«{item.title}» висит уже две недели. Если продали — снимите, если нет — нажмите «ещё актуально».",
+            listing_id=item.id,
+        )
+        item.relevance_reminded_at = now
+        changed = True
+    if changed:
+        db.commit()
 
 
 def author_replied_to_buyer(db: Session, listing: Listing, viewer: User | None) -> bool:
@@ -327,6 +402,7 @@ def admin_list_listings(
     category: ListingCategory | None = None,
     sort: str = Query(default="newest", pattern="^(newest|sla)$"),
     over24: bool = False,
+    author_kind: str | None = Query(default=None, pattern="^(feed|real)$"),
     limit: int = Query(default=400, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -349,6 +425,10 @@ def admin_list_listings(
         stmt = stmt.where(Listing.author_id == author_id)
     if category is not None:
         stmt = stmt.where(Listing.category == category)
+    if author_kind == "feed":
+        stmt = stmt.where(Listing.author_id.in_(select(User.id).where(User.badge == "feed")))
+    elif author_kind == "real":
+        stmt = stmt.where(Listing.author_id.not_in(select(User.id).where(User.badge == "feed")))
     if q and q.strip():
         like = f"%{q.strip()}%"
         stmt = stmt.join(Listing.author).where(
@@ -487,7 +567,7 @@ def list_conversations(
                 listing_title=item.title,
                 listing_status=item.status.value if hasattr(item.status, "value") else str(item.status),
                 peer_name=peer.full_name if peer else None,
-                last_message=last.body,
+        last_message=message_preview(last),
                 last_message_at=last.created_at,
                 unread_count=unread,
                 is_seller=is_seller,
@@ -565,7 +645,7 @@ def list_listings(
             stmt = stmt.where(Listing.author_id == author_id)
     origin = resolve_origin(db, lat, lon, settlement_id) if sort == "near" else None
     if sort == "near" and origin is None:
-        raise HTTPException(status_code=400, detail="Для «рядом» нужны геолокация или выбранное село")
+        sort = "newest"
     near_filter_settlement = False if sort == "near" else True
     if category:
         stmt = stmt.where(Listing.category == category)
@@ -684,6 +764,7 @@ def create_listing(
     )
     db.add(item)
     db.flush()
+    touch_relevant(item)
     if not as_draft:
         apply_blacklist_flag(db, item)
     db.commit()
@@ -717,7 +798,7 @@ def update_listing(
     if "settlement_id" in data and data["settlement_id"] is not None:
         settlement = db.execute(select(Settlement.id).where(Settlement.id == data["settlement_id"])).scalar_one_or_none()
         if settlement is None:
-            raise HTTPException(status_code=400, detail="Населённый пункт не найден")
+            raise HTTPException(status_code=400, detail="Нет такого посёлка, села или города")
     was_approved = item.status == ListingStatus.approved
     if was_approved and item.author_id == user.id and not is_staff and as_draft is not True:
         item.previous_snapshot = snapshot_listing(item)
@@ -799,6 +880,7 @@ def extend_listing(
             status_code=400,
             detail="Продлить можно опубликованное объявление или снятое по сроку. Остальные — через «Снова».",
         )
+    touch_relevant(item)
     db.commit()
     item = load_listing(db, listing_id)
     return to_out(item, favorite_ids_for(db, user), viewer=user)
@@ -945,14 +1027,6 @@ def report_listing(
         )
     )
     db.flush()
-    notify_user(
-        db,
-        user_id=item.author_id,
-        type="listing_reported",
-        title="На ваше объявление пожаловались",
-        body=f'"{item.title}" проверят модераторы',
-        listing_id=item.id,
-    )
     author = db.execute(select(User).where(User.id == item.author_id)).scalar_one()
     maybe_autoban_from_listing_reports(db, author)
     db.commit()
@@ -1087,6 +1161,93 @@ def post_message(
         sender_name=user.full_name,
         peer_id=peer_for_client,
     )
+
+
+@router.post("/{listing_id}/messages/photo", response_model=ListingMessageOut)
+async def post_message_photo(
+    listing_id: int,
+    file: UploadFile = File(...),
+    peer_id: int | None = Query(default=None),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    item = load_listing(db, listing_id)
+    if not item or item.status != ListingStatus.approved:
+        raise HTTPException(status_code=404, detail="Объявление не найдено")
+    if not limiter.allow(f"chat-day:{user.id}", limit=50, window_sec=86400):
+        raise HTTPException(
+            status_code=429,
+            detail="Лимит сообщений на сегодня (50). Напишите завтра — без капчи, просто пауза от спама.",
+        )
+    buyer_id = _resolve_thread_buyer_id(item, user, peer_id)
+    if user.id == item.author_id:
+        exists_buyer = db.execute(select(User.id).where(User.id == buyer_id)).scalar_one_or_none()
+        if not exists_buyer:
+            raise HTTPException(status_code=404, detail="Собеседник не найден")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Пустой файл")
+    if len(data) > MAX_IMAGE_BYTES:
+        raise HTTPException(status_code=400, detail="Фото больше 6 МБ")
+    ext = image_ext(data, file.content_type or "")
+    folder = UPLOAD_ROOT / "chat" / str(listing_id)
+    folder.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}{ext}"
+    rel = f"chat/{listing_id}/{filename}"
+    (UPLOAD_ROOT / rel).write_bytes(data)
+    msg = ListingMessage(
+        listing_id=listing_id,
+        sender_id=user.id,
+        buyer_id=buyer_id,
+        body="Фото",
+        kind="photo",
+        image_path=rel,
+    )
+    db.add(msg)
+    db.flush()
+    target = item.author_id if user.id == buyer_id else buyer_id
+    if target and target != user.id:
+        push_user(
+            db,
+            user_id=target,
+            title=user.full_name or "Сообщение",
+            body="Фото",
+            data={
+                "type": "listing_message",
+                "listing_id": str(item.id),
+                "buyer_id": str(buyer_id),
+                "message_id": str(msg.id),
+            },
+        )
+    db.commit()
+    db.refresh(msg)
+    emit_listing_chat(db, msg, (user.id, target) if target else (user.id,))
+    peer_for_client = buyer_id if user.id == item.author_id else item.author_id
+    return to_listing_message_out(
+        msg,
+        user_id=user.id,
+        sender_name=user.full_name,
+        peer_id=peer_for_client,
+    )
+
+
+@router.post("/{listing_id}/still-relevant", response_model=ListingOut)
+def confirm_listing_relevant(
+    listing_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    item = load_listing(db, listing_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Объявление не найдено")
+    if item.author_id != user.id and user.role not in (UserRole.admin, UserRole.moderator):
+        raise HTTPException(status_code=403, detail="Нет доступа")
+    if item.status != ListingStatus.approved:
+        raise HTTPException(status_code=400, detail="Подтвердить можно только опубликованное объявление")
+    touch_relevant(item)
+    db.commit()
+    item = load_listing(db, listing_id)
+    return to_out(item, favorite_ids_for(db, user), viewer=user)
 
 
 @router.post("/{listing_id}/images", response_model=ListingOut)
@@ -1261,6 +1422,7 @@ def moderate_listing(
         item.auto_flagged = False
         item.previous_snapshot = None
         set_expiry_from(item, utcnow(), getattr(item, "lifetime_days", 30))
+        touch_relevant(item)
     if payload.status in (ListingStatus.rejected, ListingStatus.archived):
         item.is_pinned = False
     log_action(
@@ -1333,6 +1495,7 @@ def admin_set_listing_status(
         item.close_reason = None
         item.close_note = None
         set_expiry_from(item, utcnow(), getattr(item, "lifetime_days", 30))
+        touch_relevant(item)
     elif payload.status == ListingStatus.archived:
         item.is_pinned = False
         item.close_reason = (payload.close_reason or "").strip() or "other"

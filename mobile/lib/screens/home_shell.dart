@@ -83,7 +83,7 @@ Future<bool> enableNearMe(BuildContext context, {required bool directory}) async
     }
     return true;
   }
-  showAppSnack(context, 'Выберите село в фильтрах или разрешите геолокацию');
+  showAppSnack(context, 'Выберите посёлок, село или город в фильтрах или разрешите геолокацию');
   return false;
 }
 
@@ -1463,144 +1463,125 @@ class _TransportTabState extends State<_TransportTab> {
 
     return Column(
       children: [
-        Flexible(
-          fit: FlexFit.loose,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                if (state.lastTransportFromCache)
-                  Material(
-                    color: scheme.secondaryContainer,
-                    child: Padding(
-                      padding: EdgeInsets.fromLTRB(padH, 8, padH, 8),
-                      child: Row(
-                        children: [
-                          Icon(Icons.offline_bolt, size: 18, color: scheme.onSecondaryContainer),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              'Показано сохранённое расписание — нет связи с сервером',
-                              style: TextStyle(color: scheme.onSecondaryContainer, fontSize: 12),
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                Padding(
-                  padding: EdgeInsets.fromLTRB(padH, context.isLandscape ? 6 : 12, padH, 8),
-                  child: SettlementPicker(
-                    value: settlementId != null && settlements.any((s) => s['id'] == settlementId) ? settlementId : null,
-                    settlements: settlements,
-                    dense: context.isLandscape,
-                    onChanged: (v) {
-                      setState(() => settlementId = v);
-                      if (pane == 'buses') _load();
-                    },
-                  ),
-                ),
-                ryadomChipRow(
-                  padding: EdgeInsets.fromLTRB(padH, 0, padH, 8),
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: RyadomFilterChip(
-                        label: 'Автобусы',
-                        selected: pane == 'buses',
-                        onSelected: (_) {
-                          setState(() => pane = 'buses');
-                          _load();
-                        },
-                      ),
-                    ),
-                    Padding(
-                      padding: const EdgeInsets.only(right: 8),
-                      child: RyadomFilterChip(
-                        label: 'Попутки',
-                        selected: pane == 'rides',
-                        onSelected: (_) => setState(() => pane = 'rides'),
-                      ),
-                    ),
-                  ],
-                ),
-                if (pane == 'buses' && settlementId != null) ...[
-                  ryadomChipRow(
-                    padding: EdgeInsets.fromLTRB(padH, 0, padH, 8),
-                    children: [
-                      for (final entry in const [
-                        ('today', 'Сегодня'),
-                        ('weekdays', 'Будни'),
-                        ('weekends', 'Выходные'),
-                        ('all', 'Все'),
-                      ])
-                        Padding(
-                          padding: const EdgeInsets.only(right: 8),
-                          child: RyadomFilterChip(
-                            label: entry.$2,
-                            selected: dayFilter == entry.$1,
-                            onSelected: (_) {
-                              setState(() => dayFilter = entry.$1);
-                              _load();
-                            },
-                          ),
-                        ),
-                    ],
-                  ),
-                  Padding(
-                    padding: EdgeInsets.fromLTRB(padH, 0, padH, 8),
-                    child: TextField(
-                      controller: search,
-                      textInputAction: TextInputAction.search,
-                      onSubmitted: (_) => _load(),
-                      decoration: InputDecoration(
-                        isDense: context.isLandscape,
-                        hintText: 'направление, остановка…',
-                        prefixIcon: const Icon(Icons.search),
-                        suffixIcon: search.text.isEmpty
-                            ? null
-                            : IconButton(
-                                icon: const Icon(Icons.clear),
-                                onPressed: () {
-                                  search.clear();
-                                  _load();
-                                },
-                              ),
-                        border: const OutlineInputBorder(),
-                      ),
-                      onChanged: (_) => setState(() {}),
-                    ),
-                  ),
-                  Padding(
-                    padding: EdgeInsets.fromLTRB(padH, 0, padH, 6),
-                    child: Row(
-                      children: [
-                        Text(
-                          '${items.length} маршрутов',
-                          style: TextStyle(color: scheme.onSurfaceVariant),
-                        ),
-                        const Spacer(),
-                        RyadomFilterChip(
-                          label: 'Избранное',
-                          selected: favoritesOnly,
-                          onSelected: (_) => _toggleFavoritesFilter(),
-                        ),
-                      ],
+        if (state.lastTransportFromCache)
+          Material(
+            color: scheme.secondaryContainer,
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(padH, 6, padH, 6),
+              child: Row(
+                children: [
+                  Icon(Icons.offline_bolt, size: 18, color: scheme.onSecondaryContainer),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Показано сохранённое расписание — нет связи с сервером',
+                      style: TextStyle(color: scheme.onSecondaryContainer, fontSize: 12),
                     ),
                   ),
                 ],
-              ],
+              ),
             ),
           ),
+        Padding(
+          padding: EdgeInsets.fromLTRB(padH, context.isLandscape ? 4 : 8, padH, 6),
+          child: SettlementPicker(
+            value: settlementId != null && settlements.any((s) => s['id'] == settlementId) ? settlementId : null,
+            settlements: settlements,
+            dense: true,
+            onChanged: (v) {
+              setState(() => settlementId = v);
+              if (pane == 'buses') _load();
+            },
+          ),
         ),
+        ryadomChipRow(
+          padding: EdgeInsets.fromLTRB(padH, 0, padH, 4),
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: RyadomFilterChip(
+                label: 'Автобусы',
+                selected: pane == 'buses',
+                onSelected: (_) {
+                  setState(() => pane = 'buses');
+                  _load();
+                },
+              ),
+            ),
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: RyadomFilterChip(
+                label: 'Попутки',
+                selected: pane == 'rides',
+                onSelected: (_) => setState(() => pane = 'rides'),
+              ),
+            ),
+          ],
+        ),
+        if (pane == 'buses' && settlementId != null) ...[
+          ryadomChipRow(
+            padding: EdgeInsets.fromLTRB(padH, 0, padH, 4),
+            children: [
+              for (final entry in const [
+                ('today', 'Сегодня'),
+                ('weekdays', 'Будни'),
+                ('weekends', 'Выходные'),
+                ('all', 'Все'),
+              ])
+                Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: RyadomFilterChip(
+                    label: entry.$2,
+                    selected: dayFilter == entry.$1,
+                    onSelected: (_) {
+                      setState(() => dayFilter = entry.$1);
+                      _load();
+                    },
+                  ),
+                ),
+              Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: RyadomFilterChip(
+                  label: 'Избранное',
+                  selected: favoritesOnly,
+                  onSelected: (_) => _toggleFavoritesFilter(),
+                ),
+              ),
+            ],
+          ),
+          Padding(
+            padding: EdgeInsets.fromLTRB(padH, 0, padH, 6),
+            child: TextField(
+              controller: search,
+              textInputAction: TextInputAction.search,
+              onSubmitted: (_) => _load(),
+              decoration: InputDecoration(
+                isDense: true,
+                hintText: items.isEmpty ? 'направление, остановка…' : '${items.length} маршрутов · направление, остановка…',
+                prefixIcon: const Icon(Icons.search, size: 20),
+                suffixIcon: search.text.isEmpty
+                    ? null
+                    : IconButton(
+                        icon: const Icon(Icons.clear),
+                        onPressed: () {
+                          search.clear();
+                          _load();
+                        },
+                      ),
+                border: const OutlineInputBorder(),
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+          ),
+        ],
         Expanded(
           child: pane == 'rides'
               ? RidesPane(settlementId: settlementId)
               : settlementId == null
               ? emptyState(
                   context: context,
-                  title: 'Выберите населённый пункт',
-                  subtitle: 'Маршруты показываются только для выбранного села или города',
+                  title: kPlacePickPlease,
+                  subtitle: 'Маршруты — только для выбранного посёлка, села или города',
                   icon: Icons.directions_bus_outlined,
                 )
               : stackWithScrollToTop(
@@ -1631,7 +1612,7 @@ class _TransportTabState extends State<_TransportTab> {
                                           title: favoritesOnly ? 'Нет избранных маршрутов' : 'Маршрутов нет',
                                           subtitle: favoritesOnly
                                               ? 'Добавьте маршруты звёздочкой в списке'
-                                              : 'Для этого населённого пункта расписаний пока нет',
+                                              : 'Для этого посёлка, села или города расписаний пока нет',
                                           icon: Icons.directions_bus_outlined,
                                           actionLabel: 'Обновить',
                                           onAction: () => _load(),
@@ -1989,7 +1970,7 @@ class _DirectoryTabState extends State<_DirectoryTab> {
                 child: emptyState(
                   context: context,
                   title: 'Справочник пуст',
-                  subtitle: 'Попробуйте другой населённый пункт или категорию',
+                  subtitle: 'Попробуйте другое место или категорию',
                   icon: Icons.map_outlined,
                   actionLabel: 'Обновить',
                   onAction: () => state.loadDirectory(),
