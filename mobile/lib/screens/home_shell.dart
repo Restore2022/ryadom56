@@ -31,6 +31,7 @@ import 'listing_detail_screen.dart';
 import 'my_listings_screen.dart';
 import 'notifications_screen.dart';
 import 'pin_setup_screen.dart';
+import 'rides_tab.dart';
 import 'search_all_screen.dart';
 import 'transport_detail_screen.dart';
 import 'view_history_screen.dart';
@@ -1350,6 +1351,7 @@ class _TransportTabState extends State<_TransportTab> {
   int? settlementId;
   String dayFilter = 'today';
   bool favoritesOnly = false;
+  String pane = 'buses';
   static const _pageSize = 20;
 
   @override
@@ -1494,11 +1496,35 @@ class _TransportTabState extends State<_TransportTab> {
                     dense: context.isLandscape,
                     onChanged: (v) {
                       setState(() => settlementId = v);
-                      _load();
+                      if (pane == 'buses') _load();
                     },
                   ),
                 ),
-                if (settlementId != null) ...[
+                ryadomChipRow(
+                  padding: EdgeInsets.fromLTRB(padH, 0, padH, 8),
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: RyadomFilterChip(
+                        label: 'Автобусы',
+                        selected: pane == 'buses',
+                        onSelected: (_) {
+                          setState(() => pane = 'buses');
+                          _load();
+                        },
+                      ),
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: RyadomFilterChip(
+                        label: 'Попутки',
+                        selected: pane == 'rides',
+                        onSelected: (_) => setState(() => pane = 'rides'),
+                      ),
+                    ),
+                  ],
+                ),
+                if (pane == 'buses' && settlementId != null) ...[
                   ryadomChipRow(
                     padding: EdgeInsets.fromLTRB(padH, 0, padH, 8),
                     children: [
@@ -1568,7 +1594,9 @@ class _TransportTabState extends State<_TransportTab> {
           ),
         ),
         Expanded(
-          child: settlementId == null
+          child: pane == 'rides'
+              ? RidesPane(settlementId: settlementId)
+              : settlementId == null
               ? emptyState(
                   context: context,
                   title: 'Выберите населённый пункт',

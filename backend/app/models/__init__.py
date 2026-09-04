@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import Boolean, Enum, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, Enum, Float, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base, UtcDateTime
@@ -16,6 +16,7 @@ class UserRole(str, enum.Enum):
 
 class ListingCategory(str, enum.Enum):
     goods = "goods"  # товары
+    wanted = "wanted"  # куплю
     services = "services"  # услуги
     jobs = "jobs"  # работа
     rent = "rent"  # аренда
@@ -140,6 +141,8 @@ class Listing(Base):
     close_note: Mapped[str | None] = mapped_column(Text, nullable=True)
     lifetime_days: Mapped[int] = mapped_column(Integer, default=30)
     expires_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
+    last_relevant_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
+    relevance_reminded_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         UtcDateTime(), server_default=func.now(), onupdate=func.now()
@@ -263,6 +266,10 @@ class TransportRoute(Base):
         cascade="all, delete-orphan",
         order_by="TransportRouteStop.sort_order",
     )
+    place_links: Mapped[list["TransportRoutePlace"]] = relationship(
+        back_populates="route",
+        cascade="all, delete-orphan",
+    )
 
 
 class TransportStop(Base):
@@ -288,6 +295,18 @@ class TransportRouteStop(Base):
     stop: Mapped["TransportStop"] = relationship()
 
 
+class TransportRoutePlace(Base):
+    __tablename__ = "transport_route_places"
+    __table_args__ = (UniqueConstraint("route_id", "settlement_id", name="uq_transport_route_place"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    route_id: Mapped[int] = mapped_column(ForeignKey("transport_routes.id"), nullable=False, index=True)
+    settlement_id: Mapped[int] = mapped_column(ForeignKey("settlements.id"), nullable=False, index=True)
+
+    route: Mapped["TransportRoute"] = relationship(back_populates="place_links")
+    settlement: Mapped["Settlement"] = relationship()
+
+
 class TransportFavorite(Base):
     __tablename__ = "transport_favorites"
 
@@ -308,6 +327,11 @@ class DistrictNews(Base):
     is_published: Mapped[bool] = mapped_column(Boolean, default=True)
     is_pinned: Mapped[bool] = mapped_column(Boolean, default=False)
     published_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    source_url: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    # oblast — вся область; sakmarsky — Сакмарский район; local — одно село
+    audience: Mapped[str] = mapped_column(String(20), default="oblast", nullable=False)
+    vk_post_id: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -315,6 +339,42 @@ class DistrictNews(Base):
     )
 
     settlement: Mapped["Settlement | None"] = relationship()
+    images: Mapped[list["NewsImage"]] = relationship(
+        back_populates="news",
+        cascade="all, delete-orphan",
+        order_by="NewsImage.sort_order",
+    )
+
+
+class NewsImage(Base):
+    __tablename__ = "news_images"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    news_id: Mapped[int] = mapped_column(ForeignKey("district_news.id"), nullable=False, index=True)
+    path: Mapped[str] = mapped_column(String(255), nullable=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
+
+    news: Mapped["DistrictNews"] = relationship(back_populates="images")
+
+
+class VkNewsRun(Base):
+    """Лог забора новостей со стены VK."""
+
+    __tablename__ = "vk_news_runs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    started_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="ok")  # ok | error
+    source: Mapped[str] = mapped_column(String(120), default="vk.ru/sakmaraadm")
+    fetched: Mapped[int] = mapped_column(Integer, default=0)
+    created: Mapped[int] = mapped_column(Integer, default=0)
+    skipped: Mapped[int] = mapped_column(Integer, default=0)
+    photos: Mapped[int] = mapped_column(Integer, default=0)
+    details: Mapped[str | None] = mapped_column(Text, nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    triggered_by: Mapped[str] = mapped_column(String(40), default="timer")
 
 
 class DistrictAlert(Base):
@@ -330,6 +390,7 @@ class DistrictAlert(Base):
     starts_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
     ends_at: Mapped[datetime | None] = mapped_column(UtcDateTime(), nullable=True)
     created_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    settlement_ids: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         UtcDateTime(), server_default=func.now(), onupdate=func.now()
@@ -347,9 +408,10 @@ class ListingMessage(Base):
     buyer_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     body: Mapped[str] = mapped_column(Text, nullable=False)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
-    # text — обычное сообщение; call — системное событие звонка (пропущен / отменён / …)
+    # text — обычное сообщение; photo — фото; call — системное событие звонка
     kind: Mapped[str] = mapped_column(String(20), default="text", server_default="text")
     call_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    image_path: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
 
 
@@ -459,6 +521,7 @@ class Notification(Base):
     title: Mapped[str] = mapped_column(String(200), nullable=False)
     body: Mapped[str | None] = mapped_column(Text, nullable=True)
     listing_id: Mapped[int | None] = mapped_column(ForeignKey("listings.id"), nullable=True)
+    ride_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     is_read: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
 
@@ -548,6 +611,7 @@ class ClientErrorLog(Base):
     device_model: Mapped[str | None] = mapped_column(String(120), nullable=True)
     device_os: Mapped[str | None] = mapped_column(String(80), nullable=True)
     client_ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
 
 
 class SiteContact(Base):
@@ -574,3 +638,125 @@ class Presence(Base):
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     first_seen_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
     last_seen_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now(), index=True)
+
+
+class GuestPushDevice(Base):
+    """Пуш-токен телефона без входа — только общие рассылки и срочные баннеры."""
+
+    __tablename__ = "guest_push_devices"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    device_id: Mapped[str] = mapped_column(String(64), unique=True, index=True, nullable=False)
+    fcm_token: Mapped[str] = mapped_column(String(512), nullable=False)
+    app_version: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    settlement_id: Mapped[int | None] = mapped_column(ForeignKey("settlements.id"), nullable=True, index=True)
+    first_seen_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
+    last_seen_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now(), index=True)
+
+
+class PromoLink(Base):
+    """Короткая ссылка для рекламы в группах: https://legac.ru/r/otdam"""
+
+    __tablename__ = "promo_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    slug: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)
+    title: Mapped[str] = mapped_column(String(120), nullable=False)
+    note: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
+
+    hits: Mapped[list["PromoHit"]] = relationship(back_populates="link")
+
+
+class PromoHit(Base):
+    """Заход по рекламной ссылке или скачивание APK с этой ссылки."""
+
+    __tablename__ = "promo_hits"
+    __table_args__ = (
+        Index("ix_promo_hits_link_kind_created", "link_id", "kind", "created_at"),
+        Index("ix_promo_hits_link_kind_visitor", "link_id", "kind", "visitor_key"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    link_id: Mapped[int] = mapped_column(ForeignKey("promo_links.id"), index=True, nullable=False)
+    kind: Mapped[str] = mapped_column(String(12), index=True, nullable=False)  # visit | download
+    visitor_key: Mapped[str] = mapped_column(String(48), index=True, nullable=False)
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now(), index=True)
+
+    link: Mapped["PromoLink"] = relationship(back_populates="hits")
+
+
+class Ride(Base):
+    """Попутка: человек едет или ищет место в машине."""
+
+    __tablename__ = "rides"
+    __table_args__ = (
+        Index("ix_rides_status_depart", "status", "depart_at"),
+        Index("ix_rides_from_settlement", "from_settlement_id"),
+        Index("ix_rides_to_settlement", "to_settlement_id"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    author_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    kind: Mapped[str] = mapped_column(String(12), nullable=False, index=True)  # drive | need
+    from_settlement_id: Mapped[int] = mapped_column(ForeignKey("settlements.id"), nullable=False)
+    to_settlement_id: Mapped[int] = mapped_column(ForeignKey("settlements.id"), nullable=False)
+    depart_at: Mapped[datetime] = mapped_column(UtcDateTime(), nullable=False, index=True)
+    seats: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    note: Mapped[str | None] = mapped_column(String(400), nullable=True)
+    contact_phone: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    status: Mapped[str] = mapped_column(String(12), default="open", index=True)  # open | closed | hidden
+    close_reason: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        UtcDateTime(), server_default=func.now(), onupdate=func.now()
+    )
+
+    author: Mapped["User"] = relationship(foreign_keys=[author_id])
+    from_place: Mapped["Settlement"] = relationship(foreign_keys=[from_settlement_id])
+    to_place: Mapped["Settlement"] = relationship(foreign_keys=[to_settlement_id])
+
+
+class RideMessage(Base):
+    """Личная переписка по попутке (тред = ride_id + passenger_id)."""
+
+    __tablename__ = "ride_messages"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ride_id: Mapped[int] = mapped_column(ForeignKey("rides.id"), nullable=False, index=True)
+    sender_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    passenger_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    is_read: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
+
+
+class RideReport(Base):
+    __tablename__ = "ride_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    ride_id: Mapped[int] = mapped_column(ForeignKey("rides.id"), nullable=False, index=True)
+    reporter_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    reason: Mapped[str] = mapped_column(String(40), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="open")
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now())
+
+    ride: Mapped["Ride"] = relationship()
+    reporter: Mapped["User"] = relationship(foreign_keys=[reporter_id])
+
+
+class ApkDownload(Base):
+    """Скачивание APK с сайта, из приложения или по рекламной ссылке."""
+
+    __tablename__ = "apk_downloads"
+    __table_args__ = (Index("ix_apk_downloads_visitor_created", "visitor_key", "created_at"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(UtcDateTime(), server_default=func.now(), index=True)
+    visitor_key: Mapped[str] = mapped_column(String(48), index=True, nullable=False)
+    ip: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    slug: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    source: Mapped[str] = mapped_column(String(20), default="site", index=True)

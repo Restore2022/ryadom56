@@ -14,6 +14,8 @@ import 'push_service.dart';
 import 'screens/home_shell.dart';
 import 'screens/listing_chat_screen.dart';
 import 'screens/listing_detail_screen.dart';
+import 'screens/ride_chat_screen.dart';
+import 'screens/ride_detail_screen.dart';
 import 'screens/forgot_password_screen.dart';
 import 'screens/login_screen.dart';
 import 'screens/notifications_screen.dart';
@@ -88,7 +90,7 @@ class _RyadomAppState extends State<RyadomApp> {
       final type = data['type']?.toString();
       if (type == 'incoming_call') {
         CallService.instance.handlePush(data);
-      } else if (type == 'listing_message') {
+      } else if (type == 'listing_message' || type == 'ride_message') {
         _state.refreshUnreadChats();
       }
     };
@@ -125,6 +127,27 @@ class _RyadomAppState extends State<RyadomApp> {
     if (nav == null) return;
     final listingId = int.tryParse('${data['listing_id'] ?? ''}');
     final buyerId = int.tryParse('${data['buyer_id'] ?? ''}');
+    final rideId = int.tryParse('${data['ride_id'] ?? ''}');
+    final passengerId = int.tryParse('${data['passenger_id'] ?? ''}');
+
+    if (type == 'ride_message' && rideId != null) {
+      await nav.push(
+        MaterialPageRoute(
+          builder: (_) => RideChatScreen(
+            rideId: rideId,
+            title: 'Чат по попутке',
+            peerId: passengerId,
+          ),
+        ),
+      );
+      return;
+    }
+    if (type == 'ride_new' && rideId != null) {
+      await nav.push(
+        MaterialPageRoute(builder: (_) => RideDetailScreen(rideId: rideId)),
+      );
+      return;
+    }
 
     if (type == 'listing_message' && listingId != null) {
       await nav.push(

@@ -16,6 +16,7 @@ from app.models import (
     DistrictNews,
     Event,
     LegalDocument,
+    PromoLink,
     Settlement,
     SiteContact,
     TransportRoute,
@@ -25,7 +26,31 @@ from app.models import (
     UserRole,
 )
 
+_OBLAST_JSON = Path(__file__).resolve().parents[1] / "core" / "oblast_settlements.json"
+
+
+def _oblast_settlements() -> list[dict]:
+    if not _OBLAST_JSON.exists():
+        return []
+    try:
+        data = json.loads(_OBLAST_JSON.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    items = data.get("items")
+    return items if isinstance(items, list) else []
+
+
+def _settlement_coords() -> dict[str, tuple[float, float]]:
+    out = dict(SETTLEMENT_COORDS)
+    for item in _oblast_settlements():
+        display = item.get("display_name")
+        lat, lon = item.get("lat"), item.get("lon")
+        if display and lat is not None and lon is not None and display not in out:
+            out[display] = (float(lat), float(lon))
+    return out
+
 _TRANSPORT_TIME_RE = re.compile(r"\b([01]?\d|2[0-3])[:.]([0-5]\d)\b")
+_TRANSPORT_INTERVAL_RE = re.compile(r"интервал|24tr\.ru", re.I)
 
 USER_COLUMNS = {
     "last_ip": "VARCHAR(64)",
@@ -52,6 +77,8 @@ LISTING_COLUMNS = {
     "previous_snapshot": "TEXT",
     "lifetime_days": "INTEGER DEFAULT 30",
     "expires_at": "DATETIME",
+    "last_relevant_at": "DATETIME",
+    "relevance_reminded_at": "DATETIME",
 }
 
 REPORT_COLUMNS = {
@@ -86,10 +113,23 @@ TRANSPORT_COLUMNS = {
 NEWS_COLUMNS = {
     "cover_path": "VARCHAR(255)",
     "is_pinned": "BOOLEAN DEFAULT 0",
+    "source": "VARCHAR(40)",
+    "source_url": "VARCHAR(255)",
+    "audience": "VARCHAR(20) DEFAULT 'oblast'",
+    "vk_post_id": "VARCHAR(64)",
+}
+
+CLIENT_ERROR_COLUMNS = {
+    "is_read": "BOOLEAN DEFAULT 0",
 }
 
 ALERT_COLUMNS = {
     "priority": "INTEGER DEFAULT 0",
+    "settlement_ids": "TEXT",
+}
+
+GUEST_PUSH_COLUMNS = {
+    "settlement_id": "INTEGER",
 }
 
 SETTLEMENT_COLUMNS = {
@@ -97,10 +137,15 @@ SETTLEMENT_COLUMNS = {
     "lon": "FLOAT",
 }
 
+NOTIFICATION_COLUMNS = {
+    "ride_id": "INTEGER",
+}
+
 MESSAGE_COLUMNS = {
     "buyer_id": "INTEGER",
     "kind": "VARCHAR(20) DEFAULT 'text'",
     "call_id": "INTEGER",
+    "image_path": "VARCHAR(255)",
 }
 
 
@@ -110,6 +155,7 @@ def init_db() -> None:
     Path("data/uploads/events").mkdir(parents=True, exist_ok=True)
     Path("data/uploads/news").mkdir(parents=True, exist_ok=True)
     Path("data/uploads/avatars").mkdir(parents=True, exist_ok=True)
+    Path("data/uploads/chat").mkdir(parents=True, exist_ok=True)
     Path("data/releases").mkdir(parents=True, exist_ok=True)
     Base.metadata.create_all(bind=engine)
     _migrate_user_columns()
@@ -121,11 +167,17 @@ def init_db() -> None:
     _migrate_transport_columns()
     _backfill_transport_catalog()
     _migrate_news_columns()
+    _backfill_news_audience()
+    _backfill_news_images()
     _migrate_alert_columns()
+    _migrate_guest_push_columns()
     _migrate_message_columns()
+    _migrate_notification_columns()
     _migrate_call_columns()
     _migrate_settlement_columns()
+    _migrate_client_error_columns()
     _backfill_call_chat_messages()
+    _backfill_apk_downloads()
 
 
 def _migrate_user_columns() -> None:
@@ -293,6 +345,9 @@ def _backfill_transport_catalog() -> None:
                 route.stops_text = "\n".join(names)
                 if len(names) >= 2:
                     route.title = f"{names[0]} → {names[-1]}"
+            blob = " ".join(filter(None, [route.schedule_text, route.notes, route.description]))
+            if _TRANSPORT_INTERVAL_RE.search(blob):
+                continue
             times = _parse_route_times(route)
             already_trips = False
             if route.times_json:
@@ -319,6 +374,80 @@ def _migrate_news_columns() -> None:
         for name, sql_type in NEWS_COLUMNS.items():
             if name not in existing:
                 conn.execute(text(f"ALTER TABLE district_news ADD COLUMN {name} {sql_type}"))
+        conn.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_district_news_vk_post_id ON district_news (vk_post_id)"))
+
+
+def _backfill_news_audience() -> None:
+    inspector = inspect(engine)
+    if "district_news" not in inspector.get_table_names():
+        return
+    existing = {col["name"] for col in inspector.get_columns("district_news")}
+    if "audience" not in existing:
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                UPDATE district_news
+                SET audience = 'sakmarsky'
+                WHERE source = 'vk'
+                   OR IFNULL(source_url, '') LIKE '%sakmaraadm%'
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                UPDATE district_news
+                SET audience = 'oblast'
+                WHERE source = 'vk_oblast'
+                   OR IFNULL(source_url, '') LIKE '%orenburg_vk%'
+                   OR IFNULL(source_url, '') LIKE '%orskdotru%'
+                   OR IFNULL(source_url, '') LIKE '%ntskdotru%'
+                   OR IFNULL(source_url, '') LIKE '%buzuluk_town%'
+                   OR IFNULL(source_url, '') LIKE '%pb056%'
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                UPDATE district_news
+                SET audience = 'local'
+                WHERE settlement_id IS NOT NULL
+                  AND IFNULL(source, '') NOT IN ('vk', 'vk_oblast')
+                """
+            )
+        )
+        conn.execute(
+            text(
+                """
+                UPDATE district_news
+                SET audience = 'oblast'
+                WHERE audience IS NULL OR audience = ''
+                """
+            )
+        )
+
+
+def _backfill_news_images() -> None:
+    inspector = inspect(engine)
+    if "news_images" not in inspector.get_table_names() or "district_news" not in inspector.get_table_names():
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                """
+                INSERT INTO news_images (news_id, path, sort_order)
+                SELECT n.id, n.cover_path, 0
+                FROM district_news n
+                WHERE n.cover_path IS NOT NULL AND n.cover_path != ''
+                  AND NOT EXISTS (
+                    SELECT 1 FROM news_images i WHERE i.news_id = n.id
+                  )
+                """
+            )
+        )
 
 
 def _migrate_alert_columns() -> None:
@@ -330,6 +459,28 @@ def _migrate_alert_columns() -> None:
         for name, sql_type in ALERT_COLUMNS.items():
             if name not in existing:
                 conn.execute(text(f"ALTER TABLE district_alerts ADD COLUMN {name} {sql_type}"))
+
+
+def _migrate_guest_push_columns() -> None:
+    inspector = inspect(engine)
+    if "guest_push_devices" not in inspector.get_table_names():
+        return
+    existing = {col["name"] for col in inspector.get_columns("guest_push_devices")}
+    with engine.begin() as conn:
+        for name, sql_type in GUEST_PUSH_COLUMNS.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE guest_push_devices ADD COLUMN {name} {sql_type}"))
+
+
+def _migrate_notification_columns() -> None:
+    inspector = inspect(engine)
+    if "notifications" not in inspector.get_table_names():
+        return
+    existing = {col["name"] for col in inspector.get_columns("notifications")}
+    with engine.begin() as conn:
+        for name, sql_type in NOTIFICATION_COLUMNS.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE notifications ADD COLUMN {name} {sql_type}"))
 
 
 def _migrate_message_columns() -> None:
@@ -424,7 +575,34 @@ def _migrate_settlement_columns() -> None:
                 conn.execute(text(f"ALTER TABLE settlements ADD COLUMN {name} {sql_type}"))
 
 
+def _migrate_client_error_columns() -> None:
+    inspector = inspect(engine)
+    if "client_error_logs" not in inspector.get_table_names():
+        return
+    existing = {col["name"] for col in inspector.get_columns("client_error_logs")}
+    with engine.begin() as conn:
+        for name, sql_type in CLIENT_ERROR_COLUMNS.items():
+            if name not in existing:
+                conn.execute(text(f"ALTER TABLE client_error_logs ADD COLUMN {name} {sql_type}"))
+
+
+def _backfill_apk_downloads() -> None:
+    from app.core.database import SessionLocal
+    from app.services.apk_stats import backfill_from_nginx
+
+    db = SessionLocal()
+    try:
+        n = backfill_from_nginx(db)
+        if n:
+            print(f"apk_downloads backfill {n}")
+    except Exception:
+        db.rollback()
+    finally:
+        db.close()
+
+
 def seed_db(session: Session) -> None:
+    coords_map = _settlement_coords()
     existing = session.execute(select(Settlement).limit(1)).scalar_one_or_none()
     if existing is None:
         for name, stype, council, display, is_district, sort_order in SETTLEMENTS:
@@ -436,14 +614,35 @@ def seed_db(session: Session) -> None:
                     display_name=display,
                     is_district=is_district,
                     sort_order=sort_order,
-                    lat=(SETTLEMENT_COORDS.get(display) or (None, None))[0],
-                    lon=(SETTLEMENT_COORDS.get(display) or (None, None))[1],
+                    lat=(coords_map.get(display) or (None, None))[0],
+                    lon=(coords_map.get(display) or (None, None))[1],
                 )
             )
         session.flush()
 
+    known = {row.display_name for row in session.execute(select(Settlement)).scalars()}
+    for item in _oblast_settlements():
+        display = (item.get("display_name") or "").strip()
+        name = (item.get("name") or "").strip()
+        if not display or not name or display in known:
+            continue
+        session.add(
+            Settlement(
+                name=name[:120],
+                settlement_type=(item.get("type") or "село")[:40],
+                council=(item.get("council") or None),
+                display_name=display[:180],
+                is_district=False,
+                sort_order=int(item.get("sort_order") or 1000),
+                lat=item.get("lat"),
+                lon=item.get("lon"),
+            )
+        )
+        known.add(display)
+    session.flush()
+
     for row in session.execute(select(Settlement)).scalars():
-        coords = SETTLEMENT_COORDS.get(row.display_name)
+        coords = coords_map.get(row.display_name)
         if coords and (row.lat is None or row.lon is None):
             row.lat, row.lon = coords
 
@@ -466,6 +665,15 @@ def seed_db(session: Session) -> None:
                 notes="Установите обновление, чтобы получить новые функции Рядом56.",
             )
         )
+
+    for slug, title, note in (
+        ("otdam", "Отдам даром Оренбург", "https://vk.ru/otdamdaromorenburg"),
+        ("orenburg", "Типичный Оренбург", "https://vk.ru/orenburg"),
+        ("dtp", "Оренбург ДТП ЧП", "https://vk.ru/club153615306"),
+        ("klub", "Оренбург клуб", "https://vk.ru/orenburg_klub"),
+    ):
+        if session.execute(select(PromoLink.id).where(PromoLink.slug == slug)).scalar_one_or_none() is None:
+            session.add(PromoLink(slug=slug, title=title, note=note, is_active=True))
 
     admin = session.execute(select(User).where(User.email == settings.admin_email)).scalar_one_or_none()
     if admin is None:

@@ -13,6 +13,7 @@ class UserRole(str, Enum):
 
 class ListingCategory(str, Enum):
     goods = "goods"
+    wanted = "wanted"
     services = "services"
     jobs = "jobs"
     rent = "rent"
@@ -237,6 +238,7 @@ class ListingOut(BaseModel):
     distance_km: float | None = None
     lifetime_days: int = 30
     expires_at: datetime | None = None
+    ask_if_relevant: bool = False
 
     class Config:
         from_attributes = True
@@ -446,6 +448,36 @@ class AdminPushOut(BaseModel):
     notification_id: int
     devices: int = 0
     message: str
+
+
+class BroadcastIn(BaseModel):
+    title: str = Field(default="", max_length=80)
+    body: str = Field(min_length=3, max_length=400)
+    kind: str = Field(default="info", max_length=20)
+    audience: str = Field(default="all", pattern=r"^(all|users|guests)$")
+
+
+class BroadcastPreviewOut(BaseModel):
+    people: int
+    devices: int
+    user_devices: int = 0
+    guest_devices: int = 0
+
+
+class BroadcastOut(BaseModel):
+    ok: bool = True
+    people: int
+    devices: int
+    guest_devices: int = 0
+    sent: int = 0
+    message: str
+
+
+class GuestPushIn(BaseModel):
+    device_id: str = Field(min_length=16, max_length=64, pattern=r"^[A-Za-z0-9_-]+$")
+    fcm_token: str = Field(min_length=20, max_length=512)
+    app_version: str | None = Field(default=None, max_length=40)
+    settlement_id: int | None = None
 
 
 class AdminUserCreate(BaseModel):
@@ -662,6 +694,12 @@ class TransportPageOut(BaseModel):
     offset: int
 
 
+class NewsPhotoOut(BaseModel):
+    id: int
+    url: str
+    sort_order: int
+
+
 class NewsCreate(BaseModel):
     title: str = Field(min_length=2, max_length=200)
     body: str = Field(min_length=3, max_length=12000)
@@ -685,16 +723,52 @@ class NewsOut(BaseModel):
     title: str
     body: str
     cover_url: str | None = None
+    photos: list[NewsPhotoOut] = []
     settlement_id: int | None
     settlement_name: str | None = None
     is_published: bool
     is_pinned: bool = False
     published_at: datetime | None
+    source: str | None = None
+    source_url: str | None = None
+    audience: str = "oblast"
     created_at: datetime
     updated_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class SearchOut(BaseModel):
+    listings: list[ListingOut] = []
+    places: list[DirectoryOut] = []
+    news: list[NewsOut] = []
+    rides: list["RideOut"] = []
+
+
+class VkNewsRunOut(BaseModel):
+    id: int
+    started_at: datetime
+    finished_at: datetime | None
+    status: str
+    source: str
+    fetched: int
+    created: int
+    skipped: int
+    photos: int
+    details: str | None
+    error: str | None
+    triggered_by: str
+
+    class Config:
+        from_attributes = True
+
+
+class VkNewsRunPageOut(BaseModel):
+    items: list[VkNewsRunOut]
+    total: int
+    limit: int
+    offset: int
 
 
 class NewsPageOut(BaseModel):
@@ -711,6 +785,7 @@ class AlertCreate(BaseModel):
     is_active: bool = True
     starts_at: datetime | None = None
     ends_at: datetime | None = None
+    settlement_ids: list[int] = Field(default_factory=list)
 
 
 class AlertUpdate(BaseModel):
@@ -720,6 +795,7 @@ class AlertUpdate(BaseModel):
     is_active: bool | None = None
     starts_at: datetime | None = None
     ends_at: datetime | None = None
+    settlement_ids: list[int] | None = None
 
 
 class AlertOut(BaseModel):
@@ -732,6 +808,8 @@ class AlertOut(BaseModel):
     ends_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    settlement_ids: list[int] = Field(default_factory=list)
+    settlement_names: list[str] = Field(default_factory=list)
 
     class Config:
         from_attributes = True
@@ -754,6 +832,7 @@ class ListingMessageOut(BaseModel):
     is_mine: bool = False
     kind: str = "text"
     call_id: int | None = None
+    image_url: str | None = None
 
 
 class ConversationOut(BaseModel):
@@ -796,6 +875,7 @@ class AdminChatMessageOut(BaseModel):
     flag_reasons: list[str] = []
     kind: str = "text"
     is_read: bool = False
+    image_url: str | None = None
 
 
 class AuthorReportOut(BaseModel):
@@ -826,6 +906,7 @@ class StatsOut(BaseModel):
     events_total: int = 0
     events_upcoming: int = 0
     transport_routes: int = 0
+    rides_open: int = 0
     news_total: int = 0
     active_alerts: int = 0
     top_events: list[dict] = []
@@ -848,6 +929,11 @@ class StatsOut(BaseModel):
     online_calls: int = 0
     site_today: int = 0
     app_guests_today: int = 0
+    promo_visits_today: int = 0
+    promo_downloads_today: int = 0
+    apk_downloads_total: int = 0
+    apk_downloads_unique: int = 0
+    apk_downloads_today: int = 0
 
 
 class AdminAlertsOut(BaseModel):
@@ -855,6 +941,7 @@ class AdminAlertsOut(BaseModel):
     pending_over_24h: int
     open_reports: int
     open_contacts: int = 0
+    unread_client_errors: int = 0
 
 
 class BlacklistCreate(BaseModel):
@@ -912,6 +999,20 @@ class BackupListOut(BaseModel):
     data_dir_mb: float = 0
 
 
+class HostMetricsOut(BaseModel):
+    cpu_percent: float = 0
+    cpu_count: int = 1
+    ram_used_mb: int = 0
+    ram_total_mb: int = 0
+    ram_percent: float = 0
+    disk_used_bytes: int = 0
+    disk_total_bytes: int = 0
+    disk_percent: float = 0
+    cpu_warn: bool = False
+    ram_warn: bool = False
+    disk_warn: bool = False
+
+
 class ListingPinIn(BaseModel):
     pinned: bool = True
 
@@ -922,11 +1023,96 @@ class NotificationOut(BaseModel):
     title: str
     body: str | None
     listing_id: int | None
+    ride_id: int | None = None
     is_read: bool
     created_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class RideCreate(BaseModel):
+    kind: str = Field(pattern="^(drive|need)$")
+    from_settlement_id: int
+    to_settlement_id: int
+    depart_at: datetime
+    seats: int = Field(default=1, ge=1, le=8)
+    note: str | None = Field(default=None, max_length=400)
+    contact_phone: str | None = Field(default=None, max_length=32)
+
+
+class RideUpdate(BaseModel):
+    depart_at: datetime | None = None
+    seats: int | None = Field(default=None, ge=1, le=8)
+    note: str | None = Field(default=None, max_length=400)
+    contact_phone: str | None = Field(default=None, max_length=32)
+
+
+class RideCloseIn(BaseModel):
+    reason: str = Field(pattern="^(full|cancelled|gone|other)$")
+
+
+class RideOut(BaseModel):
+    id: int
+    kind: str
+    from_settlement_id: int
+    to_settlement_id: int
+    from_name: str
+    to_name: str
+    title: str
+    depart_at: datetime
+    seats: int
+    note: str | None = None
+    status: str
+    close_reason: str | None = None
+    author_id: int
+    author_name: str | None = None
+    author_avatar_url: str | None = None
+    contact_phone: str | None = None
+    phone_hidden: bool = False
+    is_mine: bool = False
+    created_at: datetime
+
+
+class RidePageOut(BaseModel):
+    items: list[RideOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class RideMessageIn(BaseModel):
+    body: str = Field(min_length=1, max_length=2000)
+    peer_id: int | None = None
+
+
+class RideMessageOut(BaseModel):
+    id: int
+    ride_id: int
+    sender_id: int
+    sender_name: str | None = None
+    peer_id: int | None = None
+    body: str
+    is_read: bool
+    created_at: datetime
+    is_mine: bool = False
+
+
+class RideConversationOut(BaseModel):
+    ride_id: int
+    peer_id: int
+    title: str
+    ride_status: str
+    peer_name: str | None = None
+    last_message: str | None = None
+    last_message_at: datetime | None = None
+    unread_count: int = 0
+    is_driver: bool = False
+
+
+class RideReportIn(BaseModel):
+    reason: str = Field(pattern="^(spam|fraud|other)$")
+    note: str | None = Field(default=None, max_length=500)
 
 
 class AppUpdateOut(BaseModel):
@@ -1013,9 +1199,14 @@ class ClientErrorOut(BaseModel):
     device_model: str | None = None
     device_os: str | None = None
     client_ip: str | None = None
+    is_read: bool = False
 
     class Config:
         from_attributes = True
+
+
+class ClientErrorPatch(BaseModel):
+    is_read: bool
 
 
 class ClientErrorPageOut(BaseModel):
@@ -1023,3 +1214,38 @@ class ClientErrorPageOut(BaseModel):
     total: int
     limit: int
     offset: int
+    unread_count: int = 0
+
+
+class PromoLinkCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=120)
+    slug: str = Field(min_length=2, max_length=32, pattern=r"^[a-z0-9][a-z0-9_-]*$")
+    note: str | None = Field(default=None, max_length=255)
+
+
+class PromoLinkPatch(BaseModel):
+    title: str | None = Field(default=None, min_length=2, max_length=120)
+    note: str | None = Field(default=None, max_length=255)
+    is_active: bool | None = None
+
+
+class PromoLinkOut(BaseModel):
+    id: int
+    slug: str
+    title: str
+    note: str | None = None
+    is_active: bool = True
+    url: str
+    created_at: datetime
+    visits: int = 0
+    visits_unique: int = 0
+    visits_today: int = 0
+    downloads: int = 0
+    downloads_unique: int = 0
+    downloads_today: int = 0
+
+    class Config:
+        from_attributes = True
+
+
+SearchOut.model_rebuild()

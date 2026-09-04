@@ -11,6 +11,7 @@ import '../state/app_state.dart';
 import '../time_format.dart';
 import '../ui_helpers.dart';
 import 'listing_chat_screen.dart';
+import 'ride_chat_screen.dart';
 
 class ChatsTab extends StatefulWidget {
   const ChatsTab({super.key});
@@ -163,7 +164,7 @@ class _ChatsTabState extends State<ChatsTab> {
                           child: emptyState(
                             context: context,
                             title: 'Пока нет чатов',
-                            subtitle: 'Напишите автору из карточки объявления — переписка появится здесь',
+                            subtitle: 'Напишите из карточки объявления или попутки — переписка появится здесь',
                             icon: Icons.forum_outlined,
                             actionLabel: 'Обновить',
                             onAction: _load,
@@ -179,10 +180,11 @@ class _ChatsTabState extends State<ChatsTab> {
                         final item = items[i] as Map<String, dynamic>;
                         final unread = item['unread_count'] as int? ?? 0;
                         final peer = item['peer_name']?.toString();
-                        final title = item['listing_title']?.toString() ?? 'Объявление';
+                        final rideId = item['ride_id'] as int?;
+                        final title = item['listing_title']?.toString() ?? item['title']?.toString() ?? (rideId != null ? 'Попутка' : 'Объявление');
                         final last = item['last_message']?.toString() ?? '';
                         final lastKind = item['last_kind']?.toString() ?? 'text';
-                        final isSeller = item['is_seller'] == true;
+                        final isSeller = item['is_seller'] == true || item['is_driver'] == true;
                         final peerId = item['peer_id'] as int?;
                         return Material(
                           color: Theme.of(context).cardTheme.color,
@@ -190,17 +192,31 @@ class _ChatsTabState extends State<ChatsTab> {
                           child: InkWell(
                             borderRadius: BorderRadius.circular(16),
                             onTap: () async {
-                              await Navigator.push(
-                                context,
-                                MaterialPageRoute(
-                                  builder: (_) => ListingChatScreen(
-                                    listingId: item['listing_id'] as int,
-                                    listingTitle: title,
-                                    peerId: peerId,
-                                    peerName: peer,
+                              if (rideId != null) {
+                                await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => RideChatScreen(
+                                      rideId: rideId,
+                                      title: title,
+                                      peerId: peerId,
+                                      peerName: peer,
+                                    ),
                                   ),
-                                ),
-                              );
+                                );
+                              } else {
+                                await Navigator.push(
+                                  context,
+                                  MaterialPageRoute(
+                                    builder: (_) => ListingChatScreen(
+                                      listingId: item['listing_id'] as int,
+                                      listingTitle: title,
+                                      peerId: peerId,
+                                      peerName: peer,
+                                    ),
+                                  ),
+                                );
+                              }
                               if (mounted) _load();
                             },
                             child: Container(
@@ -215,7 +231,9 @@ class _ChatsTabState extends State<ChatsTab> {
                                   CircleAvatar(
                                     backgroundColor: scheme.primaryContainer,
                                     child: Icon(
-                                      isSeller ? Icons.storefront : Icons.person_outline,
+                                      rideId != null
+                                          ? Icons.directions_car_outlined
+                                          : (isSeller ? Icons.storefront : Icons.person_outline),
                                       color: scheme.onPrimaryContainer,
                                     ),
                                   ),

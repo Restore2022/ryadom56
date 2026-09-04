@@ -199,6 +199,7 @@ export type Listing = {
   settlement_name?: string | null;
   author_id?: number;
   author_name?: string | null;
+  author_badge?: string | null;
   contact_phone?: string | null;
   moderation_note?: string | null;
   close_reason?: string | null;
@@ -280,6 +281,7 @@ export type ClientErrorLog = {
   device_model?: string | null;
   device_os?: string | null;
   client_ip?: string | null;
+  is_read?: boolean;
 };
 
 export type AdminConversation = {
@@ -334,6 +336,25 @@ export type Settlement = {
   name: string;
 };
 
+export type Ride = {
+  id: number;
+  kind: string;
+  from_settlement_id: number;
+  to_settlement_id: number;
+  from_name: string;
+  to_name: string;
+  title: string;
+  depart_at: string;
+  seats: number;
+  note?: string | null;
+  status: string;
+  close_reason?: string | null;
+  author_id: number;
+  author_name?: string | null;
+  contact_phone?: string | null;
+  created_at: string;
+};
+
 export type Stats = {
   users: number;
   listings_pending: number;
@@ -350,6 +371,7 @@ export type Stats = {
   events_total?: number;
   events_upcoming?: number;
   transport_routes?: number;
+  rides_open?: number;
   news_total?: number;
   active_alerts?: number;
   top_events?: { id: number; title: string; views: number; favorites?: number }[];
@@ -371,6 +393,11 @@ export type Stats = {
   online_calls?: number;
   site_today?: number;
   app_guests_today?: number;
+  promo_visits_today?: number;
+  promo_downloads_today?: number;
+  apk_downloads_total?: number;
+  apk_downloads_unique?: number;
+  apk_downloads_today?: number;
   by_settlement?: {
     settlement_id?: number | null;
     settlement_name: string;
@@ -442,18 +469,43 @@ export type TransportRoute = {
   updated_at: string;
 };
 
+export type NewsPhoto = {
+  id: number;
+  url: string;
+  sort_order: number;
+};
+
 export type NewsItem = {
   id: number;
   title: string;
   body: string;
   cover_url?: string | null;
+  photos?: NewsPhoto[];
   settlement_id?: number | null;
   settlement_name?: string | null;
   is_published: boolean;
   is_pinned?: boolean;
   published_at?: string | null;
+  source?: string | null;
+  source_url?: string | null;
+  audience?: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type VkNewsRun = {
+  id: number;
+  started_at: string;
+  finished_at?: string | null;
+  status: string;
+  source: string;
+  fetched: number;
+  created: number;
+  skipped: number;
+  photos: number;
+  details?: string | null;
+  error?: string | null;
+  triggered_by: string;
 };
 
 export type DistrictAlert = {
@@ -466,6 +518,8 @@ export type DistrictAlert = {
   ends_at?: string | null;
   created_at: string;
   updated_at: string;
+  settlement_ids?: number[];
+  settlement_names?: string[];
 };
 
 export type AdminAlerts = {
@@ -506,6 +560,20 @@ export type BackupList = {
   data_dir_mb?: number;
 };
 
+export type HostMetrics = {
+  cpu_percent: number;
+  cpu_count: number;
+  ram_used_mb: number;
+  ram_total_mb: number;
+  ram_percent: number;
+  disk_used_bytes: number;
+  disk_total_bytes: number;
+  disk_percent: number;
+  cpu_warn: boolean;
+  ram_warn: boolean;
+  disk_warn: boolean;
+};
+
 export type LegalDocument = {
   slug: string;
   title: string;
@@ -542,4 +610,20 @@ export type AppUpdateInfo = {
   published_at?: string | null;
   apk_filename?: string | null;
   apk_size?: number | null;
+};
+
+export type PromoLink = {
+  id: number;
+  slug: string;
+  title: string;
+  note?: string | null;
+  is_active: boolean;
+  url: string;
+  created_at: string;
+  visits: number;
+  visits_unique: number;
+  visits_today: number;
+  downloads: number;
+  downloads_unique: number;
+  downloads_today: number;
 };

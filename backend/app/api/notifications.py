@@ -9,8 +9,8 @@ from app.schemas import NotificationOut
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
 
-# Сообщения чата и пропущенные звонки живут во вкладке «Чаты», не в колокольчике.
-_CHAT_INBOX_TYPES = ("listing_message", "missed_call")
+# Сообщения чата, пропущенные звонки и жалобы на свои объявления — не в колокольчике.
+_CHAT_INBOX_TYPES = ("listing_message", "missed_call", "listing_reported", "ride_message")
 
 
 @router.get("", response_model=list[NotificationOut])

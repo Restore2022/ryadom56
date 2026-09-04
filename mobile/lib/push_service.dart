@@ -95,7 +95,7 @@ class PushService {
           onForegroundData?.call(data);
           return;
         }
-        if (type == 'listing_message') {
+        if (type == 'listing_message' || type == 'ride_message') {
           onForegroundData?.call(data);
           return;
         }

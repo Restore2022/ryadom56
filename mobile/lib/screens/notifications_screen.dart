@@ -9,6 +9,7 @@ import '../time_format.dart';
 import '../ui_helpers.dart';
 import 'home_shell.dart';
 import 'listing_detail_screen.dart';
+import 'ride_detail_screen.dart';
 
 class NotificationsScreen extends StatefulWidget {
   const NotificationsScreen({super.key});
@@ -60,7 +61,18 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
       } catch (_) {}
     }
     final listingId = item['listing_id'] as int?;
-    if (listingId != null && mounted) {
+    final rideId = item['ride_id'] as int?;
+    if (rideId != null && mounted) {
+      try {
+        await context.read<AppState>().getRide(rideId);
+        if (!mounted) return;
+        await Navigator.push(context, fastRoute(RideDetailScreen(rideId: rideId)));
+      } on ApiException catch (e) {
+        if (mounted) showAppSnack(context, e.message, error: true);
+      } catch (e) {
+        if (mounted) showAppSnack(context, AppState.userFriendlyError(e), error: true);
+      }
+    } else if (listingId != null && mounted) {
       try {
         await context.read<AppState>().getListing(listingId);
         if (!mounted) return;
@@ -99,7 +111,7 @@ class _NotificationsScreenState extends State<NotificationsScreen> {
                   ? emptyState(
                       context: context,
                       title: 'Пока нет уведомлений',
-                      subtitle: 'Здесь появятся ответы по объявлениям',
+                      subtitle: 'Здесь появятся ответы по объявлениям и попуткам',
                       icon: Icons.notifications_none,
                     )
                   : RefreshIndicator(

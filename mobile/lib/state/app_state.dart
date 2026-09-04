@@ -203,6 +203,9 @@ class AppState extends ChangeNotifier {
   static const _newsCachePrefix = 'cache_news_json';
   static const _transportCachePrefix = 'cache_transport_';
   static const _presenceClientKey = 'presence_client_id';
+  static const _guestPushTokenKey = 'guest_push_token_sent';
+  static const _guestPushAtKey = 'guest_push_at_ms';
+  static const _guestPushSidKey = 'guest_push_settlement_id';
 
   /// PIN после входа можно пропустить и поставить позже в профиле.
   bool get needsPinSetup => user != null && !hasPin && !pinDeferred;
@@ -276,6 +279,9 @@ class AppState extends ChangeNotifier {
       booting = false;
       notifyListeners();
       _startPresence();
+      if (user == null) {
+        unawaited(reportGuestPush(force: true));
+      }
     }
   }
 
@@ -293,6 +299,9 @@ class AppState extends ChangeNotifier {
         auth: user != null,
         body: {'source': 'app', 'client_id': id},
       );
+      if (user == null) {
+        await reportGuestPush();
+      }
     } catch (_) {}
   }
 
@@ -442,6 +451,41 @@ class AppState extends ChangeNotifier {
     } catch (_) {
       // Не блокируем вход, если устройство не отправилось.
     }
+  }
+
+  Future<void> reportGuestPush({bool force = false}) async {
+    if (user != null) return;
+    try {
+      final token = await PushService.instance.ensureToken();
+      if (token == null || token.length < 20) return;
+      final prefs = await SharedPreferences.getInstance();
+      final lastToken = prefs.getString(_guestPushTokenKey);
+      final lastAt = prefs.getInt(_guestPushAtKey) ?? 0;
+      final lastSid = prefs.getInt(_guestPushSidKey);
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (!force && lastToken == token && lastSid == preferredSettlementId && now - lastAt < 6 * 3600 * 1000) {
+        return;
+      }
+      final package = await PackageInfo.fromPlatform();
+      final sid = preferredSettlementId;
+      await api.request(
+        '/push/guest',
+        method: 'POST',
+        body: {
+          'device_id': await _ensureDeviceId(),
+          'fcm_token': token,
+          'app_version': '${package.version}+${package.buildNumber}',
+          if (sid != null) 'settlement_id': sid,
+        },
+      );
+      await prefs.setString(_guestPushTokenKey, token);
+      await prefs.setInt(_guestPushAtKey, now);
+      if (sid != null) {
+        await prefs.setInt(_guestPushSidKey, sid);
+      } else {
+        await prefs.remove(_guestPushSidKey);
+      }
+    } catch (_) {}
   }
 
   Future<void> setDarkMode(bool value) async {
@@ -620,8 +664,13 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  int? get _alertSettlementId =>
+      (user?['settlement_id'] as num?)?.toInt() ?? preferredSettlementId ?? filterSettlementId;
+
   Future<Map<String, dynamic>?> loadActiveAlert() async {
-    final data = await api.request('/alerts/active');
+    final sid = _alertSettlementId;
+    final path = sid == null ? '/alerts/active' : '/alerts/active?settlement_id=$sid';
+    final data = await api.request(path);
     if (data == null) return null;
     if (data is Map) return Map<String, dynamic>.from(data);
     return null;
@@ -629,7 +678,9 @@ class AppState extends ChangeNotifier {
 
   Future<List<Map<String, dynamic>>> loadActiveAlerts({int limit = 5}) async {
     try {
-      final data = await api.request('/alerts/active/list?limit=$limit');
+      final sid = _alertSettlementId;
+      final extra = sid == null ? '' : '&settlement_id=$sid';
+      final data = await api.request('/alerts/active/list?limit=$limit$extra');
       if (data is List) {
         return data.whereType<Map>().map((e) => Map<String, dynamic>.from(e)).toList();
       }
@@ -902,6 +953,9 @@ class AppState extends ChangeNotifier {
       await prefs.setInt(_settlementPrefKey, settlementId);
     }
     notifyListeners();
+    if (user == null) {
+      unawaited(reportGuestPush(force: true));
+    }
   }
 
   Future<void> completeOnboarding({int? settlementId}) async {
@@ -978,7 +1032,14 @@ class AppState extends ChangeNotifier {
   }
 
   Future<List<dynamic>> loadConversations() async {
-    final rows = await api.request('/listings/conversations', auth: true) as List<dynamic>;
+    final listingRows = await api.request('/listings/conversations', auth: true) as List<dynamic>;
+    final rideRows = await loadRideConversations();
+    final rows = <dynamic>[...listingRows, ...rideRows];
+    rows.sort((a, b) {
+      final sa = a is Map ? '${a['last_message_at'] ?? ''}' : '';
+      final sb = b is Map ? '${b['last_message_at'] ?? ''}' : '';
+      return sb.compareTo(sa);
+    });
     var unread = 0;
     for (final row in rows) {
       if (row is Map && row['unread_count'] is int) {
@@ -989,6 +1050,109 @@ class AppState extends ChangeNotifier {
     unreadChats = unread;
     notifyListeners();
     return rows;
+  }
+
+  Future<({List<dynamic> items, int total})> loadRides({
+    int? settlementId,
+    int? fromId,
+    int? toId,
+    String? kind,
+    bool mine = false,
+    String? q,
+    int offset = 0,
+    int limit = 20,
+  }) async {
+    final params = <String, String>{
+      'limit': '$limit',
+      'offset': '$offset',
+    };
+    if (mine) {
+      params['mine'] = 'true';
+    } else {
+      if (settlementId != null) params['settlement_id'] = '$settlementId';
+      if (fromId != null) params['from_id'] = '$fromId';
+      if (toId != null) params['to_id'] = '$toId';
+      if (kind != null && kind.isNotEmpty) params['kind'] = kind;
+      if (q != null && q.trim().isNotEmpty) params['q'] = q.trim();
+    }
+    final qs = params.entries.map((e) => '${e.key}=${Uri.encodeQueryComponent(e.value)}').join('&');
+    final data = await api.request('/rides?$qs', auth: true);
+    return parsePage(data);
+  }
+
+  Future<Map<String, dynamic>> getRide(int id) async {
+    return await api.request('/rides/$id', auth: true) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> createRide({
+    required String kind,
+    required int fromSettlementId,
+    required int toSettlementId,
+    required DateTime departAt,
+    required int seats,
+    String? note,
+    String? contactPhone,
+  }) async {
+    return await api.request(
+      '/rides',
+      method: 'POST',
+      auth: true,
+      body: {
+        'kind': kind,
+        'from_settlement_id': fromSettlementId,
+        'to_settlement_id': toSettlementId,
+        'depart_at': departAt.toUtc().toIso8601String(),
+        'seats': seats,
+        if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
+        if (contactPhone != null && contactPhone.trim().isNotEmpty) 'contact_phone': contactPhone.trim(),
+      },
+    ) as Map<String, dynamic>;
+  }
+
+  Future<Map<String, dynamic>> closeRide(int id, {required String reason}) async {
+    return await api.request(
+      '/rides/$id/close',
+      method: 'POST',
+      auth: true,
+      body: {'reason': reason},
+    ) as Map<String, dynamic>;
+  }
+
+  Future<void> reportRide(int id, {required String reason, String? note}) async {
+    await api.request(
+      '/rides/$id/report',
+      method: 'POST',
+      auth: true,
+      body: {
+        'reason': reason,
+        if (note != null && note.trim().isNotEmpty) 'note': note.trim(),
+      },
+    );
+  }
+
+  Future<List<dynamic>> loadRideMessages(int rideId, {int? peerId}) async {
+    final qs = peerId != null ? '?peer_id=$peerId' : '';
+    return await api.request('/rides/$rideId/messages$qs', auth: true) as List<dynamic>;
+  }
+
+  Future<Map<String, dynamic>> sendRideMessage(int rideId, String body, {int? peerId}) async {
+    return await api.request(
+      '/rides/$rideId/messages',
+      method: 'POST',
+      auth: true,
+      body: {
+        'body': body,
+        if (peerId != null) 'peer_id': peerId,
+      },
+    ) as Map<String, dynamic>;
+  }
+
+  Future<List<dynamic>> loadRideConversations() async {
+    try {
+      return await api.request('/rides/conversations', auth: true) as List<dynamic>;
+    } catch (_) {
+      return [];
+    }
   }
 
   Future<void> refreshUnreadChats() async {

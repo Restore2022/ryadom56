@@ -15,9 +15,9 @@ if not PASS:
 REMOTE = "/opt/ryadom56"
 REMOTE_APK = f"{REMOTE}/backend/data/releases/ryadom56-latest.apk"
 LOCAL_APK = Path(__file__).resolve().parents[1] / "mobile" / "apk" / "app-release.apk"
-VERSION_NAME = "0.39.0"
-VERSION_CODE = 53
-APK_FILENAME = "ryadom56-0.39.0.apk"
+VERSION_NAME = "0.41.0"
+VERSION_CODE = 55
+APK_FILENAME = "ryadom56-0.41.0.apk"
 
 
 def run(c: paramiko.SSHClient, cmd: str, timeout: int = 120) -> str:
@@ -39,6 +39,13 @@ def main() -> None:
         raise SystemExit(f"Missing APK: {LOCAL_APK}")
     size = LOCAL_APK.stat().st_size
     print(f"Local APK: {LOCAL_APK} ({size} bytes)")
+    desk_apk = Path.home() / "Desktop" / "ryadom56-nedelya-vk-max" / "01-apk"
+    try:
+        desk_apk.mkdir(parents=True, exist_ok=True)
+        (desk_apk / APK_FILENAME).write_bytes(LOCAL_APK.read_bytes())
+        print("desktop copy", desk_apk / APK_FILENAME)
+    except OSError as exc:
+        print("desktop copy skip", exc)
 
     c = paramiko.SSHClient()
     c.set_missing_host_key_policy(paramiko.AutoAddPolicy())
@@ -57,7 +64,7 @@ def main() -> None:
     sftp.close()
     run(c, f"mv -f {tmp} {REMOTE_APK} && ls -la {REMOTE_APK} && chmod 644 {REMOTE_APK}")
 
-    notes = "Подача объявления в три шага: фото, что продаёте, цена и село. Первый вход — сразу лента. PIN можно поставить позже."
+    notes = "Добавили систему попутчиков."
     py = f"""# coding: utf-8
 from sqlalchemy import select
 from app.core.database import SessionLocal

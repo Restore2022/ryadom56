@@ -8,10 +8,12 @@ import '../listing_row.dart';
 import '../responsive.dart';
 import '../state/app_state.dart';
 import '../ui_helpers.dart';
+import '../ride_card.dart';
 import 'directory_detail_screen.dart';
 import 'home_shell.dart';
 import 'listing_detail_screen.dart';
 import 'news_list_screen.dart';
+import 'ride_detail_screen.dart';
 
 class SearchAllScreen extends StatefulWidget {
   const SearchAllScreen({super.key, this.initialQuery = ''});
@@ -31,6 +33,7 @@ class _SearchAllScreenState extends State<SearchAllScreen> {
   List<dynamic> listings = [];
   List<dynamic> places = [];
   List<dynamic> news = [];
+  List<dynamic> rides = [];
 
   @override
   void initState() {
@@ -62,6 +65,7 @@ class _SearchAllScreenState extends State<SearchAllScreen> {
         listings = [];
         places = [];
         news = [];
+        rides = [];
         error = null;
         lastQuery = '';
         loading = false;
@@ -84,6 +88,7 @@ class _SearchAllScreenState extends State<SearchAllScreen> {
         listings = (data['listings'] as List?) ?? [];
         places = (data['places'] as List?) ?? [];
         news = (data['news'] as List?) ?? [];
+        rides = (data['rides'] as List?) ?? [];
         loading = false;
       });
     } catch (e) {
@@ -95,7 +100,7 @@ class _SearchAllScreenState extends State<SearchAllScreen> {
     }
   }
 
-  bool get _empty => listings.isEmpty && places.isEmpty && news.isEmpty;
+  bool get _empty => listings.isEmpty && places.isEmpty && news.isEmpty && rides.isEmpty;
 
   @override
   Widget build(BuildContext context) {
@@ -116,7 +121,7 @@ class _SearchAllScreenState extends State<SearchAllScreen> {
               },
               onSubmitted: _run,
               decoration: InputDecoration(
-                hintText: 'велосипед, аптека, работа',
+                hintText: 'велосипед, попутка, аптека',
                 prefixIcon: const Icon(Icons.search),
                 suffixIcon: search.text.isEmpty
                     ? null
@@ -142,7 +147,7 @@ class _SearchAllScreenState extends State<SearchAllScreen> {
                             child: Padding(
                               padding: const EdgeInsets.all(28),
                               child: Text(
-                                'Одно поле: объявления, места и новости. Напишите, что ищете.',
+                                'Одно поле: объявления, попутки, места и новости. Напишите, что ищете.',
                                 textAlign: TextAlign.center,
                                 style: TextStyle(color: scheme.onSurfaceVariant, height: 1.4),
                               ),
@@ -173,6 +178,27 @@ class _SearchAllScreenState extends State<SearchAllScreen> {
                                               Navigator.push(
                                                 context,
                                                 fastRoute(ListingDetailScreen(listingId: id, preview: Map<String, dynamic>.from(raw))),
+                                              );
+                                            },
+                                          ),
+                                        ),
+                                  ],
+                                  if (rides.isNotEmpty) ...[
+                                    const SizedBox(height: 8),
+                                    _sectionTitle('Попутки', rides.length),
+                                    const SizedBox(height: 8),
+                                    for (final raw in rides)
+                                      if (raw is Map)
+                                        Padding(
+                                          padding: const EdgeInsets.only(bottom: 10),
+                                          child: RideCard(
+                                            item: Map<String, dynamic>.from(raw),
+                                            onTap: () {
+                                              final id = raw['id'] as int?;
+                                              if (id == null) return;
+                                              Navigator.push(
+                                                context,
+                                                fastRoute(RideDetailScreen(rideId: id, preview: Map<String, dynamic>.from(raw))),
                                               );
                                             },
                                           ),

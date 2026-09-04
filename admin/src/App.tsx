@@ -6,6 +6,7 @@ import type {
   AdminConversation,
   AuditLog,
   BackupList,
+  HostMetrics,
   ClientErrorLog,
   BlacklistEntry,
   DirectoryItem,
@@ -17,6 +18,7 @@ import type {
   Listing,
   ListingReport,
   NewsItem,
+  Ride,
   Settlement,
   SiteContact,
   Stats,
@@ -25,6 +27,8 @@ import type {
   User,
   UserReport,
   AppCall,
+  VkNewsRun,
+  PromoLink,
 } from './api';
 import './App.css';
 
@@ -62,6 +66,59 @@ function asItems<T>(data: T[] | { items?: T[] } | null | undefined): T[] {
   return data.items ?? [];
 }
 
+function WaitDots({ text = 'Загружаем' }: { text?: string }) {
+  return (
+    <span className="wait-line">
+      <span className="wait-dots" aria-hidden="true">
+        <i />
+        <i />
+        <i />
+      </span>
+      {text}
+    </span>
+  );
+}
+
+function WaitRow({ cols }: { cols: number }) {
+  return (
+    <tr>
+      <td colSpan={cols} className="empty">
+        <WaitDots />
+      </td>
+    </tr>
+  );
+}
+
+function CountValue({ value }: { value: number }) {
+  const [shown, setShown] = useState(0);
+  const fromRef = useRef(0);
+
+  useEffect(() => {
+    const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduce) {
+      setShown(value);
+      fromRef.current = value;
+      return;
+    }
+    const from = fromRef.current;
+    const to = value;
+    const start = performance.now();
+    const dur = Math.min(900, 280 + Math.abs(to - from) * 8);
+    let raf = 0;
+    const tick = (now: number) => {
+      const t = Math.min(1, (now - start) / dur);
+      const eased = 1 - (1 - t) * (1 - t);
+      setShown(Math.round(from + (to - from) * eased));
+      if (t < 1) raf = requestAnimationFrame(tick);
+      else fromRef.current = to;
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [value]);
+
+  return <>{shown}</>;
+}
+
 function canModerate(role: User['role']) {
   return role === 'admin' || role === 'moderator';
 }
@@ -95,6 +152,12 @@ function ToastHost({ message, onClose }: { message: string; onClose: () => void 
       </button>
     </div>
   );
+}
+
+function ListingThumb({ item }: { item: Listing }) {
+  const url = mediaUrl(item.images?.[0]?.url);
+  if (!url) return <div className="list-thumb is-empty" aria-hidden />;
+  return <img className="list-thumb" src={url} alt="" />;
 }
 
 function PhotoGallery({ images }: { images: { id: number; url: string }[] }) {
@@ -171,6 +234,7 @@ function PhotoGallery({ images }: { images: { id: number; url: string }[] }) {
 
 const CATEGORY_LABELS: Record<string, string> = {
   goods: 'Товары',
+  wanted: 'Куплю',
   services: 'Услуги',
   jobs: 'Работа',
   rent: 'Аренда',
@@ -189,7 +253,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   other: 'Другое',
 };
 
-const LISTING_CATEGORIES = ['goods', 'services', 'jobs', 'rent', 'free', 'lost_found'];
+const LISTING_CATEGORIES = ['goods', 'wanted', 'services', 'jobs', 'rent', 'free', 'lost_found'];
 const LISTING_PAGE_SIZE = 25;
 
 const ROLE_LABELS: Record<User['role'], string> = {
@@ -205,6 +269,7 @@ const BADGE_LABELS: Record<string, string> = {
   trusted: 'Надёжный',
   verified: 'Проверенный',
   caution: 'Осторожно',
+  feed: 'Для ленты',
 };
 
 const STATUS_CHIP: Record<string, string> = {
@@ -666,6 +731,7 @@ function Shell({
   const inbox = canSeeInbox(user.role);
   const [toast, setToast] = useState('');
   const [inboxNew, setInboxNew] = useState(0);
+  const [errorsNew, setErrorsNew] = useState(0);
 
   useEffect(() => {
     function onUnauthorized() {
@@ -689,7 +755,15 @@ function Shell({
   }, [onLogout]);
 
   useEffect(() => {
-    if (!inbox) return;
+    function onErrorsUnread(e: Event) {
+      setErrorsNew(Number((e as CustomEvent<number>).detail) || 0);
+    }
+    window.addEventListener('ryadom56:errors-unread', onErrorsUnread as EventListener);
+    return () => window.removeEventListener('ryadom56:errors-unread', onErrorsUnread as EventListener);
+  }, []);
+
+  useEffect(() => {
+    if (!inbox && !mod) return;
     let lastPending = -1;
     let stopped = false;
 
@@ -700,9 +774,11 @@ function Shell({
           pending_over_24h: number;
           open_reports: number;
           open_contacts?: number;
+          unread_client_errors?: number;
         }>('/admin/alerts');
         if (stopped) return;
         setInboxNew(alerts.open_contacts || 0);
+        if (mod) setErrorsNew(alerts.unread_client_errors || 0);
         if (lastPending >= 0 && alerts.pending > lastPending && 'Notification' in window) {
           if (Notification.permission === 'granted') {
             new Notification('Рядом56: новые объявления', {
@@ -725,7 +801,7 @@ function Shell({
       stopped = true;
       window.clearInterval(id);
     };
-  }, [inbox]);
+  }, [inbox, mod]);
 
   return (
     <div className="layout">
@@ -763,7 +839,7 @@ function Shell({
           </NavLink>
           {mod && (
             <NavLink to="/errors">
-              <span className="nav-ico">⚠</span> Сбои приложения
+              <span className="nav-ico">⚠</span> Сбои приложения{errorsNew > 0 ? ` (${errorsNew})` : ''}
             </NavLink>
           )}
           {directory && (
@@ -786,14 +862,34 @@ function Shell({
               <span className="nav-ico">→</span> Транспорт
             </NavLink>
           )}
+          {mod && (
+            <NavLink to="/rides">
+              <span className="nav-ico">→</span> Попутки
+            </NavLink>
+          )}
           {directory && (
             <NavLink to="/news">
               <span className="nav-ico">✉</span> Новости
             </NavLink>
           )}
           {directory && (
+            <NavLink to="/news-vk">
+              <span className="nav-ico">↓</span> Новости из ВК
+            </NavLink>
+          )}
+          {directory && (
+            <NavLink to="/broadcast">
+              <span className="nav-ico">◉</span> На телефоны
+            </NavLink>
+          )}
+          {directory && (
             <NavLink to="/alerts">
               <span className="nav-ico">⚡</span> Срочное
+            </NavLink>
+          )}
+          {canSeeInbox(user.role) && (
+            <NavLink to="/promo">
+              <span className="nav-ico">↗</span> Реклама
             </NavLink>
           )}
           {mod && (
@@ -870,11 +966,72 @@ function StatCard({
   const inner = (
     <>
       <div className="label">{label}</div>
-      <div className="value">{value}</div>
+      <div className="value">{typeof value === 'number' ? <CountValue value={value} /> : value}</div>
     </>
   );
   if (to) return <Link className={cls} to={to}>{inner}</Link>;
   return <div className={cls}>{inner}</div>;
+}
+
+function fmtPct(n: number) {
+  const rounded = Math.round(n * 10) / 10;
+  const text = Number.isInteger(rounded) ? String(rounded) : String(rounded).replace('.', ',');
+  return `${text}%`;
+}
+
+function coresWord(n: number) {
+  const n10 = n % 10;
+  const n100 = n % 100;
+  if (n100 >= 11 && n100 <= 14) return `${n} ядер`;
+  if (n10 === 1) return `${n} ядро`;
+  if (n10 >= 2 && n10 <= 4) return `${n} ядра`;
+  return `${n} ядер`;
+}
+
+function formatRam(usedMb: number, totalMb: number) {
+  const used = usedMb >= 1024 ? `${(usedMb / 1024).toFixed(1).replace('.', ',')} ГБ` : `${usedMb} МБ`;
+  let total: string;
+  if (totalMb >= 950) {
+    const gb = totalMb / 1024;
+    const shown = Math.abs(gb - Math.round(gb)) < 0.08 ? String(Math.round(gb)) : gb.toFixed(1).replace('.', ',');
+    total = `${shown} ГБ`;
+  } else {
+    total = `${totalMb} МБ`;
+  }
+  return `${used} / ${total}`;
+}
+
+function formatDisk(used: number, total: number) {
+  const gb = 1024 ** 3;
+  const usedGb = used / gb;
+  const totalGb = total / gb;
+  const usedStr = (usedGb >= 10 ? usedGb.toFixed(0) : usedGb.toFixed(1)).replace('.', ',');
+  const totalStr = (totalGb >= 10 ? totalGb.toFixed(0) : totalGb.toFixed(1)).replace('.', ',');
+  return `${usedStr} / ${totalStr} ГБ`;
+}
+
+function HostMeter({
+  label,
+  percent,
+  detail,
+  warn,
+}: {
+  label: string;
+  percent: number;
+  detail: string;
+  warn: boolean;
+}) {
+  const width = Math.max(0, Math.min(100, percent));
+  return (
+    <div className={`host-meter${warn ? ' warn' : ''}`}>
+      <div className="label">{label}</div>
+      <div className="value">{fmtPct(percent)}</div>
+      <div className="detail">{detail}</div>
+      <div className="bar" aria-hidden="true">
+        <i style={{ width: `${width}%` }} />
+      </div>
+    </div>
+  );
 }
 
 function Dashboard({ role }: { role: User['role'] }) {
@@ -884,6 +1041,7 @@ function Dashboard({ role }: { role: User['role'] }) {
   const [stats, setStats] = useState<Stats | null>(null);
   const [statsError, setStatsError] = useState('');
   const [backups, setBackups] = useState<BackupList | null>(null);
+  const [host, setHost] = useState<HostMetrics | null>(null);
   const [backupBusy, setBackupBusy] = useState(false);
   const [snapshotBusy, setSnapshotBusy] = useState(false);
 
@@ -904,7 +1062,20 @@ function Dashboard({ role }: { role: User['role'] }) {
         .then(setStats)
         .catch(() => {});
     }, 30000);
-    return () => window.clearInterval(tick);
+    if (!isAdmin) {
+      return () => window.clearInterval(tick);
+    }
+    const loadHost = () => {
+      api<HostMetrics>('/admin/host')
+        .then(setHost)
+        .catch(() => {});
+    };
+    loadHost();
+    const hostTick = window.setInterval(loadHost, 4000);
+    return () => {
+      window.clearInterval(tick);
+      window.clearInterval(hostTick);
+    };
   }, [isAdmin]);
 
   async function downloadLive() {
@@ -947,7 +1118,7 @@ function Dashboard({ role }: { role: User['role'] }) {
       <div className="page-head">
         <div>
           <h1>Сводка</h1>
-          <p>{statsError || 'Загрузка данных…'}</p>
+          <p>{statsError || <WaitDots text="Загружаем сводку" />}</p>
           {statsError ? (
             <button className="btn" type="button" onClick={() => loadStats()}>
               Повторить
@@ -966,9 +1137,43 @@ function Dashboard({ role }: { role: User['role'] }) {
       <div className="page-head compact">
         <div>
           <h1>Сводка</h1>
-          <p>Состояние сервиса Рядом56 прямо сейчас. Карточка открывает раздел. Онлайн обновляется каждые 30 секунд.</p>
+          <p>
+            Состояние сервиса Рядом56 прямо сейчас. Карточка открывает раздел. Онлайн обновляется каждые 30 секунд
+            {isAdmin ? ', нагрузка сервера — каждые 4 секунды' : ''}.
+          </p>
         </div>
       </div>
+      {isAdmin && (
+        <>
+          <h2 className="dash-kicker">Сервер</h2>
+          {host ? (
+            <div className="host-meters">
+              <HostMeter
+                label="Процессор"
+                percent={host.cpu_percent}
+                detail={coresWord(host.cpu_count)}
+                warn={host.cpu_warn}
+              />
+              <HostMeter
+                label="Память"
+                percent={host.ram_percent}
+                detail={formatRam(host.ram_used_mb, host.ram_total_mb)}
+                warn={host.ram_warn}
+              />
+              <HostMeter
+                label="Диск"
+                percent={host.disk_percent}
+                detail={formatDisk(host.disk_used_bytes, host.disk_total_bytes)}
+                warn={host.disk_warn}
+              />
+            </div>
+          ) : (
+            <p className="muted">
+              <WaitDots text="Смотрим нагрузку сервера" />
+            </p>
+          )}
+        </>
+      )}
       <h2 className="dash-kicker">Сейчас онлайн</h2>
       <div className="cards">
         <StatCard tone="brand" label="На сайте" value={stats.online_site ?? 0} />
@@ -986,6 +1191,17 @@ function Dashboard({ role }: { role: User['role'] }) {
         {isAdmin && <StatCard label="Заходили за 30 дней" value={stats.users_active_30d ?? 0} />}
         <StatCard tone="brand" label="Сайт сегодня" value={stats.site_today ?? 0} />
         <StatCard label="Гости приложения сегодня" value={stats.app_guests_today ?? 0} />
+        {isAdmin && (
+          <StatCard tone="brand" label="Скачали приложение" value={stats.apk_downloads_total ?? 0} />
+        )}
+        {isAdmin && (
+          <StatCard tone="ok" label="Скачали, уникальных" value={stats.apk_downloads_unique ?? 0} />
+        )}
+        {isAdmin && (
+          <StatCard label="Скачали сегодня" value={stats.apk_downloads_today ?? 0} />
+        )}
+        <StatCard to="/promo" tone="brand" label="С рекламы, зашли" value={stats.promo_visits_today ?? 0} />
+        <StatCard to="/promo" tone="ok" label="С рекламы, скачали" value={stats.promo_downloads_today ?? 0} />
       </div>
       <h2 className="dash-kicker">Сервис</h2>
       <div className="cards">
@@ -1019,6 +1235,7 @@ function Dashboard({ role }: { role: User['role'] }) {
         {directory && (
           <StatCard to="/events?upcoming=1" tone="ok" label="Скоро в афише" value={stats.events_upcoming ?? 0} />
         )}
+        {mod && <StatCard to="/rides" label="Попутки сейчас" value={stats.rides_open ?? 0} />}
         {directory && <StatCard to="/transport" label="Маршруты" value={stats.transport_routes ?? 0} />}
         {directory && (
           <StatCard to="/news" tone="brand" label="Новости" value={stats.news_total ?? 0} />
@@ -1197,6 +1414,7 @@ function ModerationPage() {
   const [query, setQuery] = useState('');
   const [serverQuery, setServerQuery] = useState(() => qParam || '');
   const [autoFlaggedOnly, setAutoFlaggedOnly] = useState(false);
+  const [authorKind, setAuthorKind] = useState<'all' | 'feed' | 'real'>('all');
   const [settlementId, setSettlementId] = useState<number | ''>('');
   const [error, setError] = useState('');
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -1207,6 +1425,10 @@ function ModerationPage() {
   const [bulkRejectNote, setBulkRejectNote] = useState('');
   const [moderationNote, setModerationNote] = useState('');
   const [listTotal, setListTotal] = useState(0);
+  const [listLoading, setListLoading] = useState(true);
+  const [focusId, setFocusId] = useState<number | null>(null);
+  const [wantNoteFocus, setWantNoteFocus] = useState(false);
+  const noteRef = useRef<HTMLTextAreaElement | null>(null);
 
   function patchModerationUrl(next: { status?: string | null; over24?: boolean; authorId?: string | null }) {
     const p = new URLSearchParams(searchParams);
@@ -1232,6 +1454,7 @@ function ModerationPage() {
   }
 
   async function load() {
+    setListLoading(true);
     try {
       const params = new URLSearchParams();
       if (closedOnly) {
@@ -1244,6 +1467,7 @@ function ModerationPage() {
       if (settlementId !== '') params.set('settlement_id', String(settlementId));
       if (authorIdParam) params.set('author_id', authorIdParam);
       if (over24Only) params.set('over24', '1');
+      if (authorKind === 'feed' || authorKind === 'real') params.set('author_kind', authorKind);
       if (filter === 'pending' || !filter) params.set('sort', 'sla');
       const qs = params.toString();
       const data = await api<Listing[] | { items: Listing[]; total?: number }>(`/listings/admin/all${qs ? `?${qs}` : ''}`);
@@ -1253,6 +1477,8 @@ function ModerationPage() {
       setChecked([]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setListLoading(false);
     }
   }
 
@@ -1287,7 +1513,7 @@ function ModerationPage() {
 
   useEffect(() => {
     load();
-  }, [filter, closedOnly, serverQuery, autoFlaggedOnly, settlementId, authorIdParam, over24Only]);
+  }, [filter, closedOnly, serverQuery, autoFlaggedOnly, settlementId, authorIdParam, over24Only, authorKind]);
 
   async function togglePin(item: Listing) {
     setBusyId(item.id);
@@ -1353,7 +1579,7 @@ function ModerationPage() {
 
   useEffect(() => {
     setPage(1);
-  }, [filter, closedOnly, serverQuery, autoFlaggedOnly, settlementId, category, query, authorIdParam, over24Only]);
+  }, [filter, closedOnly, serverQuery, autoFlaggedOnly, settlementId, category, query, authorIdParam, over24Only, authorKind]);
 
   useEffect(() => {
     if (page !== safePage) setPage(safePage);
@@ -1378,6 +1604,10 @@ function ModerationPage() {
         method: 'POST',
         body: JSON.stringify({ status, moderation_note: note }),
       });
+      const pendingNow = pageItems.filter((x) => needsModeration(x));
+      const idx = pendingNow.findIndex((x) => x.id === id);
+      const next = pendingNow[idx + 1] || pendingNow[idx - 1] || null;
+      setFocusId(next?.id ?? null);
       setSelected(null);
       setModerationNote('');
       await load();
@@ -1435,32 +1665,100 @@ function ModerationPage() {
   }
 
   const pendingChecked = checked.filter((id) => items.find((x) => x.id === id && needsModeration(x)));
+  const pagePendingIds = pageItems.filter(needsModeration).map((x) => x.id);
+  const allPendingIds = visible.filter(needsModeration).map((x) => x.id);
+  const pageAllChecked = pagePendingIds.length > 0 && pagePendingIds.every((id) => checked.includes(id));
+  const pageSomeChecked = pagePendingIds.some((id) => checked.includes(id));
+  const headerCheckRef = useRef<HTMLInputElement | null>(null);
   const over24 = items.filter((i) => needsModeration(i) && hoursWaiting(i.created_at) >= 24).length;
 
   useEffect(() => {
+    if (headerCheckRef.current) {
+      headerCheckRef.current.indeterminate = pageSomeChecked && !pageAllChecked;
+    }
+  }, [pageSomeChecked, pageAllChecked]);
+
+  function togglePageAll() {
+    setChecked((prev) => {
+      if (pageAllChecked) return prev.filter((id) => !pagePendingIds.includes(id));
+      return [...new Set([...prev, ...pagePendingIds])];
+    });
+  }
+
+  useEffect(() => {
+    const pending = pageItems.filter(needsModeration);
+    if (!pending.length) return;
+    if (focusId != null && pending.some((x) => x.id === focusId)) return;
+    setFocusId(pending[0].id);
+  }, [pageItems, focusId]);
+
+  useEffect(() => {
+    if (focusId == null) return;
+    document.querySelector('.moderation-page tr.is-focus')?.scrollIntoView({ block: 'nearest' });
+  }, [focusId]);
+
+  useEffect(() => {
+    if (!wantNoteFocus) return;
+    noteRef.current?.focus();
+    setWantNoteFocus(false);
+  }, [selected, wantNoteFocus]);
+
+  useEffect(() => {
+    function typingInField(el: EventTarget | null) {
+      const node = el as HTMLElement | null;
+      const tag = node?.tagName?.toLowerCase();
+      return tag === 'input' || tag === 'textarea' || tag === 'select' || Boolean(node?.isContentEditable);
+    }
     function onKey(e: KeyboardEvent) {
-      const tag = (e.target as HTMLElement | null)?.tagName?.toLowerCase();
-      if (tag === 'input' || tag === 'textarea' || tag === 'select' || (e.target as HTMLElement)?.isContentEditable) {
+      if (typingInField(e.target)) return;
+      const pending = pageItems.filter(needsModeration);
+      const focused = pending.find((x) => x.id === focusId) || pending[0];
+      const target = selected && needsModeration(selected) ? selected : focused;
+      if (e.key === 'Escape' && selected) {
+        e.preventDefault();
+        closeModal();
         return;
       }
-      if (!selected || !needsModeration(selected) || busyId != null) return;
-      if (e.key === 'a' || e.key === 'A' || e.key === 'ф' || e.key === 'Ф') {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        if (!pending.length) return;
         e.preventDefault();
-        void moderate(selected.id, 'approved');
+        const idx = Math.max(0, pending.findIndex((x) => x.id === (focusId ?? pending[0].id)));
+        const next = pending[Math.min(pending.length - 1, Math.max(0, idx + (e.key === 'ArrowDown' ? 1 : -1)))];
+        setFocusId(next.id);
+        if (selected) openListing(next);
+        return;
+      }
+      if (e.key === 'Enter' && focused && !selected) {
+        e.preventDefault();
+        openListing(focused);
+        return;
+      }
+      if (!target || busyId != null) return;
+      if (e.key === 'a' || e.key === 'A' || e.key === 'ф' || e.key === 'Ф') {
+        if (!needsModeration(target)) return;
+        e.preventDefault();
+        void moderate(target.id, 'approved');
       }
       if (e.key === 'r' || e.key === 'R' || e.key === 'к' || e.key === 'К') {
+        if (!needsModeration(target)) return;
         e.preventDefault();
-        if (!moderationNote.trim()) {
-          setError('Укажите причину отклонения');
-          pushToast('Укажите причину отклонения');
+        if (!selected || selected.id !== target.id) {
+          openListing(target);
+          setWantNoteFocus(true);
           return;
         }
-        void moderate(selected.id, 'rejected');
+        if (!moderationNote.trim()) {
+          setError('Укажите причину отклонения');
+          pushToast('Укажите причину — шаблон или свой текст');
+          noteRef.current?.focus();
+          return;
+        }
+        void moderate(target.id, 'rejected');
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [selected, busyId, moderationNote]);
+  }, [selected, busyId, moderationNote, focusId, pageItems]);
 
   return (
     <div className="moderation-page">
@@ -1474,7 +1772,7 @@ function ModerationPage() {
             {' · '}
             <Link to="/listings">все объявления</Link>
             {' · '}
-            <span className="muted">клавиши: A — одобрить, R — отклонить</span>
+            <span className="muted">↑↓ выбрать · A одобрить · R отклонить</span>
           </p>
         </div>
       </div>
@@ -1552,6 +1850,14 @@ function ModerationPage() {
           />
           Старше 24 ч
         </label>
+        <select
+          value={authorKind}
+          onChange={(e) => setAuthorKind(e.target.value as 'all' | 'feed' | 'real')}
+        >
+          <option value="all">Все объявления</option>
+          <option value="feed">Фейковые (для ленты)</option>
+          <option value="real">Живые</option>
+        </select>
         {authorIdParam ? (
           <button
             type="button"
@@ -1564,6 +1870,19 @@ function ModerationPage() {
         <button className="btn" type="submit">
           Найти
         </button>
+        {allPendingIds.length > 0 && (
+          <button
+            className="btn"
+            type="button"
+            onClick={() =>
+              setChecked(pendingChecked.length === allPendingIds.length ? [] : allPendingIds)
+            }
+          >
+            {pendingChecked.length === allPendingIds.length
+              ? 'Снять выбор'
+              : `Выбрать все (${allPendingIds.length})`}
+          </button>
+        )}
       </form>
 
       {pendingChecked.length > 0 && (
@@ -1590,7 +1909,18 @@ function ModerationPage() {
         <table className="data-table">
           <thead>
             <tr>
-              <th className="check"></th>
+              <th className="check">
+                {pagePendingIds.length > 0 ? (
+                  <input
+                    ref={headerCheckRef}
+                    type="checkbox"
+                    checked={pageAllChecked}
+                    onChange={togglePageAll}
+                    title="Выбрать все на странице"
+                    aria-label="Выбрать все на странице"
+                  />
+                ) : null}
+              </th>
               <th>Объявление</th>
               <th>Категория</th>
               <th>Автор / село</th>
@@ -1606,7 +1936,7 @@ function ModerationPage() {
               return (
                 <tr
                   key={item.id}
-                  className={`dir-row${checked.includes(item.id) ? ' is-checked' : ''}`}
+                  className={`dir-row${checked.includes(item.id) ? ' is-checked' : ''}${item.id === focusId ? ' is-focus' : ''}${selected?.id === item.id ? ' is-open' : ''}`}
                   onClick={() => openListing(item)}
                 >
                   <td className="check" onClick={(e) => e.stopPropagation()}>
@@ -1620,62 +1950,66 @@ function ModerationPage() {
                     ) : null}
                   </td>
                   <td>
-                    <div className="audit-who">{item.title}</div>
-                    <div className="audit-sub">
-                      {item.price != null ? `${item.price.toLocaleString('ru-RU')} ₽` : 'без цены'}
-                      {item.is_urgent ? ' · срочно' : ''}
-                      {item.auto_flagged ? ' · автофлаг' : ''}
-                      {item.is_pinned ? ' · закреплено' : ''}
-                      {item.previous_snapshot ? ' · правка' : ''}
+                    <div className="listing-cell">
+                      <ListingThumb item={item} />
+                      <div>
+                        <div className="audit-who">{item.title}</div>
+                        <div className="audit-sub">
+                          {item.price != null ? `${item.price.toLocaleString('ru-RU')} ₽` : 'без цены'}
+                          {item.is_urgent ? ' · срочно' : ''}
+                          {item.auto_flagged ? ' · автофлаг' : ''}
+                          {item.is_pinned ? ' · закреплено' : ''}
+                          {item.previous_snapshot ? ' · правка' : ''}
+                        </div>
+                      </div>
                     </div>
                   </td>
+                  <td className="cell-plain">{CATEGORY_LABELS[item.category] || item.category}</td>
                   <td>
-                    <span className="chip">{CATEGORY_LABELS[item.category] || item.category}</span>
-                  </td>
-                  <td className="audit-obj">
-                    {item.author_name || '—'}
-                    <div className="audit-sub">{item.settlement_name || 'без села'}</div>
-                    {item.contact_phone ? <div className="audit-sub">{item.contact_phone}</div> : null}
+                    <div className="author-cell">
+                      <span className="audit-who">{item.author_name || '—'}</span>
+                      {item.author_badge === 'feed' ? <span className="tag-feed">лента</span> : null}
+                    </div>
+                    <div className="audit-sub">
+                      {item.settlement_name || 'без села'}
+                      {item.contact_phone ? ` · ${item.contact_phone}` : ''}
+                    </div>
                   </td>
                   <td className="audit-when">
                     {pending ? (
-                      <span className={waitH >= 24 ? 'chip danger' : 'chip neutral'}>{waitH} ч</span>
+                      <span className={waitH >= 24 ? 'wait-h late' : 'wait-h'}>{waitH} ч</span>
                     ) : (
                       <span className="audit-sub">{formatAuditWhen(item.created_at)}</span>
                     )}
                   </td>
                   <td>
-                    <span className={STATUS_CHIP[item.status] || 'chip'}>{STATUS_LABEL[item.status] || item.status}</span>
+                    <span className={`status-text is-${item.status}`}>{STATUS_LABEL[item.status] || item.status}</span>
                     {item.close_reason ? (
                       <div className="audit-sub">{CLOSE_REASON_LABEL[item.close_reason] || item.close_reason}</div>
                     ) : null}
                   </td>
-                  <td onClick={(e) => e.stopPropagation()}>
-                    <div className="actions inline">
-                      {pending && (
-                        <>
-                          <button className="btn" type="button" disabled={busyId === item.id} onClick={() => moderate(item.id, 'approved')}>
-                            Одобрить
-                          </button>
-                          <button className="btn danger" type="button" disabled={busyId === item.id} onClick={() => openListing(item)}>
-                            Отклонить
-                          </button>
-                        </>
-                      )}
-                      {item.status === 'approved' && (
-                        <button className="btn secondary" type="button" disabled={busyId === item.id} onClick={() => togglePin(item)}>
-                          {item.is_pinned ? 'Открепить' : 'Закрепить'}
+                  <td className="acts" onClick={(e) => e.stopPropagation()}>
+                    {pending ? (
+                      <>
+                        <button className="row-act ok" type="button" disabled={busyId === item.id} onClick={() => moderate(item.id, 'approved')}>
+                          Одобрить
                         </button>
-                      )}
-                      <button className="btn ghost" type="button" onClick={() => openListing(item)}>
-                        Открыть
+                        <button className="row-act bad" type="button" disabled={busyId === item.id} onClick={() => openListing(item)}>
+                          Отклонить
+                        </button>
+                      </>
+                    ) : null}
+                    {item.status === 'approved' ? (
+                      <button className="row-act" type="button" disabled={busyId === item.id} onClick={() => togglePin(item)}>
+                        {item.is_pinned ? 'Открепить' : 'Закрепить'}
                       </button>
-                    </div>
+                    ) : null}
                   </td>
                 </tr>
               );
             })}
-            {!visible.length && (
+            {listLoading && !pageItems.length && <WaitRow cols={7} />}
+            {!listLoading && !visible.length && (
               <tr>
                 <td colSpan={7} className="empty">
                   Пока нет объявлений в этом фильтре
@@ -1769,7 +2103,8 @@ function ModerationPage() {
               </div>
             )}
             <p className="muted" style={{ marginTop: 10 }}>
-              Автор: {selected.author_name || '—'} · Тел: {selected.contact_phone || '—'} · ждёт{' '}
+              Автор: {selected.author_name || '—'}
+              {selected.author_badge === 'feed' ? ' · для ленты' : ''} · Тел: {selected.contact_phone || '—'} · ждёт{' '}
               {hoursWaiting(selected.created_at)} ч
             </p>
             {selected.close_reason && (
@@ -1790,6 +2125,7 @@ function ModerationPage() {
                   ))}
                 </div>
                 <textarea
+                  ref={noteRef}
                   value={moderationNote}
                   onChange={(e) => setModerationNote(e.target.value)}
                   placeholder="Шаблон или свой текст"
@@ -1845,10 +2181,12 @@ function ListingsPage() {
   });
   const [category, setCategory] = useState('');
   const [settlementId, setSettlementId] = useState<number | ''>('');
+  const [authorKind, setAuthorKind] = useState<'all' | 'feed' | 'real'>('all');
   const [query, setQuery] = useState(qParam || '');
   const [appliedQ, setAppliedQ] = useState(qParam || '');
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
+  const [listLoading, setListLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [selected, setSelected] = useState<Listing | null>(null);
   const [form, setForm] = useState({
@@ -1892,10 +2230,16 @@ function ListingsPage() {
     if (category) params.set('category', category);
     if (settlementId !== '') params.set('settlement_id', String(settlementId));
     if (authorIdParam) params.set('author_id', authorIdParam);
-    const data = await api<{ items: Listing[]; total?: number } | Listing[]>(`/listings/admin/all?${params}`);
-    const rows = asItems(data);
-    setItems(rows);
-    setTotal(!Array.isArray(data) && data?.total != null ? data.total : rows.length);
+    if (authorKind === 'feed' || authorKind === 'real') params.set('author_kind', authorKind);
+    setListLoading(true);
+    try {
+      const data = await api<{ items: Listing[]; total?: number } | Listing[]>(`/listings/admin/all?${params}`);
+      const rows = asItems(data);
+      setItems(rows);
+      setTotal(!Array.isArray(data) && data?.total != null ? data.total : rows.length);
+    } finally {
+      setListLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -1909,11 +2253,11 @@ function ListingsPage() {
 
   useEffect(() => {
     load(safePage).catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
-  }, [safePage, filter, appliedQ, category, settlementId, authorIdParam]);
+  }, [safePage, filter, appliedQ, category, settlementId, authorIdParam, authorKind]);
 
   useEffect(() => {
     setPage(1);
-  }, [filter, appliedQ, category, settlementId, authorIdParam]);
+  }, [filter, appliedQ, category, settlementId, authorIdParam, authorKind]);
 
   useEffect(() => {
     if (page !== safePage) setPage(safePage);
@@ -2209,6 +2553,14 @@ function ListingsPage() {
             </option>
           ))}
         </select>
+        <select
+          value={authorKind}
+          onChange={(e) => setAuthorKind(e.target.value as 'all' | 'feed' | 'real')}
+        >
+          <option value="all">Все объявления</option>
+          <option value="feed">Фейковые (для ленты)</option>
+          <option value="real">Живые</option>
+        </select>
         {authorIdParam ? (
           <button type="button" className="chip warn" onClick={() => patchUrl({ authorId: null })}>
             Автор #{authorIdParam} ×
@@ -2237,12 +2589,17 @@ function ListingsPage() {
             {items.map((item) => (
               <tr key={item.id} className="dir-row" onClick={() => openItem(item)}>
                 <td>
-                  <div className="audit-who">{item.title}</div>
-                  <div className="audit-sub">
-                    {item.price != null ? `${item.price.toLocaleString('ru-RU')} ₽` : 'без цены'}
-                    {item.is_urgent ? ' · срочно' : ''}
-                    {item.is_pinned ? ' · закреплено' : ''}
-                    {item.auto_flagged ? ' · автофлаг' : ''}
+                  <div className="listing-cell">
+                    <ListingThumb item={item} />
+                    <div>
+                      <div className="audit-who">{item.title}</div>
+                      <div className="audit-sub">
+                        {item.price != null ? `${item.price.toLocaleString('ru-RU')} ₽` : 'без цены'}
+                        {item.is_urgent ? ' · срочно' : ''}
+                        {item.is_pinned ? ' · закреплено' : ''}
+                        {item.auto_flagged ? ' · автофлаг' : ''}
+                      </div>
+                    </div>
                   </div>
                 </td>
                 <td>
@@ -2250,6 +2607,7 @@ function ListingsPage() {
                 </td>
                 <td className="audit-obj">
                   {item.author_name || '—'}
+                  {item.author_badge === 'feed' ? <div className="audit-sub">для ленты</div> : null}
                   <div className="audit-sub">{item.settlement_name || 'без села'}</div>
                   {item.contact_phone ? <div className="audit-sub">{item.contact_phone}</div> : null}
                 </td>
@@ -2272,7 +2630,8 @@ function ListingsPage() {
                 </td>
               </tr>
             ))}
-            {!items.length && (
+            {listLoading && !items.length && <WaitRow cols={6} />}
+            {!listLoading && !items.length && (
               <tr>
                 <td colSpan={6} className="empty">
                   {appliedQ || filter || category || settlementId !== '' || authorIdParam
@@ -2509,6 +2868,7 @@ function ReportsPage({ canListings }: { canListings: boolean }) {
   const [moderatorReply, setModeratorReply] = useState('');
   const [openListingAfter, setOpenListingAfter] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [listLoading, setListLoading] = useState(true);
   const [page, setPage] = useState(1);
 
   useEffect(() => {
@@ -2518,6 +2878,7 @@ function ReportsPage({ canListings }: { canListings: boolean }) {
   }, [tabParam, canListings]);
 
   async function load() {
+    setListLoading(true);
     try {
       const qs = `?status=${encodeURIComponent(status || 'all')}`;
       if (tab === 'listings') {
@@ -2531,6 +2892,8 @@ function ReportsPage({ canListings }: { canListings: boolean }) {
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setListLoading(false);
     }
   }
 
@@ -2775,7 +3138,8 @@ function ReportsPage({ canListings }: { canListings: boolean }) {
                 </tr>
               );
             })}
-            {!current.length && (
+            {listLoading && !current.length && <WaitRow cols={7} />}
+            {!listLoading && !current.length && (
               <tr>
                 <td colSpan={7} className="empty">
                   Жалоб нет
@@ -2841,7 +3205,9 @@ const ENTITY_LABELS: Record<string, string> = {
   event: 'Событие',
   news: 'Новость',
   transport: 'Маршрут',
+  ride: 'Попутка',
   user: 'Пользователь',
+  broadcast: 'На телефоны',
   alert: 'Срочное',
   legal: 'Юр. документ',
   blacklist: 'Чёрный список',
@@ -2862,10 +3228,15 @@ const ACTION_LABELS: Record<string, string> = {
   'news.create': 'Создал новость',
   'news.update': 'Изменил новость',
   'news.cover': 'Обновил обложку новости',
+  'news.photos': 'Добавил фото к новости',
+  'news.photo_delete': 'Удалил фото новости',
+  'vk_news.sync': 'Забрал новости из ВК',
   'news.delete': 'Удалил новость',
   'transport.create': 'Добавил маршрут',
   'transport.update': 'Изменил маршрут',
   'transport.delete': 'Удалил маршрут',
+  'ride.hide': 'Скрыл попутку',
+  'ride.delete': 'Удалил попутку',
   'alert.create': 'Включил срочное',
   'alert.update': 'Изменил срочное',
   'alert.delete': 'Снял срочное',
@@ -2873,6 +3244,7 @@ const ACTION_LABELS: Record<string, string> = {
   'user.update': 'Изменил пользователя',
   'user.revoke_sessions': 'Сбросил сессии',
   'user.push': 'Отправил пуш',
+  'broadcast.push': 'Отправил всем на телефон',
   'listing.update': 'Изменил объявление',
   'listing.delete': 'Удалил объявление',
   'listing.pin': 'Закрепил объявление',
@@ -2889,6 +3261,8 @@ const ACTION_LABELS: Record<string, string> = {
   'chat.thread_delete': 'Удалил переписку',
   'app_update.patch': 'Настроил обновление',
   'app_update.apk_upload': 'Залил APK',
+  'promo.create': 'Сделал рекламную ссылку',
+  'promo.patch': 'Изменил рекламную ссылку',
   'moderate:approved': 'Одобрил объявление',
   'moderate:rejected': 'Отклонил объявление',
   'moderate:archived': 'Снял объявление',
@@ -3016,6 +3390,7 @@ function AuditPage() {
           <option value="news">Новости</option>
           <option value="transport">Транспорт</option>
           <option value="alert">Срочные</option>
+          <option value="broadcast">На телефоны</option>
           <option value="report">Жалобы</option>
           <option value="chat">Чаты</option>
           <option value="legal">Юр. тексты</option>
@@ -3096,6 +3471,7 @@ function errorDevice(row: ClientErrorLog) {
 function ErrorsPage() {
   const [items, setItems] = useState<ClientErrorLog[]>([]);
   const [total, setTotal] = useState(0);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [query, setQuery] = useState('');
   const [appliedQ, setAppliedQ] = useState('');
   const [page, setPage] = useState(1);
@@ -3105,6 +3481,11 @@ function ErrorsPage() {
 
   const pageCount = Math.max(1, Math.ceil(total / ERROR_PAGE_SIZE));
   const safePage = Math.min(page, pageCount);
+  const readCount = Math.max(0, total - unreadCount);
+
+  function tellUnread(n: number) {
+    window.dispatchEvent(new CustomEvent('ryadom56:errors-unread', { detail: n }));
+  }
 
   async function load(nextPage = safePage, q = appliedQ) {
     setBusy(true);
@@ -3113,9 +3494,14 @@ function ErrorsPage() {
       params.set('limit', String(ERROR_PAGE_SIZE));
       params.set('offset', String((nextPage - 1) * ERROR_PAGE_SIZE));
       if (q.trim()) params.set('q', q.trim());
-      const data = await api<{ items: ClientErrorLog[]; total: number }>(`/admin/client-errors?${params}`);
+      const data = await api<{ items: ClientErrorLog[]; total: number; unread_count?: number }>(
+        `/admin/client-errors?${params}`,
+      );
       setItems(data.items || []);
       setTotal(data.total || 0);
+      const unread = data.unread_count ?? (data.items || []).filter((r) => !r.is_read).length;
+      setUnreadCount(unread);
+      tellUnread(unread);
       setError('');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Ошибка');
@@ -3139,12 +3525,70 @@ function ErrorsPage() {
     setAppliedQ(query);
   }
 
+  async function openRow(row: ClientErrorLog) {
+    const open = openId === row.id;
+    setOpenId(open ? null : row.id);
+    if (open || row.is_read) return;
+    setItems((prev) => prev.map((x) => (x.id === row.id ? { ...x, is_read: true } : x)));
+    const nextUnread = Math.max(0, unreadCount - 1);
+    setUnreadCount(nextUnread);
+    tellUnread(nextUnread);
+    try {
+      await api(`/admin/client-errors/${row.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ is_read: true }),
+      });
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : 'Не удалось отметить прочитанным');
+      load().catch(console.error);
+    }
+  }
+
+  async function removeOne(row: ClientErrorLog) {
+    if (!(await confirmAction('Удалить этот сбой?'))) return;
+    try {
+      await api(`/admin/client-errors/${row.id}`, { method: 'DELETE' });
+      if (openId === row.id) setOpenId(null);
+      pushToast('Сбой удалён');
+      await load();
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : 'Не удалось удалить');
+    }
+  }
+
+  async function markAllRead() {
+    if (!unreadCount) return;
+    try {
+      await api('/admin/client-errors/mark-read', { method: 'POST' });
+      pushToast('Все сбои отмечены прочитанными');
+      await load();
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : 'Не удалось отметить');
+    }
+  }
+
+  async function removeRead() {
+    if (!readCount) return;
+    if (!(await confirmAction(`Удалить прочитанные сбои (${readCount})?`))) return;
+    try {
+      const data = await api<{ deleted?: number }>('/admin/client-errors?read=true', { method: 'DELETE' });
+      pushToast(data.deleted ? `Удалено: ${data.deleted}` : 'Прочитанных нет');
+      setPage(1);
+      await load(1, appliedQ);
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : 'Не удалось удалить');
+    }
+  }
+
   return (
     <div>
       <div className="page-head compact">
         <div>
           <h1>Сбои приложения</h1>
-          <p>Ошибки с телефонов. Нажмите строку, чтобы открыть стек</p>
+          <p>
+            Сначала новые, они с меткой. Нажмите строку — станет прочитанной.
+            {unreadCount ? ` Новых: ${unreadCount}.` : ''}
+          </p>
         </div>
       </div>
       <form className="toolbar compact" onSubmit={search}>
@@ -3155,6 +3599,12 @@ function ErrorsPage() {
         />
         <button className="btn" type="submit" disabled={busy}>
           Найти
+        </button>
+        <button className="btn ghost" type="button" disabled={busy || !unreadCount} onClick={markAllRead}>
+          Прочитано все
+        </button>
+        <button className="btn danger" type="button" disabled={busy || !readCount} onClick={removeRead}>
+          Удалить прочитанные
         </button>
       </form>
       {error && <p className="error">{error}</p>}
@@ -3168,23 +3618,25 @@ function ErrorsPage() {
               <th>Телефон</th>
               <th>Версия</th>
               <th>Кто</th>
+              <th />
             </tr>
           </thead>
           <tbody>
             {items.map((row) => {
               const device = errorDevice(row);
               const open = openId === row.id;
+              const unread = !row.is_read;
               return (
                 <Fragment key={row.id}>
                   <tr
-                    className={`error-row${open ? ' is-open' : ''}`}
-                    onClick={() => setOpenId(open ? null : row.id)}
+                    className={`error-row${open ? ' is-open' : ''}${unread ? ' unread' : ' is-read'}`}
+                    onClick={() => openRow(row)}
                   >
                     <td className="audit-when" title={formatDate(row.created_at)}>
                       {formatAuditWhen(row.created_at)}
                     </td>
                     <td className="error-msg" title={row.message}>
-                      {row.message}
+                      {unread ? <span className="chip warn">новая</span> : null} {row.message}
                       {row.stack ? <div className="audit-sub">{open ? 'скрыть стек' : 'есть стек'}</div> : null}
                     </td>
                     <td>{errorScreenLabel(row.screen)}</td>
@@ -3203,10 +3655,22 @@ function ErrorsPage() {
                         {row.client_ip || ''}
                       </div>
                     </td>
+                    <td className="actions inline">
+                      <button
+                        className="btn danger"
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          removeOne(row);
+                        }}
+                      >
+                        Удалить
+                      </button>
+                    </td>
                   </tr>
                   {open && (
                     <tr className="stack-row">
-                      <td colSpan={6}>
+                      <td colSpan={7}>
                         <pre className="stack-pre">{row.stack || 'Стека нет'}</pre>
                       </td>
                     </tr>
@@ -3216,7 +3680,7 @@ function ErrorsPage() {
             })}
             {!items.length && (
               <tr>
-                <td colSpan={6} className="empty">
+                <td colSpan={7} className="empty">
                   {appliedQ ? 'Ничего не найдено' : 'Сбоев пока нет'}
                 </td>
               </tr>
@@ -3518,6 +3982,7 @@ function DirectoryPage() {
   const [publishedFilter, setPublishedFilter] = useState<'all' | 'published' | 'hidden'>('all');
   const [settlementFilter, setSettlementFilter] = useState<number | ''>('');
   const [page, setPage] = useState(1);
+  const [listLoading, setListLoading] = useState(true);
 
   const pageCount = Math.max(1, Math.ceil(total / DIR_PAGE_SIZE));
   const safePage = Math.min(page, pageCount);
@@ -3535,9 +4000,14 @@ function DirectoryPage() {
     if (settlementFilter !== '') params.set('settlement_id', String(settlementFilter));
     if (publishedFilter === 'published') params.set('published', 'true');
     if (publishedFilter === 'hidden') params.set('published', 'false');
-    const data = await api<{ items: DirectoryItem[]; total: number }>(`/directory?${params}`);
-    setItems(data.items || []);
-    setTotal(data.total || 0);
+    setListLoading(true);
+    try {
+      const data = await api<{ items: DirectoryItem[]; total: number }>(`/directory?${params}`);
+      setItems(data.items || []);
+      setTotal(data.total || 0);
+    } finally {
+      setListLoading(false);
+    }
   }
 
   useEffect(() => {
@@ -3753,7 +4223,8 @@ function DirectoryPage() {
                 </td>
               </tr>
             ))}
-            {!items.length && (
+            {listLoading && !items.length && <WaitRow cols={7} />}
+            {!listLoading && !items.length && (
               <tr>
                 <td colSpan={7} className="empty">
                   {appliedQ || categoryFilter || publishedFilter !== 'all' || settlementFilter !== ''
@@ -4517,6 +4988,7 @@ function UsersPage() {
   const [query, setQuery] = useState('');
   const [appliedQ, setAppliedQ] = useState('');
   const [suspicious, setSuspicious] = useState(false);
+  const [userKind, setUserKind] = useState<'all' | 'feed' | 'real'>('real');
   const [pushTitle, setPushTitle] = useState('Рядом56');
   const [pushBody, setPushBody] = useState('');
   const [page, setPage] = useState(1);
@@ -4532,6 +5004,7 @@ function UsersPage() {
     const params = new URLSearchParams();
     if (appliedQ.trim()) params.set('q', appliedQ.trim());
     if (suspicious) params.set('suspicious', '1');
+    if (userKind === 'feed' || userKind === 'real') params.set('kind', userKind);
     const qs = params.toString();
     setUsers(await api<User[]>(`/admin/users${qs ? `?${qs}` : ''}`));
   }
@@ -4542,17 +5015,18 @@ function UsersPage() {
 
   useEffect(() => {
     load().catch(console.error);
-  }, [appliedQ, suspicious]);
+  }, [appliedQ, suspicious, userKind]);
 
   useEffect(() => {
     setPage(1);
-  }, [appliedQ, suspicious]);
+  }, [appliedQ, suspicious, userKind]);
 
   async function exportCsv() {
     try {
       const params = new URLSearchParams();
       if (appliedQ.trim()) params.set('q', appliedQ.trim());
       if (suspicious) params.set('suspicious', '1');
+      if (userKind === 'feed' || userKind === 'real') params.set('kind', userKind);
       const qs = params.toString();
       const text = await apiText(`/admin/users/export${qs ? `?${qs}` : ''}`);
       const blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
@@ -4718,18 +5192,12 @@ function UsersPage() {
     if (page !== safePage) setPage(safePage);
   }, [page, safePage]);
 
-  function roleChip(role: User['role']) {
-    if (role === 'admin') return 'chip warn';
-    if (role === 'moderator' || role === 'editor') return 'chip ok';
-    return 'chip';
-  }
-
   return (
-    <div>
+    <div className="users-page">
       <div className="page-head compact">
         <div>
           <h1>Пользователи</h1>
-          <p>Роли, устройство, IP · подозрительные = один IP у нескольких аккаунтов</p>
+          <p>Сначала живые. Фейковые — для ленты. Подозрительные — один IP на несколько аккаунтов</p>
         </div>
         <div className="toolbar compact" style={{ margin: 0 }}>
           <button className="btn" type="button" onClick={openCreate}>
@@ -4757,6 +5225,14 @@ function UsersPage() {
           <input type="checkbox" checked={suspicious} onChange={(e) => setSuspicious(e.target.checked)} />
           Только подозрительные
         </label>
+        <select
+          value={userKind}
+          onChange={(e) => setUserKind(e.target.value as 'all' | 'feed' | 'real')}
+        >
+          <option value="real">Живые</option>
+          <option value="feed">Фейковые (для ленты)</option>
+          <option value="all">Все</option>
+        </select>
         <button className="btn" type="submit">
           Найти
         </button>
@@ -4784,55 +5260,42 @@ function UsersPage() {
               >
                 <td>
                   <div className="audit-who">{u.full_name}</div>
-                  <div className="audit-sub">{u.email}</div>
-                  {u.phone ? <div className="audit-sub">{u.phone}</div> : null}
+                  <div className="audit-sub">{u.email}{u.phone ? ` · ${u.phone}` : ''}</div>
                 </td>
-                <td className="audit-obj">{u.settlement?.display_name || '—'}</td>
+                <td className="cell-plain">{u.settlement?.display_name || '—'}</td>
                 <td>
-                  <span className={roleChip(u.role)}>{ROLE_LABELS[u.role]}</span>
-                  {u.badge ? (
-                    <div className="audit-sub">{BADGE_LABELS[u.badge] || u.badge}</div>
-                  ) : null}
+                  <span className="cell-plain">{ROLE_LABELS[u.role]}</span>
+                  {u.badge === 'feed' ? <div className="audit-sub">лента</div> : null}
                 </td>
                 <td>
-                  {u.is_active ? (
-                    <span className="chip ok">Активен</span>
-                  ) : (
-                    <span className="chip danger">Заблокирован</span>
-                  )}
-                  {!u.is_active && u.ban_reason ? <div className="audit-sub">{u.ban_reason}</div> : null}
+                  <span className={`status-text ${u.is_active ? 'is-approved' : 'is-rejected'}`}>
+                    {u.is_active ? 'Активен' : 'Заблокирован'}
+                  </span>
                   <div className="audit-sub">{u.has_push ? 'пуш есть' : 'без пуша'}</div>
                 </td>
-                <td className="audit-details">
+                <td className="audit-sub">
                   {u.last_ip || 'нет IP'}
-                  <div className="audit-sub">
-                    {[u.device_brand, u.device_model].filter(Boolean).join(' ') || 'нет устройства'}
-                  </div>
-                  {(u.device_os || u.app_version) && (
-                    <div className="audit-sub">{[u.device_os, u.app_version].filter(Boolean).join(' · ')}</div>
-                  )}
+                  {(u.device_brand || u.device_model) ? ` · ${[u.device_brand, u.device_model].filter(Boolean).join(' ')}` : ''}
                 </td>
                 <td className="audit-when">{formatAuditWhen(u.last_seen_at)}</td>
-                <td onClick={(e) => e.stopPropagation()}>
-                  <div className="actions inline">
-                    <button
-                      className="btn ghost"
-                      type="button"
-                      onClick={() => navigate(`/listings?authorId=${u.id}`)}
-                    >
-                      Объявления
-                    </button>
-                    <button className="btn" type="button" onClick={() => openEdit(u)}>
-                      Изменить
-                    </button>
-                  </div>
+                <td className="acts" onClick={(e) => e.stopPropagation()}>
+                  <button
+                    className="row-act"
+                    type="button"
+                    onClick={() => navigate(`/listings?authorId=${u.id}`)}
+                  >
+                    Объявления
+                  </button>
+                  <button className="row-act" type="button" onClick={() => openEdit(u)}>
+                    Изменить
+                  </button>
                 </td>
               </tr>
             ))}
             {!users.length && (
               <tr>
                 <td colSpan={7} className="empty">
-                  {appliedQ || suspicious ? 'Ничего не найдено' : 'Пользователей пока нет'}
+                  {appliedQ || suspicious || userKind !== 'all' ? 'Ничего не найдено' : 'Пользователей пока нет'}
                 </td>
               </tr>
             )}
@@ -6187,6 +6650,152 @@ type NewsForm = {
   is_pinned: boolean;
 };
 
+function newsPlaceLabel(item: { settlement_name?: string | null; source?: string | null; audience?: string | null }) {
+  if (item.settlement_name) return item.settlement_name;
+  if (item.audience === 'sakmarsky' || item.source === 'vk') return 'Сакмарский район';
+  return 'Вся область';
+}
+
+function vkWallLabel(source: string) {
+  if (source.includes('ntsk')) return 'Новотроицк.ру';
+  if (source.includes('buzuluk')) return 'Бузулук';
+  if (source.includes('pb056')) return 'Бугуруслан';
+  if (source.includes('orsk')) return 'Орск.ру';
+  if (source.includes('orenburg')) return 'Вся область';
+  if (source.includes('sakmara')) return 'Сакмарский район';
+  return source;
+}
+
+function VkNewsPage() {
+  const [items, setItems] = useState<VkNewsRun[]>([]);
+  const [total, setTotal] = useState(0);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [openId, setOpenId] = useState<number | null>(null);
+
+  async function load() {
+    const data = await api<{ items: VkNewsRun[]; total: number }>('/admin/vk-news/runs?limit=40');
+    setItems(data.items || []);
+    setTotal(data.total || 0);
+  }
+
+  useEffect(() => {
+    load().catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+  }, []);
+
+  async function runNow() {
+    if (busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api('/admin/vk-news/sync', { method: 'POST' });
+      await load();
+      pushToast('Проверка ВК закончилась — смотрите лог ниже');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className="page-head compact">
+        <div>
+          <h1>Новости из ВК</h1>
+          <p>
+            Каждые 30 минут скрипт смотрит стены:{' '}
+            <a href="https://vk.ru/sakmaraadm" target="_blank" rel="noreferrer">
+              vk.ru/sakmaraadm
+            </a>
+            {' — Сакмарский район, '}
+            <a href="https://vk.ru/orenburg_vk" target="_blank" rel="noreferrer">
+              vk.ru/orenburg_vk
+            </a>
+            {' — вся область, '}
+            <a href="https://vk.ru/orskdotru" target="_blank" rel="noreferrer">
+              vk.ru/orskdotru
+            </a>
+            {' — Орск.ру, '}
+            <a href="https://vk.ru/ntskdotru" target="_blank" rel="noreferrer">
+              vk.ru/ntskdotru
+            </a>
+            {' — Новотроицк.ру, '}
+            <a href="https://vk.ru/buzuluk_town" target="_blank" rel="noreferrer">
+              vk.ru/buzuluk_town
+            </a>
+            {' — Бузулук (город и район), '}
+            <a href="https://vk.ru/pb056" target="_blank" rel="noreferrer">
+              vk.ru/pb056
+            </a>{' '}
+            — Бугуруслан (город и район). Чужие регионы и похожие новости пропускает.
+            Ключ нужен от человека (пользователя ВК), не от сообщества.
+          </p>
+        </div>
+        <button className="btn" type="button" disabled={busy} onClick={runNow}>
+          {busy ? 'Проверяю…' : 'Проверить сейчас'}
+        </button>
+      </div>
+      {error && <p className="error">{error}</p>}
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Когда</th>
+              <th>Откуда</th>
+              <th>Кто запустил</th>
+              <th>Итог</th>
+              <th>Взял / новые / уже были</th>
+              <th>Фото</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.id} className="dir-row" onClick={() => setOpenId(openId === item.id ? null : item.id)}>
+                <td className="audit-when">{formatAuditWhen(item.started_at)}</td>
+                <td className="audit-obj">{vkWallLabel(item.source)}</td>
+                <td className="audit-obj">{item.triggered_by === 'timer' ? 'по расписанию' : item.triggered_by}</td>
+                <td>
+                  {item.status === 'ok' ? <span className="chip ok">Готово</span> : <span className="chip warn">Сбой</span>}
+                </td>
+                <td>
+                  {item.fetched} / {item.created} / {item.skipped}
+                </td>
+                <td>{item.photos}</td>
+                <td>{openId === item.id ? 'скрыть' : 'подробнее'}</td>
+              </tr>
+            ))}
+            {openId != null &&
+              items
+                .filter((x) => x.id === openId)
+                .map((item) => (
+                  <tr key={`d-${item.id}`}>
+                    <td colSpan={7}>
+                      <div className="audit-sub" style={{ whiteSpace: 'pre-wrap' }}>
+                        Источник: {item.source}
+                        {'\n'}
+                        {item.error ? `Ошибка: ${item.error}\n` : ''}
+                        {item.details || 'Нет подробностей'}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+            {!items.length && (
+              <tr>
+                <td colSpan={7} className="empty">
+                  Пока не запускали. Нажмите «Проверить сейчас» — возьмёт свежие посты, в том числе последний.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <p className="audit-sub">Всего запусков: {total}</p>
+    </div>
+  );
+}
+
 const EMPTY_NEWS: NewsForm = {
   title: '',
   body: '',
@@ -6210,7 +6819,8 @@ function NewsPage() {
   const [query, setQuery] = useState('');
   const [appliedQ, setAppliedQ] = useState('');
   const [publishedFilter, setPublishedFilter] = useState<'all' | 'published' | 'hidden'>('all');
-  const [coverFile, setCoverFile] = useState<File | null>(null);
+  const [photoFiles, setPhotoFiles] = useState<File[]>([]);
+  const [editingPhotos, setEditingPhotos] = useState<NonNullable<NewsItem['photos']>>([]);
   const [page, setPage] = useState(1);
   const NEWS_PAGE = 25;
   const pageCount = Math.max(1, Math.ceil(total / NEWS_PAGE));
@@ -6251,7 +6861,8 @@ function NewsPage() {
   function openCreate() {
     setEditingId(null);
     setForm(EMPTY_NEWS);
-    setCoverFile(null);
+    setPhotoFiles([]);
+    setEditingPhotos([]);
     setError('');
     setModalOpen(true);
   }
@@ -6265,7 +6876,8 @@ function NewsPage() {
       is_published: item.is_published,
       is_pinned: !!item.is_pinned,
     });
-    setCoverFile(null);
+    setPhotoFiles([]);
+    setEditingPhotos(item.photos || []);
     setError('');
     setModalOpen(true);
   }
@@ -6322,10 +6934,10 @@ function NewsPage() {
         const created = await api<NewsItem>('/news', { method: 'POST', body: JSON.stringify(body) });
         id = created.id;
       }
-      if (coverFile && id) {
+      if (photoFiles.length && id) {
         const fd = new FormData();
-        fd.append('file', coverFile);
-        await api(`/news/${id}/cover`, { method: 'POST', body: fd });
+        photoFiles.forEach((f) => fd.append('files', f));
+        await api(`/news/${id}/photos`, { method: 'POST', body: fd });
       }
       setModalOpen(false);
       await load();
@@ -6354,7 +6966,7 @@ function NewsPage() {
       <div className="page-head compact">
         <div>
           <h1>Новости</h1>
-          <p>Новости района для ленты приложения</p>
+          <p>Новости области и Сакмарского района для ленты приложения</p>
         </div>
         <button className="btn" type="button" onClick={openCreate}>
           Добавить новость
@@ -6402,11 +7014,13 @@ function NewsPage() {
                 <td>
                   <div className="audit-who">{item.title}</div>
                   <div className="audit-sub">
+                    {item.source === 'vk' ? 'из ВК, Сакмарский район · ' : ''}
+                    {item.source === 'vk_oblast' ? 'из ВК, вся область · ' : ''}
                     {item.is_pinned ? 'закреплена · ' : ''}
                     {item.body.length > 90 ? `${item.body.slice(0, 90)}…` : item.body}
                   </div>
                 </td>
-                <td className="audit-obj">{item.settlement_name || 'весь район'}</td>
+                <td className="audit-obj">{newsPlaceLabel(item)}</td>
                 <td className="audit-when">{formatAuditWhen(item.published_at || item.created_at)}</td>
                 <td>
                   {item.is_published ? <span className="chip ok">В приложении</span> : <span className="chip warn">Скрыто</span>}
@@ -6453,7 +7067,7 @@ function NewsPage() {
                       setForm({ ...form, settlement_id: e.target.value ? Number(e.target.value) : '' })
                     }
                   >
-                    <option value="">Весь район</option>
+                    <option value="">Вся область</option>
                     {settlements.map((s) => (
                       <option key={s.id} value={s.id}>
                         {s.display_name}
@@ -6482,9 +7096,52 @@ function NewsPage() {
                   </select>
                 </label>
                 <label className="field full">
-                  Обложка
-                  <input type="file" accept="image/*" onChange={(e) => setCoverFile(e.target.files?.[0] || null)} />
+                  Фото (можно несколько)
+                  <input
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    onChange={(e) => setPhotoFiles(Array.from(e.target.files || []))}
+                  />
                 </label>
+                {!!editingPhotos.length && (
+                  <div className="field full">
+                    <div className="audit-sub">Уже в новости — нажмите «убрать», если лишнее</div>
+                    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
+                      {editingPhotos.map((p) => (
+                        <div key={p.id} style={{ position: 'relative' }}>
+                          <img
+                            src={mediaUrl(p.url)}
+                            alt=""
+                            style={{ width: 96, height: 72, objectFit: 'cover', borderRadius: 8, border: '1px solid var(--line)' }}
+                          />
+                          {editingId && p.id > 0 && (
+                            <button
+                              className="btn danger"
+                              type="button"
+                              style={{ marginTop: 4 }}
+                              onClick={async () => {
+                                if (!editingId) return;
+                                try {
+                                  const updated = await api<NewsItem>(`/news/${editingId}/photos/${p.id}`, { method: 'DELETE' });
+                                  setEditingPhotos(updated.photos || []);
+                                  pushToast('Фото убрано');
+                                } catch (err) {
+                                  setError(err instanceof Error ? err.message : 'Ошибка');
+                                }
+                              }}
+                            >
+                              Убрать
+                            </button>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {!!photoFiles.length && (
+                  <div className="audit-sub field full">К сохранению: {photoFiles.length} новых фото</div>
+                )}
                 <label className="field full">
                   Текст
                   <textarea
@@ -6525,6 +7182,7 @@ type AlertForm = {
   is_active: boolean;
   starts_at: string;
   ends_at: string;
+  settlement_ids: number[];
 };
 
 const EMPTY_ALERT: AlertForm = {
@@ -6534,7 +7192,29 @@ const EMPTY_ALERT: AlertForm = {
   is_active: true,
   starts_at: '',
   ends_at: '',
+  settlement_ids: [],
 };
+
+const ALERT_CITY_HINTS = [
+  'Оренбург',
+  'Орск',
+  'Новотроицк',
+  'Бузулук',
+  'Бугуруслан',
+  'Гай',
+  'Медногорск',
+  'Сорочинск',
+  'Кувандык',
+  'Соль-Илецк',
+  'Сакмара',
+];
+
+function alertPlacesLabel(item: DistrictAlert) {
+  const names = item.settlement_names || [];
+  if (!names.length && !(item.settlement_ids || []).length) return 'Вся область';
+  if (names.length <= 2) return names.join(', ') || `${(item.settlement_ids || []).length} мест`;
+  return `${names.slice(0, 2).join(', ')} и ещё ${names.length - 2}`;
+}
 
 function alertPeriod(item: DistrictAlert) {
   const start = item.starts_at ? formatAuditWhen(item.starts_at) : '';
@@ -6543,6 +7223,385 @@ function alertPeriod(item: DistrictAlert) {
   if (start) return `с ${start}`;
   if (end) return `до ${end}`;
   return 'без срока';
+}
+
+const BROADCAST_KINDS: { id: 'news' | 'promo' | 'question' | 'info'; label: string; title: string }[] = [
+  { id: 'news', label: 'Новость', title: 'Новость района' },
+  { id: 'promo', label: 'Акция', title: 'Акция' },
+  { id: 'question', label: 'Вопрос', title: 'Вопрос к жителям' },
+  { id: 'info', label: 'Сообщение', title: 'Рядом56' },
+];
+
+const BROADCAST_AUDIENCES: { id: 'all' | 'users' | 'guests'; label: string; sendLabel: string }[] = [
+  { id: 'all', label: 'Всем', sendLabel: 'Отправить всем' },
+  { id: 'users', label: 'С аккаунтом', sendLabel: 'Отправить с аккаунтом' },
+  { id: 'guests', label: 'Гостям', sendLabel: 'Отправить гостям' },
+];
+
+function BroadcastPage() {
+  const [kind, setKind] = useState<(typeof BROADCAST_KINDS)[number]['id']>('news');
+  const [audience, setAudience] = useState<(typeof BROADCAST_AUDIENCES)[number]['id']>('all');
+  const [title, setTitle] = useState('Новость района');
+  const [body, setBody] = useState('');
+  const [people, setPeople] = useState(0);
+  const [devices, setDevices] = useState(0);
+  const [userDevices, setUserDevices] = useState(0);
+  const [guestDevices, setGuestDevices] = useState(0);
+  const [history, setHistory] = useState<AuditLog[]>([]);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  async function loadMeta() {
+    const [preview, log] = await Promise.all([
+      api<{ people: number; devices: number; user_devices?: number; guest_devices?: number }>('/admin/broadcast'),
+      api<{ items: AuditLog[] }>('/admin/audit-log?entity_type=broadcast&limit=20'),
+    ]);
+    setPeople(preview.people || 0);
+    setDevices(preview.devices || 0);
+    setUserDevices(preview.user_devices ?? Math.max(0, (preview.devices || 0) - (preview.guest_devices || 0)));
+    setGuestDevices(preview.guest_devices || 0);
+    setHistory(log.items || []);
+  }
+
+  useEffect(() => {
+    loadMeta().catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+  }, []);
+
+  function pickKind(next: (typeof BROADCAST_KINDS)[number]['id']) {
+    const prevTitle = BROADCAST_KINDS.find((k) => k.id === kind)?.title || '';
+    const nextTitle = BROADCAST_KINDS.find((k) => k.id === next)?.title || 'Рядом56';
+    setKind(next);
+    if (!title.trim() || title.trim() === prevTitle) setTitle(nextTitle);
+  }
+
+  const audienceMeta = BROADCAST_AUDIENCES.find((a) => a.id === audience) || BROADCAST_AUDIENCES[0];
+  const audienceDevices =
+    audience === 'users' ? userDevices : audience === 'guests' ? guestDevices : devices;
+  const canSend =
+    audience === 'users' ? people > 0 || userDevices > 0 : audience === 'guests' ? guestDevices > 0 : devices > 0 || people > 0;
+
+  async function send() {
+    const text = body.trim();
+    if (text.length < 3) {
+      setError('Напишите текст — хотя бы пару слов');
+      return;
+    }
+    let confirmText = '';
+    if (audience === 'users') {
+      confirmText = `Отправить с аккаунтом?\nКолокольчик: ${people} чел., пуш примерно на ${userDevices} телефон(ов).`;
+    } else if (audience === 'guests') {
+      confirmText = `Отправить гостям без входа?\nПуш примерно на ${guestDevices} телефон(ов). В колокольчик не попадёт.`;
+    } else {
+      confirmText = `Отправить всем?\nКолокольчик: ${people} чел., пуш примерно на ${devices} телефон(ов) (${userDevices} с аккаунтом, ${guestDevices} гостей).`;
+    }
+    const ok = await confirmAction(confirmText);
+    if (!ok) return;
+    setBusy(true);
+    setError('');
+    try {
+      const res = await api<{ message?: string }>('/admin/broadcast', {
+        method: 'POST',
+        body: JSON.stringify({ kind, audience, title: title.trim(), body: text }),
+      });
+      setBody('');
+      pushToast(res.message || 'Отправлено');
+      await loadMeta();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Ошибка';
+      setError(msg);
+      pushToast(msg);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className="page-head compact">
+        <div>
+          <h1>На телефоны</h1>
+          <p>
+            Новость, акция или вопрос — на телефон пушем. Можно выбрать: всем, только с аккаунтом или только гостям
+            без входа. У зарегистрированных ещё попадёт в колокольчик. Баннер на весь экран — в разделе «Срочное».
+          </p>
+        </div>
+      </div>
+
+      <div className="panel" style={{ marginBottom: 16 }}>
+        <p className="muted" style={{ margin: '0 0 12px' }}>
+          С аккаунтом: <strong>{people}</strong> чел., пуш на <strong>{userDevices}</strong> телефон(ов). Гости без
+          входа: <strong>{guestDevices}</strong> телефон(ов).
+          {audience === 'users' ? (
+            <>
+              {' '}
+              Сейчас выбрано: только аккаунты — пуш на <strong>{audienceDevices}</strong> телефон(ов).
+            </>
+          ) : audience === 'guests' ? (
+            <>
+              {' '}
+              Сейчас выбрано: только гости — пуш на <strong>{audienceDevices}</strong> телефон(ов).
+            </>
+          ) : (
+            <>
+              {' '}
+              Сейчас выбрано: всем — пуш на <strong>{audienceDevices}</strong> телефон(ов).
+            </>
+          )}
+        </p>
+        <p className="muted" style={{ margin: '0 0 12px', fontSize: 13 }}>
+          Кому отправить
+        </p>
+        <div className="toolbar compact" style={{ marginBottom: 12 }}>
+          {BROADCAST_AUDIENCES.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={audience === item.id ? 'btn' : 'btn ghost'}
+              onClick={() => setAudience(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <p className="muted" style={{ margin: '0 0 12px', fontSize: 13 }}>
+          Тип сообщения
+        </p>
+        <div className="toolbar compact" style={{ marginBottom: 12 }}>
+          {BROADCAST_KINDS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={kind === item.id ? 'btn' : 'btn ghost'}
+              onClick={() => pickKind(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <label className="field">
+          Заголовок на телефоне
+          <input maxLength={80} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Рядом56" />
+        </label>
+        <label className="field" style={{ marginTop: 10 }}>
+          Текст
+          <textarea
+            rows={4}
+            maxLength={400}
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            placeholder={
+              kind === 'question'
+                ? 'Например: удобно ли вам рейс в 7:00? Напишите в приложении'
+                : kind === 'promo'
+                  ? 'Что за акция, до какой даты, где смотреть'
+                  : 'Коротко, простыми словами'
+            }
+          />
+        </label>
+        <p className="muted" style={{ margin: '8px 0 0' }}>
+          {body.length} / 400
+        </p>
+        {error && <p className="error">{error}</p>}
+        <div className="modal-actions" style={{ marginTop: 16 }}>
+          <button className="btn" type="button" disabled={busy || !canSend} onClick={() => send().catch(console.error)}>
+            {busy ? 'Отправляем… подождите' : audienceMeta.sendLabel}
+          </button>
+        </div>
+      </div>
+
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Когда</th>
+              <th>Кто</th>
+              <th>Что отправили</th>
+            </tr>
+          </thead>
+          <tbody>
+            {history.map((row) => (
+              <tr key={row.id}>
+                <td className="audit-when">{formatAuditWhen(row.created_at)}</td>
+                <td className="audit-who">{row.actor_name || '—'}</td>
+                <td className="audit-details">{row.details || '—'}</td>
+              </tr>
+            ))}
+            {!history.length && (
+              <tr>
+                <td colSpan={3} className="empty">
+                  Пока никому разом не писали
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+const RIDES_PAGE_SIZE = 25;
+
+function rideKindLabel(kind: string) {
+  return kind === 'need' ? 'Ищу' : 'Еду';
+}
+
+function rideStatusLabel(status: string) {
+  if (status === 'open') return 'открыта';
+  if (status === 'hidden') return 'скрыта';
+  return 'снята';
+}
+
+function RidesPage() {
+  const [items, setItems] = useState<Ride[]>([]);
+  const [total, setTotal] = useState(0);
+  const [query, setQuery] = useState('');
+  const [appliedQ, setAppliedQ] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'open' | 'closed' | 'hidden'>('open');
+  const [page, setPage] = useState(1);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const pageCount = Math.max(1, Math.ceil(total / RIDES_PAGE_SIZE));
+  const safePage = Math.min(page, pageCount);
+
+  async function load(nextPage = safePage) {
+    const params = new URLSearchParams();
+    params.set('limit', String(RIDES_PAGE_SIZE));
+    params.set('offset', String((nextPage - 1) * RIDES_PAGE_SIZE));
+    if (appliedQ.trim()) params.set('q', appliedQ.trim());
+    if (statusFilter !== 'all') params.set('status', statusFilter);
+    const data = await api<{ items: Ride[]; total: number }>(`/rides/admin?${params}`);
+    setItems(data.items || []);
+    setTotal(data.total || 0);
+  }
+
+  useEffect(() => {
+    load(safePage).catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+  }, [safePage, appliedQ, statusFilter]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [appliedQ, statusFilter]);
+
+  async function hideRide(id: number) {
+    if (!window.confirm('Скрыть эту попутку из ленты?')) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api(`/rides/${id}/hide`, { method: 'POST' });
+      await load(safePage);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function removeRide(id: number) {
+    if (!window.confirm('Удалить попутку совсем?')) return;
+    setBusy(true);
+    setError('');
+    try {
+      await api(`/rides/${id}`, { method: 'DELETE' });
+      await load(safePage);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div>
+      <div className="page-head compact">
+        <div>
+          <h1>Попутки</h1>
+          <p>Кто едет и кто ищет место. Модерации перед публикацией нет — при жалобе скрывайте.</p>
+        </div>
+      </div>
+      <form
+        className="toolbar compact"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setPage(1);
+          setAppliedQ(query);
+        }}
+      >
+        <input placeholder="Имя, телефон, комментарий…" value={query} onChange={(e) => setQuery(e.target.value)} />
+        <select
+          value={statusFilter}
+          onChange={(e) => {
+            setPage(1);
+            setStatusFilter(e.target.value as 'all' | 'open' | 'closed' | 'hidden');
+          }}
+        >
+          <option value="open">Открытые</option>
+          <option value="closed">Снятые</option>
+          <option value="hidden">Скрытые</option>
+          <option value="all">Все</option>
+        </select>
+        <button className="btn" type="submit">
+          Найти
+        </button>
+      </form>
+      {error && <p className="error">{error}</p>}
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Маршрут</th>
+              <th>Когда</th>
+              <th>Кто</th>
+              <th>Статус</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.id}>
+                <td>
+                  <div className="audit-who">
+                    {rideKindLabel(item.kind)} · {item.title}
+                  </div>
+                  <div className="audit-sub">
+                    {item.kind === 'need' ? `${item.seats} чел.` : `${item.seats} мест.`}
+                    {item.note ? ` · ${item.note}` : ''}
+                  </div>
+                </td>
+                <td className="audit-when">{formatDate(item.depart_at)}</td>
+                <td>
+                  <div className="audit-who">{item.author_name || `user #${item.author_id}`}</div>
+                  <div className="audit-sub">{item.contact_phone || '—'}</div>
+                </td>
+                <td>
+                  <span className={item.status === 'open' ? 'chip ok' : 'chip neutral'}>{rideStatusLabel(item.status)}</span>
+                </td>
+                <td>
+                  {item.status !== 'hidden' && (
+                    <button className="btn ghost" type="button" disabled={busy} onClick={() => hideRide(item.id)}>
+                      Скрыть
+                    </button>
+                  )}
+                  <button className="btn ghost" type="button" disabled={busy} onClick={() => removeRide(item.id)}>
+                    Удалить
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {!items.length && (
+              <tr>
+                <td colSpan={5} className="empty">
+                  Попуток пока нет
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <Pager page={safePage} pageCount={pageCount} total={total} onPage={setPage} />
+    </div>
+  );
 }
 
 function AlertsPage() {
@@ -6558,6 +7617,8 @@ function AlertsPage() {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [page, setPage] = useState(1);
+  const [settlements, setSettlements] = useState<Settlement[]>([]);
+  const [placeQuery, setPlaceQuery] = useState('');
   const ALERT_PAGE = 25;
 
   async function load() {
@@ -6571,11 +7632,15 @@ function AlertsPage() {
 
   useEffect(() => {
     load().catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+    api<Settlement[]>('/settlements')
+      .then(setSettlements)
+      .catch(() => setSettlements([]));
   }, []);
 
   function openCreate() {
     setEditingId(null);
     setForm(EMPTY_ALERT);
+    setPlaceQuery('');
     setError('');
     setModalOpen(true);
   }
@@ -6589,7 +7654,9 @@ function AlertsPage() {
       is_active: item.is_active,
       starts_at: toDatetimeLocal(item.starts_at),
       ends_at: toDatetimeLocal(item.ends_at),
+      settlement_ids: item.settlement_ids || [],
     });
+    setPlaceQuery('');
     setError('');
     setModalOpen(true);
   }
@@ -6638,6 +7705,7 @@ function AlertsPage() {
       is_active: form.is_active,
       starts_at: form.starts_at ? new Date(form.starts_at).toISOString() : null,
       ends_at: form.ends_at ? new Date(form.ends_at).toISOString() : null,
+      settlement_ids: form.settlement_ids,
     };
     try {
       if (editingId) {
@@ -6694,7 +7762,7 @@ function AlertsPage() {
           <p>
             {tab === 'history'
               ? 'Выключенные, прошедшие и ещё не начавшиеся баннеры'
-              : 'Сейчас показываются в приложении — как цифра на сводке'}
+              : 'Сейчас показываются в приложении. Можно всей области или выбранным городам и сёлам'}
           </p>
         </div>
         <button className="btn" type="button" onClick={openCreate}>
@@ -6715,6 +7783,7 @@ function AlertsPage() {
           <thead>
             <tr>
               <th>Текст</th>
+              <th>Где</th>
               <th>Тип</th>
               <th>Период</th>
               <th>Статус</th>
@@ -6728,6 +7797,7 @@ function AlertsPage() {
                   <div className="audit-who">{item.message}</div>
                   <div className="audit-sub">приоритет {item.priority ?? 0}</div>
                 </td>
+                <td className="audit-details">{alertPlacesLabel(item)}</td>
                 <td>
                   <span className={kindChip(item.kind)}>{ALERT_KIND_LABELS[item.kind] || item.kind}</span>
                 </td>
@@ -6752,7 +7822,7 @@ function AlertsPage() {
             ))}
             {!shown.length && (
               <tr>
-                <td colSpan={5} className="empty">
+                <td colSpan={6} className="empty">
                   {tab === 'history' ? 'История пуста' : 'Срочных объявлений пока нет — нажмите «Добавить объявление»'}
                 </td>
               </tr>
@@ -6764,7 +7834,7 @@ function AlertsPage() {
 
       {modalOpen && (
         <div className="modal-backdrop" onClick={closeModal}>
-          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 'min(560px, 100%)' }}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ width: 'min(640px, 100%)' }}>
             <h2>{editingId ? 'Редактировать объявление' : 'Новое объявление'}</h2>
             <form onSubmit={saveItem}>
               <div className="grid2">
@@ -6825,6 +7895,117 @@ function AlertsPage() {
                     onChange={(e) => setForm({ ...form, ends_at: e.target.value })}
                   />
                 </label>
+                <div className="field full">
+                  Кому показывать
+                  <div className="toolbar compact" style={{ marginTop: 8 }}>
+                    <button
+                      type="button"
+                      className={form.settlement_ids.length === 0 ? 'btn' : 'btn ghost'}
+                      onClick={() => setForm({ ...form, settlement_ids: [] })}
+                    >
+                      Вся область
+                    </button>
+                    <button
+                      type="button"
+                      className={form.settlement_ids.length > 0 ? 'btn' : 'btn ghost'}
+                      onClick={() => {
+                        if (form.settlement_ids.length === 0) setPlaceQuery('Оренбург');
+                      }}
+                    >
+                      Выбранные места
+                    </button>
+                  </div>
+                  <p className="muted" style={{ margin: '8px 0 0', fontSize: 13 }}>
+                    {form.settlement_ids.length === 0
+                      ? 'Увидят все, у кого открыто приложение.'
+                      : `Только ${form.settlement_ids.length} ${form.settlement_ids.length === 1 ? 'место' : 'мест'}. Остальные не увидят баннер и не получат пуш.`}
+                  </p>
+                  <div className="toolbar compact" style={{ marginTop: 8, flexWrap: 'wrap' }}>
+                    {ALERT_CITY_HINTS.map((hint) => {
+                      const found = settlements.find((s) => {
+                        const name = (s.name || '').toLowerCase();
+                        const display = (s.display_name || '').toLowerCase();
+                        const h = hint.toLowerCase();
+                        return name === h || display === h || display.startsWith(`${h},`) || display.startsWith(`${h} `);
+                      });
+                      if (!found) return null;
+                      const on = form.settlement_ids.includes(found.id);
+                      return (
+                        <button
+                          key={hint}
+                          type="button"
+                          className={on ? 'btn' : 'btn ghost'}
+                          onClick={() =>
+                            setForm({
+                              ...form,
+                              settlement_ids: on
+                                ? form.settlement_ids.filter((id) => id !== found.id)
+                                : [...form.settlement_ids, found.id],
+                            })
+                          }
+                        >
+                          {hint}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {form.settlement_ids.length > 0 && (
+                    <div style={{ marginTop: 10 }}>
+                      {form.settlement_ids.map((id) => {
+                        const place = settlements.find((s) => s.id === id);
+                        return (
+                          <span key={id} className="chip ok" style={{ margin: '0 6px 6px 0' }}>
+                            {place?.display_name || `#${id}`}
+                            <button
+                              type="button"
+                              className="btn ghost"
+                              style={{ marginLeft: 6, padding: '0 6px' }}
+                              onClick={() =>
+                                setForm({ ...form, settlement_ids: form.settlement_ids.filter((x) => x !== id) })
+                              }
+                            >
+                              ×
+                            </button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <input
+                    style={{ marginTop: 10 }}
+                    value={placeQuery}
+                    onChange={(e) => setPlaceQuery(e.target.value)}
+                    placeholder="Найти село или город"
+                  />
+                  {placeQuery.trim().length >= 2 && (
+                    <div className="table-wrap" style={{ marginTop: 8, maxHeight: 180, overflow: 'auto' }}>
+                      {settlements
+                        .filter((s) => {
+                          if (form.settlement_ids.includes(s.id)) return false;
+                          const q = placeQuery.trim().toLowerCase();
+                          return (
+                            (s.display_name || '').toLowerCase().includes(q) ||
+                            (s.name || '').toLowerCase().includes(q)
+                          );
+                        })
+                        .slice(0, 12)
+                        .map((s) => (
+                          <button
+                            key={s.id}
+                            type="button"
+                            className="btn ghost"
+                            style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 4 }}
+                            onClick={() => {
+                              setForm({ ...form, settlement_ids: [...form.settlement_ids, s.id] });
+                              setPlaceQuery('');
+                            }}
+                          >
+                            {s.display_name}
+                          </button>
+                        ))}
+                    </div>
+                  )}
+                </div>
               </div>
               {error && <p className="error">{error}</p>}
               <div className="modal-actions">
@@ -6961,7 +8142,7 @@ function buildCalendarEntries(events: EventItem[], news: NewsItem[], alerts: Dis
       sort: formatClockRange(when) || '99:99',
       title: item.title,
       time: formatClockRange(when),
-      place: item.settlement_name || 'Весь район',
+      place: newsPlaceLabel(item),
       status: item.is_published ? (item.is_pinned ? 'Закреплена' : 'Опубликована') : 'Черновик',
       statusTone: item.is_published ? 'ok' : 'neutral',
       note: (item.body || '').replace(/\s+/g, ' ').slice(0, 180),
@@ -7305,6 +8486,173 @@ function LegalPage() {
   );
 }
 
+function PromoPage({ canEdit }: { canEdit: boolean }) {
+  const [items, setItems] = useState<PromoLink[]>([]);
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [title, setTitle] = useState('');
+  const [slug, setSlug] = useState('');
+  const [note, setNote] = useState('');
+
+  async function load() {
+    const data = await api<PromoLink[]>('/admin/promo');
+    setItems(data || []);
+  }
+
+  useEffect(() => {
+    load().catch((err) => setError(err instanceof Error ? err.message : 'Ошибка'));
+  }, []);
+
+  async function createLink(e: React.FormEvent) {
+    e.preventDefault();
+    if (!canEdit) return;
+    const cleanSlug = slug.trim().toLowerCase();
+    if (title.trim().length < 2 || !/^[a-z0-9][a-z0-9_-]{1,31}$/.test(cleanSlug)) {
+      setError('Название и короткий адрес латиницей, например otdam');
+      return;
+    }
+    setBusy(true);
+    setError('');
+    try {
+      await api<PromoLink>('/admin/promo', {
+        method: 'POST',
+        body: JSON.stringify({ title: title.trim(), slug: cleanSlug, note: note.trim() || null }),
+      });
+      setTitle('');
+      setSlug('');
+      setNote('');
+      await load();
+      pushToast('Ссылка готова — копируйте в пост');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copyUrl(url: string) {
+    try {
+      await navigator.clipboard.writeText(url);
+      pushToast('Ссылка скопирована');
+    } catch {
+      pushToast('Скопируйте ссылку вручную');
+    }
+  }
+
+  async function setActive(row: PromoLink, is_active: boolean) {
+    if (!canEdit) return;
+    try {
+      const updated = await api<PromoLink>(`/admin/promo/${row.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ is_active }),
+      });
+      setItems((prev) => prev.map((x) => (x.id === updated.id ? updated : x)));
+      pushToast(is_active ? 'Снова в списке рабочих' : 'Скрыли из рабочих — старые посты всё ещё считают');
+    } catch (err) {
+      pushToast(err instanceof Error ? err.message : 'Ошибка');
+    }
+  }
+
+  function shareOf(row: PromoLink) {
+    if (!row.visits_unique) return '—';
+    return `${Math.round((row.downloads_unique / row.visits_unique) * 100)}%`;
+  }
+
+  return (
+    <div>
+      <div className="page-head compact">
+        <div>
+          <h1>Реклама</h1>
+          <p>
+            Для каждой группы своя ссылка. В пост ВК ставьте её, не обычный адрес сайта. Тогда видно, сколько
+            зашли и сколько скачали приложение.
+          </p>
+        </div>
+      </div>
+      {canEdit ? (
+        <form className="toolbar compact" onSubmit={createLink}>
+          <input
+            placeholder="Название, например Отдам даром"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            maxLength={120}
+          />
+          <input
+            placeholder="Коротко: otdam"
+            value={slug}
+            onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, ''))}
+            maxLength={32}
+          />
+          <input
+            placeholder="Группа ВК, по желанию"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            maxLength={255}
+          />
+          <button className="btn" type="submit" disabled={busy}>
+            Сделать ссылку
+          </button>
+        </form>
+      ) : null}
+      {error ? <p className="error">{error}</p> : null}
+      <div className="table-wrap">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Группа</th>
+              <th>Ссылка в пост</th>
+              <th>Зашли</th>
+              <th>Сегодня</th>
+              <th>Скачали</th>
+              <th>Сегодня</th>
+              <th>Скачали из зашедших</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((row) => (
+              <tr key={row.id} className={row.is_active ? 'dir-row' : 'dir-row error-row'}>
+                <td>
+                  <div className="audit-who">{row.title}</div>
+                  <div className="audit-sub">{row.note || `/${row.slug}`}</div>
+                </td>
+                <td>
+                  <div className="promo-url">{row.url}</div>
+                  <div className="audit-sub">уникальных: {row.visits_unique} зашли · {row.downloads_unique} скачали</div>
+                </td>
+                <td>{row.visits_unique || row.visits}</td>
+                <td>{row.visits_today}</td>
+                <td>{row.downloads_unique || row.downloads}</td>
+                <td>{row.downloads_today}</td>
+                <td>{shareOf(row)}</td>
+                <td>
+                  <div className="actions inline">
+                    <button className="btn" type="button" onClick={() => copyUrl(row.url)}>
+                      Копировать
+                    </button>
+                    {canEdit ? (
+                      <button className="btn ghost" type="button" onClick={() => setActive(row, !row.is_active)}>
+                        {row.is_active ? 'Скрыть' : 'Показать'}
+                      </button>
+                    ) : null}
+                  </div>
+                </td>
+              </tr>
+            ))}
+            {!items.length ? (
+              <tr>
+                <td className="empty" colSpan={8}>
+                  Пока нет ссылок. Создайте для группы короткий адрес и копируйте его в рекламный пост.
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 function AppUpdatePage() {
   const [info, setInfo] = useState<AppUpdateInfo | null>(null);
   const [version, setVersion] = useState('');
@@ -7495,6 +8843,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<Dashboard role={user!.role} />} />
         {canSeeInbox(user!.role) && <Route path="/inbox" element={<ContactsPage />} />}
+        {canSeeInbox(user!.role) && <Route path="/promo" element={<PromoPage canEdit={user!.role === 'admin'} />} />}
         {canModerate(user!.role) && <Route path="/moderation" element={<ModerationPage />} />}
         {canModerate(user!.role) && <Route path="/listings" element={<ListingsPage />} />}
         {(canModerate(user!.role) || canEditDirectory(user!.role)) && (
@@ -7506,7 +8855,10 @@ export default function App() {
         {canEditDirectory(user!.role) && <Route path="/events" element={<EventsPage />} />}
         {canEditDirectory(user!.role) && <Route path="/calendar" element={<EditorialCalendarPage />} />}
         {canEditDirectory(user!.role) && <Route path="/transport" element={<TransportPage />} />}
+        {canModerate(user!.role) && <Route path="/rides" element={<RidesPage />} />}
         {canEditDirectory(user!.role) && <Route path="/news" element={<NewsPage />} />}
+        {canEditDirectory(user!.role) && <Route path="/news-vk" element={<VkNewsPage />} />}
+        {canEditDirectory(user!.role) && <Route path="/broadcast" element={<BroadcastPage />} />}
         {canEditDirectory(user!.role) && <Route path="/alerts" element={<AlertsPage />} />}
         {canModerate(user!.role) && <Route path="/chats" element={<ChatsModerationPage />} />}
         {canModerate(user!.role) && <Route path="/calls" element={<CallsPage />} />}

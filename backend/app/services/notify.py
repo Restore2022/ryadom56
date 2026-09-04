@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta, timezone
 import json
 import logging
 import time
@@ -9,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models import Notification, User, UserSession
+from app.models import Notification, User, UserSession, GuestPushDevice
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +27,7 @@ def notify_user(
     title: str,
     body: str | None = None,
     listing_id: int | None = None,
+    ride_id: int | None = None,
     extra: dict | None = None,
 ) -> Notification:
     item = Notification(
@@ -34,6 +36,7 @@ def notify_user(
         title=title,
         body=body,
         listing_id=listing_id,
+        ride_id=ride_id,
         is_read=False,
     )
     db.add(item)
@@ -45,6 +48,8 @@ def notify_user(
     }
     if listing_id is not None:
         data["listing_id"] = str(listing_id)
+    if ride_id is not None:
+        data["ride_id"] = str(ride_id)
     if extra:
         for k, v in extra.items():
             if v is None:
@@ -77,38 +82,66 @@ def fcm_tokens_for_user(db: Session, user_id: int) -> list[str]:
     return list(dict.fromkeys(tokens))
 
 
-def notify_broadcast(
+def guest_push_tokens(
     db: Session,
     *,
-    type: str,
-    title: str,
-    body: str | None = None,
-    listing_id: int | None = None,
-    extra: dict | None = None,
-    only_with_push: bool = False,
-) -> int:
-    """Создаёт in-app уведомления и шлёт FCM всем активным пользователям."""
-    stmt = select(User).where(User.is_active.is_(True))
-    if only_with_push:
-        stmt = stmt.where(User.fcm_token.is_not(None), User.fcm_token != "")
-    users = db.execute(stmt).scalars().all()
-    created = 0
+    exclude: set[str] | None = None,
+    settlement_ids: list[int] | None = None,
+) -> list[str]:
+    """Токены гостей без входа — только общие рассылки."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=90)
+    stmt = select(GuestPushDevice.fcm_token).where(
+        GuestPushDevice.last_seen_at >= cutoff,
+        GuestPushDevice.fcm_token.is_not(None),
+        GuestPushDevice.fcm_token != "",
+    )
+    if settlement_ids:
+        stmt = stmt.where(GuestPushDevice.settlement_id.in_(settlement_ids))
+    rows = db.execute(stmt).scalars().all()
+    skip = exclude or set()
     tokens: list[str] = []
+    for raw in rows:
+        t = (raw or "").strip()
+        if t and t not in skip:
+            tokens.append(t)
+    return list(dict.fromkeys(tokens))
+
+
+def push_tokens(
+    tokens: list[str],
+    *,
+    title: str,
+    body: str,
+    data: dict,
+    channel_id: str = "ryadom56_alerts",
+) -> int:
+    return _fcm_send_many(tokens, title=title, body=body, data=data, channel_id=channel_id)
+
+
+def drop_guest_push_device(db: Session, device_id: str | None) -> None:
+    did = (device_id or "").strip()
+    if not did:
+        return
+    row = db.execute(select(GuestPushDevice).where(GuestPushDevice.device_id == did)).scalar_one_or_none()
+    if row:
+        db.delete(row)
+
+
+def broadcast_audience(
+    db: Session,
+    *,
+    settlement_ids: list[int] | None = None,
+) -> tuple[list[User], list[str], list[str]]:
+    """Активные аккаунты, их токены и гостевые токены без дублей."""
+    stmt = select(User).where(User.is_active.is_(True))
+    if settlement_ids:
+        stmt = stmt.where(User.settlement_id.in_(settlement_ids))
+    users = db.execute(stmt).scalars().all()
+    user_tokens: list[str] = []
     for user in users:
-        db.add(
-            Notification(
-                user_id=user.id,
-                type=type,
-                title=title,
-                body=body,
-                listing_id=listing_id,
-                is_read=False,
-            )
-        )
-        created += 1
-        token = (user.fcm_token or "").strip()
-        if token:
-            tokens.append(token)
+        t = (user.fcm_token or "").strip()
+        if t:
+            user_tokens.append(t)
     if users:
         session_tokens = db.execute(
             select(UserSession.fcm_token).where(
@@ -121,8 +154,53 @@ def notify_broadcast(
         for raw in session_tokens:
             t = (raw or "").strip()
             if t:
-                tokens.append(t)
-    db.flush()
+                user_tokens.append(t)
+    user_tokens = list(dict.fromkeys(user_tokens))
+    guest_tokens = guest_push_tokens(
+        db,
+        exclude=set(user_tokens),
+        settlement_ids=settlement_ids,
+    )
+    return users, user_tokens, guest_tokens
+
+
+def notify_broadcast(
+    db: Session,
+    *,
+    type: str,
+    title: str,
+    body: str | None = None,
+    listing_id: int | None = None,
+    extra: dict | None = None,
+    only_with_push: bool = False,
+    audience: str = "all",
+    settlement_ids: list[int] | None = None,
+) -> tuple[int, int]:
+    """Создаёт in-app уведомления и шлёт FCM. audience: all | users | guests."""
+    target = (audience or "all").strip().lower()
+    if target not in ("all", "users", "guests"):
+        target = "all"
+    users, user_tokens, guest_tokens = broadcast_audience(db, settlement_ids=settlement_ids)
+    created = 0
+    if target in ("all", "users"):
+        for user in users:
+            db.add(
+                Notification(
+                    user_id=user.id,
+                    type=type,
+                    title=title,
+                    body=body,
+                    listing_id=listing_id,
+                    is_read=False,
+                )
+            )
+            created += 1
+        db.flush()
+    push_tokens: list[str] = []
+    if target in ("all", "users"):
+        push_tokens.extend(user_tokens)
+    if target in ("all", "guests"):
+        push_tokens.extend(guest_tokens)
     data = {
         "type": type,
         "click_action": "FLUTTER_NOTIFICATION_CLICK",
@@ -134,8 +212,8 @@ def notify_broadcast(
             if v is None:
                 continue
             data[str(k)] = str(v)
-    _fcm_send_many(tokens, title=title, body=body or "", data=data)
-    return created
+    sent = _fcm_send_many(list(dict.fromkeys(push_tokens)), title=title, body=body or "", data=data)
+    return created, sent
 
 
 def _try_push(

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, PlainTextResponse
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.orm import Session, selectinload
 
 from app.api.deps import require_roles
@@ -30,6 +30,8 @@ from app.models import (
     ListingReport,
     ListingStatus,
     Presence,
+    PromoHit,
+    Ride,
     Settlement,
     SiteContact,
     TransportFavorite,
@@ -38,6 +40,7 @@ from app.models import (
     UserReport,
     UserRole,
     UserSession,
+    VkNewsRun,
 )
 from app.schemas import (
     AdminAlertsOut,
@@ -47,12 +50,14 @@ from app.schemas import (
     AuditLogPageOut,
     BackupListOut,
     BackupFileOut,
+    HostMetricsOut,
     BlacklistCreate,
     BlacklistOut,
     BulkModerateIn,
     CategoryStat,
     ClientErrorOut,
     ClientErrorPageOut,
+    ClientErrorPatch,
     DayStat,
     DirectoryReportOut,
     ListingOut,
@@ -65,15 +70,22 @@ from app.schemas import (
     StatsOut,
     AdminPushIn,
     AdminPushOut,
+    BroadcastIn,
+    BroadcastOut,
+    BroadcastPreviewOut,
     AdminUserCreate,
     UserOut,
     UserReportOut,
     UserRoleUpdate,
+    VkNewsRunOut,
+    VkNewsRunPageOut,
 )
 from app.services.audit import log_action
+from app.services.apk_stats import download_counts
 from app.services.backup import backup_meta, create_backup, disk_info, ensure_daily_backup, list_backup_files
+from app.services.host_metrics import snapshot as host_snapshot
 from app.services.blacklist import looks_like_chat_spam, match_blacklist, normalize_phone, normalize_word
-from app.services.notify import fcm_tokens_for_user, notify_user
+from app.services.notify import broadcast_audience, fcm_tokens_for_user, notify_broadcast, notify_user
 from app.services.sessions import revoke_all_sessions
 
 
@@ -302,6 +314,7 @@ def stats(
         ).scalar_one()
         or 0
     )
+    apk_total, apk_unique, apk_today = download_counts(db)
 
     return StatsOut(
         users=users_total,
@@ -336,6 +349,14 @@ def stats(
             ).scalar_one()
         ),
         transport_routes=int(db.execute(select(func.count(TransportRoute.id))).scalar_one()),
+        rides_open=int(
+            db.execute(
+                select(func.count(Ride.id)).where(
+                    Ride.status == "open",
+                    Ride.depart_at >= now - timedelta(hours=3),
+                )
+            ).scalar_one()
+        ),
         news_total=int(db.execute(select(func.count(DistrictNews.id))).scalar_one()),
         active_alerts=int(
             db.execute(
@@ -395,7 +416,35 @@ def stats(
         online_calls=hub.connected_count(),
         site_today=site_today,
         app_guests_today=app_guests_today,
+        promo_visits_today=int(
+            db.execute(
+                select(func.count(PromoHit.id)).where(
+                    PromoHit.kind == "visit",
+                    PromoHit.created_at >= today_start,
+                )
+            ).scalar_one()
+            or 0
+        ),
+        promo_downloads_today=int(
+            db.execute(
+                select(func.count(PromoHit.id)).where(
+                    PromoHit.kind == "download",
+                    PromoHit.created_at >= today_start,
+                )
+            ).scalar_one()
+            or 0
+        ),
+        apk_downloads_total=apk_total,
+        apk_downloads_unique=apk_unique,
+        apk_downloads_today=apk_today,
     )
+
+
+@router.get("/host", response_model=HostMetricsOut)
+def host_metrics(
+    _: User = Depends(require_roles(UserRole.admin)),
+):
+    return HostMetricsOut(**host_snapshot())
 
 
 @router.get("/backup")
@@ -553,6 +602,13 @@ def alerts(
         open_contacts=int(
             db.execute(select(func.count(SiteContact.id)).where(SiteContact.status == "new")).scalar_one()
         ),
+        unread_client_errors=int(
+            db.execute(
+                select(func.count(ClientErrorLog.id)).where(
+                    or_(ClientErrorLog.is_read.is_(False), ClientErrorLog.is_read.is_(None))
+                )
+            ).scalar_one()
+        ),
     )
 
 
@@ -560,10 +616,15 @@ def alerts(
 def list_users(
     q: str | None = None,
     suspicious: bool = False,
+    kind: str | None = Query(default=None, pattern="^(feed|real)$"),
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(UserRole.admin)),
 ):
     stmt = select(User).options(selectinload(User.settlement)).order_by(User.created_at.desc())
+    if kind == "feed":
+        stmt = stmt.where(User.badge == "feed")
+    elif kind == "real":
+        stmt = stmt.where(or_(User.badge.is_(None), User.badge != "feed"))
     if q and q.strip():
         like = f"%{q.strip()}%"
         stmt = stmt.where(
@@ -601,7 +662,7 @@ def create_user(
     if not settlement:
         raise HTTPException(status_code=400, detail="Населённый пункт не найден")
     badge = (payload.badge or "").strip() or None
-    if badge and badge not in ("new", "trusted", "caution", "verified"):
+    if badge and badge not in ("new", "trusted", "caution", "verified", "feed"):
         raise HTTPException(status_code=400, detail="Неизвестная метка пользователя")
     user = User(
         email=email,
@@ -635,10 +696,11 @@ def create_user(
 def export_users(
     q: str | None = None,
     suspicious: bool = False,
+    kind: str | None = Query(default=None, pattern="^(feed|real)$"),
     db: Session = Depends(get_db),
     user: User = Depends(require_roles(UserRole.admin)),
 ):
-    rows = list_users(q=q, suspicious=suspicious, db=db, user=user)
+    rows = list_users(q=q, suspicious=suspicious, kind=kind, db=db, user=user)
     lines = [
         "id;name;email;phone;role;active;ip;device;os;app;last_seen",
     ]
@@ -692,7 +754,7 @@ def update_user(
         revoke_all_sessions(db, target)
     if "badge" in data:
         badge = (data["badge"] or "").strip() or None
-        if badge and badge not in ("new", "trusted", "caution", "verified"):
+        if badge and badge not in ("new", "trusted", "caution", "verified", "feed"):
             raise HTTPException(status_code=400, detail="Неизвестная метка пользователя")
         target.badge = badge
         data.pop("badge")
@@ -784,6 +846,136 @@ def admin_push_user(
     else:
         message = "Сохранено в уведомлениях приложения, но пуш не ушёл — нет токена (человек не открывал приложение с пушами)"
     return AdminPushOut(ok=True, notification_id=item.id, devices=devices, message=message)
+
+
+BROADCAST_KINDS = {
+    "news": "Новость",
+    "promo": "Акция",
+    "question": "Вопрос к жителям",
+    "info": "Рядом56",
+}
+
+BROADCAST_AUDIENCES = {
+    "all": "Всем",
+    "users": "С аккаунтом",
+    "guests": "Гостям без входа",
+}
+
+
+@router.get("/broadcast", response_model=BroadcastPreviewOut)
+def broadcast_preview(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+):
+    people, user_tokens, guest_tokens = broadcast_audience(db)
+    return BroadcastPreviewOut(
+        people=len(people),
+        user_devices=len(user_tokens),
+        guest_devices=len(guest_tokens),
+        devices=len(user_tokens) + len(guest_tokens),
+    )
+
+
+@router.post("/broadcast", response_model=BroadcastOut)
+def broadcast_push(
+    payload: BroadcastIn,
+    db: Session = Depends(get_db),
+    admin: User = Depends(require_roles(UserRole.admin, UserRole.editor)),
+):
+    kind = (payload.kind or "info").strip().lower()
+    if kind not in BROADCAST_KINDS:
+        raise HTTPException(status_code=400, detail="Неизвестный тип сообщения")
+    audience = (payload.audience or "all").strip().lower()
+    if audience not in BROADCAST_AUDIENCES:
+        raise HTTPException(status_code=400, detail="Неизвестная аудитория")
+    title = (payload.title or "").strip() or BROADCAST_KINDS[kind]
+    body = (payload.body or "").strip()
+    if len(body) < 3:
+        raise HTTPException(status_code=400, detail="Напишите текст сообщения")
+    last = db.execute(
+        select(AuditLog)
+        .where(AuditLog.action == "broadcast.push")
+        .order_by(AuditLog.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if last and last.created_at:
+        stamp = last.created_at
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=timezone.utc)
+        age = (datetime.now(timezone.utc) - stamp).total_seconds()
+        if age < 90:
+            wait = max(1, int(90 - age))
+            raise HTTPException(
+                status_code=429,
+                detail=f"Подождите {wait} сек. — чтобы не отправить два раза подряд",
+            )
+    _people, user_tokens, guest_tokens = broadcast_audience(db)
+    user_count = len(user_tokens)
+    guest_count = len(guest_tokens)
+    if audience == "users" and user_count < 1 and len(_people) < 1:
+        raise HTTPException(status_code=400, detail="Нет активных аккаунтов для рассылки")
+    if audience == "guests" and guest_count < 1:
+        raise HTTPException(status_code=400, detail="Нет гостей с пушем — пока никто без входа не открыл приложение")
+    created, sent = notify_broadcast(
+        db,
+        type=f"broadcast_{kind}",
+        title=title,
+        body=body,
+        extra={"kind": kind},
+        audience=audience,
+    )
+    target_devices = user_count + guest_count
+    if audience == "users":
+        target_devices = user_count
+    elif audience == "guests":
+        target_devices = guest_count
+    log_action(
+        db,
+        actor=admin,
+        action="broadcast.push",
+        entity_type="broadcast",
+        details=(
+            f"audience={audience}; kind={kind}; title={title[:40]}; people={created}; "
+            f"devices={target_devices}; sent={sent}"
+        ),
+    )
+    db.commit()
+    audience_label = BROADCAST_AUDIENCES[audience]
+    if sent and created:
+        message = (
+            f"{audience_label}: записано {_people_word(created)}, "
+            f"пуш ушёл на {sent} {_devices_word(sent)}."
+        )
+    elif sent:
+        message = f"{audience_label}: пуш ушёл на {sent} {_devices_word(sent)}."
+    elif created:
+        message = (
+            f"{audience_label}: записано в колокольчик {_people_word(created)}, "
+            "но на телефоны не ушло — нет токена пуша"
+        )
+    else:
+        message = f"{audience_label}: некому отправлять"
+    return BroadcastOut(
+        ok=True,
+        people=created,
+        devices=target_devices,
+        guest_devices=guest_count if audience in ("all", "guests") else 0,
+        sent=sent,
+        message=message,
+    )
+
+
+def _people_word(n: int) -> str:
+    absn = abs(n)
+    mod100 = absn % 100
+    mod10 = absn % 10
+    if 11 <= mod100 <= 14 or mod10 == 0 or mod10 >= 5:
+        word = "человек"
+    elif mod10 == 1:
+        word = "человек"
+    else:
+        word = "человека"
+    return f"{n} {word}"
 
 
 def _devices_word(n: int) -> str:
@@ -1250,7 +1442,7 @@ def list_chats(
             seller_id=item.author_id,
             seller_name=seller.full_name if seller else None,
             buyer_name=buyer.full_name if buyer else None,
-            last_message=last.body[:200],
+            last_message=("Фото" if (last.kind or "text") == "photo" else last.body[:200]),
             last_message_at=last.created_at,
             message_count=int(row.msg_count or 0),
             flagged=bool(flag_reasons),
@@ -1306,12 +1498,13 @@ def get_chat_thread(
                 buyer_id=m.buyer_id,
                 sender_id=m.sender_id,
                 sender_name=names.get(m.sender_id),
-                body=m.body,
+                body="Фото" if (m.kind or "text") == "photo" else m.body,
                 created_at=m.created_at,
                 flagged=bool(reasons),
                 flag_reasons=reasons,
-                kind=(m.kind or "text"),
+                kind=m.kind or "text",
                 is_read=bool(m.is_read),
+                image_url=f"/uploads/{m.image_path.replace(chr(92), '/')}" if getattr(m, "image_path", None) else None,
             )
         )
     return result
@@ -1436,6 +1629,32 @@ def audit_log(
     )
 
 
+def _client_error_outs(db: Session, rows: list[ClientErrorLog]) -> list[ClientErrorOut]:
+    names: dict[int, str] = {}
+    uids = {r.user_id for r in rows if r.user_id}
+    if uids:
+        for u in db.execute(select(User.id, User.full_name).where(User.id.in_(uids))).all():
+            names[int(u[0])] = u[1]
+    return [
+        ClientErrorOut(
+            id=r.id,
+            created_at=r.created_at,
+            user_id=r.user_id,
+            user_name=names.get(r.user_id) if r.user_id else None,
+            message=r.message,
+            stack=r.stack,
+            screen=r.screen,
+            app_version=r.app_version,
+            device_brand=r.device_brand,
+            device_model=r.device_model,
+            device_os=r.device_os,
+            client_ip=r.client_ip,
+            is_read=bool(r.is_read),
+        )
+        for r in rows
+    ]
+
+
 @router.get("/client-errors", response_model=ClientErrorPageOut)
 def list_client_errors(
     q: str | None = None,
@@ -1461,35 +1680,127 @@ def list_client_errors(
         stmt = stmt.where(cond)
         count_stmt = count_stmt.where(cond)
     total = int(db.execute(count_stmt).scalar_one())
+    unread_count = int(
+        db.execute(
+            select(func.count()).select_from(ClientErrorLog).where(
+                or_(ClientErrorLog.is_read.is_(False), ClientErrorLog.is_read.is_(None))
+            )
+        ).scalar_one()
+    )
     rows = (
-        db.execute(stmt.order_by(ClientErrorLog.created_at.desc()).offset(offset).limit(limit))
+        db.execute(
+            stmt.order_by(ClientErrorLog.is_read.asc(), ClientErrorLog.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
         .scalars()
         .all()
     )
-    names: dict[int, str] = {}
-    uids = {r.user_id for r in rows if r.user_id}
-    if uids:
-        for u in db.execute(select(User.id, User.full_name).where(User.id.in_(uids))).all():
-            names[int(u[0])] = u[1]
     return ClientErrorPageOut(
-        items=[
-            ClientErrorOut(
-                id=r.id,
-                created_at=r.created_at,
-                user_id=r.user_id,
-                user_name=names.get(r.user_id) if r.user_id else None,
-                message=r.message,
-                stack=r.stack,
-                screen=r.screen,
-                app_version=r.app_version,
-                device_brand=r.device_brand,
-                device_model=r.device_model,
-                device_os=r.device_os,
-                client_ip=r.client_ip,
-            )
-            for r in rows
-        ],
+        items=_client_error_outs(db, rows),
+        total=total,
+        limit=limit,
+        offset=offset,
+        unread_count=unread_count,
+    )
+
+
+@router.post("/client-errors/mark-read")
+def mark_client_errors_read(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(UserRole.admin, UserRole.moderator)),
+):
+    db.execute(
+        update(ClientErrorLog)
+        .where(or_(ClientErrorLog.is_read.is_(False), ClientErrorLog.is_read.is_(None)))
+        .values(is_read=True)
+    )
+    db.commit()
+    return {"ok": True}
+
+
+@router.patch("/client-errors/{error_id}", response_model=ClientErrorOut)
+def patch_client_error(
+    error_id: int,
+    payload: ClientErrorPatch,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(UserRole.admin, UserRole.moderator)),
+):
+    row = db.get(ClientErrorLog, error_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Сбой не найден")
+    row.is_read = payload.is_read
+    db.commit()
+    db.refresh(row)
+    return _client_error_outs(db, [row])[0]
+
+
+@router.delete("/client-errors")
+def delete_read_client_errors(
+    read: bool = Query(default=True),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(UserRole.admin, UserRole.moderator)),
+):
+    if not read:
+        raise HTTPException(status_code=400, detail="Можно удалить только прочитанные")
+    result = db.execute(delete(ClientErrorLog).where(ClientErrorLog.is_read.is_(True)))
+    db.commit()
+    return {"ok": True, "deleted": int(result.rowcount or 0)}
+
+
+@router.delete("/client-errors/{error_id}")
+def delete_client_error(
+    error_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(UserRole.admin, UserRole.moderator)),
+):
+    row = db.get(ClientErrorLog, error_id)
+    if not row:
+        raise HTTPException(status_code=404, detail="Сбой не найден")
+    db.delete(row)
+    db.commit()
+    return {"ok": True}
+
+
+@router.get("/vk-news/runs", response_model=VkNewsRunPageOut)
+def vk_news_runs(
+    limit: int = Query(default=30, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(UserRole.editor, UserRole.admin)),
+):
+    total = int(db.execute(select(func.count(VkNewsRun.id))).scalar_one())
+    rows = db.execute(
+        select(VkNewsRun).order_by(VkNewsRun.started_at.desc()).offset(offset).limit(limit)
+    ).scalars().all()
+    return VkNewsRunPageOut(
+        items=[VkNewsRunOut.model_validate(r) for r in rows],
         total=total,
         limit=limit,
         offset=offset,
     )
+
+
+@router.post("/vk-news/sync", response_model=VkNewsRunOut)
+def vk_news_sync_now(
+    db: Session = Depends(get_db),
+    user: User = Depends(require_roles(UserRole.editor, UserRole.admin)),
+):
+    from app.services.vk_news import sync_all
+
+    runs = sync_all(limit=20, triggered_by=f"admin:{user.email}")
+    run = runs[-1]
+    details = "; ".join(
+        f"{item.source} status={item.status} created={item.created} skipped={item.skipped}" for item in runs
+    )
+    log_action(
+        db,
+        actor=user,
+        action="vk_news.sync",
+        entity_type="vk_news",
+        entity_id=run.id,
+        details=details[:500],
+    )
+    db.commit()
+    return VkNewsRunOut.model_validate(run)
+

@@ -94,3 +94,18 @@ String formatEventWhen(String? startIso, String? endIso) {
   if (sameDay) return '$date, $t1–$t2';
   return '$date, $t1 — ${end.day} ${_monthsGen[end.month - 1]}, $t2';
 }
+
+/// «сегодня 6:30» / «завтра 7:00» / «12 сентября, 6:30»
+String formatRideWhen(String? iso) {
+  final dt = parseApiTime(iso);
+  if (dt == null) return '';
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final day = DateTime(dt.year, dt.month, dt.day);
+  final clock = '${_two(dt.hour)}:${_two(dt.minute)}';
+  final diff = day.difference(today).inDays;
+  if (diff == 0) return 'сегодня $clock';
+  if (diff == 1) return 'завтра $clock';
+  if (diff == -1) return 'вчера $clock';
+  return '${dt.day} ${_monthsGen[dt.month - 1]}, $clock';
+}

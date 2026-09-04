@@ -456,7 +456,7 @@ class CallService extends ChangeNotifier {
 
   Future<void> _onSignalInner(Map<String, dynamic> msg) async {
     final type = msg['type']?.toString();
-    if (type == 'chat' || type == 'chat_read') {
+    if (type == 'chat' || type == 'chat_read' || type == 'ride_chat' || type == 'ride_chat_read') {
       _dispatchInbox(msg);
       return;
     }
