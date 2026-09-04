@@ -185,7 +185,7 @@ class _SearchAllScreenState extends State<SearchAllScreen> {
                                   ],
                                   if (rides.isNotEmpty) ...[
                                     const SizedBox(height: 8),
-                                    _sectionTitle('Попутки', rides.length),
+                                    _sectionTitle('Попутчики', rides.length),
                                     const SizedBox(height: 8),
                                     for (final raw in rides)
                                       if (raw is Map)

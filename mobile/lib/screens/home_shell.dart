@@ -1511,7 +1511,7 @@ class _TransportTabState extends State<_TransportTab> {
             Padding(
               padding: const EdgeInsets.only(right: 8),
               child: RyadomFilterChip(
-                label: 'Попутки',
+                label: 'Попутчики',
                 selected: pane == 'rides',
                 onSelected: (_) => setState(() => pane = 'rides'),
               ),
